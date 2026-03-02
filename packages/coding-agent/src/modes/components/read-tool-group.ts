@@ -88,6 +88,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		this.#updateDisplay();
 	}
 
+	// reads have no execution-start timing; no-op satisfies ToolExecutionHandle
+	notifyExecutionStarted(): void {}
+
 	setExpanded(_expanded: boolean): void {
 		this.#updateDisplay();
 	}
