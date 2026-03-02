@@ -22,7 +22,7 @@ import { applyHeadTail } from "./bash-normalize";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
 import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
 import { resolveToCwd } from "./path-utils";
-import { replaceTabs } from "./render-utils";
+import { formatTimeoutLine, replaceTabs } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
@@ -476,6 +476,8 @@ interface BashRenderContext {
 	previewLines?: number;
 	/** Timeout in seconds */
 	timeout?: number;
+	/** Epoch ms when command execution started (set when args are complete) */
+	executionStartMs?: number;
 }
 
 function formatBashCommand(args: BashRenderArgs): string {
@@ -540,14 +542,12 @@ export const bashToolRenderer = {
 				const showingFullOutput = expanded && renderContext?.isFullOutput === true;
 
 				// Build truncation warning
-				const timeoutSeconds = renderContext?.timeout;
-				const timeoutLine =
-					typeof timeoutSeconds === "number"
-						? uiTheme.fg(
-								"dim",
-								`${uiTheme.format.bracketLeft}Timeout: ${timeoutSeconds}s${uiTheme.format.bracketRight}`,
-							)
-						: undefined;
+				const timeoutLine = formatTimeoutLine(
+					renderContext?.timeout,
+					renderContext?.executionStartMs,
+					options.isPartial,
+					uiTheme,
+				);
 				let warningLine: string | undefined;
 				if (details?.meta?.truncation && !showingFullOutput) {
 					warningLine = formatStyledTruncationWarning(details.meta, uiTheme) ?? undefined;
