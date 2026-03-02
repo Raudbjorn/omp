@@ -15,7 +15,8 @@ import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from ".
 import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
 import type { ToolSession } from ".";
 import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
-import { formatTitle, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
+import { resolveToCwd } from "./path-utils";
+import { formatTimeoutLine, formatTitle, replaceTabs, shortenPath, truncateToWidth } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
@@ -513,6 +514,7 @@ interface PythonRenderContext {
 	expanded?: boolean;
 	previewLines?: number;
 	timeout?: number;
+	executionStartMs?: number;
 }
 
 /** Format a status event as a single line for display. */
@@ -950,11 +952,12 @@ export const pythonToolRenderer = {
 			return [header, ...treeLines];
 		});
 
-		const timeoutSeconds = options.renderContext?.timeout;
-		const timeoutLine =
-			typeof timeoutSeconds === "number"
-				? uiTheme.fg("dim", wrapBrackets(`Timeout: ${timeoutSeconds}s`, uiTheme))
-				: undefined;
+		const timeoutLine = formatTimeoutLine(
+			options.renderContext?.timeout,
+			options.renderContext?.executionStartMs,
+			options.isPartial,
+			uiTheme,
+		);
 		let warningLine: string | undefined;
 		if (details?.meta?.truncation) {
 			warningLine = formatStyledTruncationWarning(details.meta, uiTheme) ?? undefined;
