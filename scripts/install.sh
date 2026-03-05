@@ -310,7 +310,10 @@ else
     echo "ompm: bun not found — install bun: curl -fsSL https://bun.sh/install | sh" >&2
     exit 1
 fi
-exec "$_BUN" "$OMPM_HOME/packages/coding-agent/src/cli.ts" "$@"
+exec "$_BUN" \
+    --preload "$OMPM_HOME/packages/coding-agent/src/ipv4-preload.ts" \
+    "$OMPM_HOME/packages/coding-agent/src/cli.ts" \
+    "$@"
 WRAPPER_BODY
         } > "$WRAPPER_TMP"
         chmod +x "$WRAPPER_TMP"
