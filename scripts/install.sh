@@ -155,8 +155,63 @@ setup_path() {
         printf '\n# ompm\n%s\n' "$LINE" >> "$RC"
         echo "  Added $INSTALL_DIR to PATH in $RC"
     done
-    echo "  Reload your shell or run: export PATH=\"$INSTALL_DIR:\$PATH\""
+    echo "  Run: . ~/.bashrc  (or open a new terminal)"
 }
+
+# Download precompiled native addons from upstream releases.
+# The .node files are Rust build artifacts not committed to git;
+# building them requires the full Rust toolchain, so we pull prebuilt.
+install_natives() {
+    OS="$(uname -s)"
+    ARCH="$(uname -m)"
+    case "$OS" in
+        Linux)  PLATFORM="linux" ;;
+        Darwin) PLATFORM="darwin" ;;
+        *) echo "  Skipping natives: unsupported OS $OS"; return 0 ;;
+    esac
+    case "$ARCH" in
+        x86_64|amd64)  ARCH_NAME="x64" ;;
+        arm64|aarch64) ARCH_NAME="arm64" ;;
+        *) echo "  Skipping natives: unsupported arch $ARCH"; return 0 ;;
+    esac
+
+    UPSTREAM="can1357/oh-my-pi"
+    echo "Fetching latest upstream release tag for native addons..."
+    LATEST=$(curl -fsSL "https://api.github.com/repos/${UPSTREAM}/releases/latest" \
+        | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ -z "$LATEST" ]; then
+        echo "  Warning: could not determine upstream release tag; skipping natives"
+        return 0
+    fi
+    echo "  Upstream release: $LATEST"
+
+    NATIVE_DIR="$OMPM_HOME/packages/natives/native"
+    mkdir -p "$NATIVE_DIR"
+
+    # x64 ships two CPU-dispatch variants; arm64 and darwin-arm64 ship one file.
+    if [ "$ARCH_NAME" = "x64" ]; then
+        NATIVES="pi_natives.${PLATFORM}-${ARCH_NAME}-modern.node pi_natives.${PLATFORM}-${ARCH_NAME}-baseline.node"
+    else
+        NATIVES="pi_natives.${PLATFORM}-${ARCH_NAME}.node"
+    fi
+
+    for NATIVE in $NATIVES; do
+        URL="https://github.com/${UPSTREAM}/releases/download/${LATEST}/${NATIVE}"
+        DEST="$NATIVE_DIR/$NATIVE"
+        if [ -f "$DEST" ]; then
+            echo "  $NATIVE already present, skipping"
+            continue
+        fi
+        printf "  Downloading %s..." "$NATIVE"
+        if curl -fsSL "$URL" -o "$DEST" 2>/dev/null; then
+            echo " done"
+        else
+            echo " failed (non-fatal)"
+            rm -f "$DEST"
+        fi
+    done
+}
+
 
 # Install via bun — source mode only (fork is a monorepo; not published to npm)
 install_via_bun() {
@@ -231,7 +286,10 @@ install_via_bun() {
             exit 1
         }
 
-        # ── Wrapper script ────────────────────────────────────────────────────────
+        # ── Native addons ───────────────────────────────────────────────────────────
+        install_natives
+
+        # ── Wrapper script ──────────────────────────────────────────────────────────
         # Runs cli.ts via bun so node_modules resolution walks up to
         # $OMPM_HOME/node_modules and finds all workspace siblings.
         # Handles bun not in PATH by probing known install locations.
