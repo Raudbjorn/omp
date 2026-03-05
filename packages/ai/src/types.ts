@@ -144,7 +144,8 @@ export type KnownProvider =
 	| "upb"
 	| "lm-studio"
 	| "devin"
-	| "warp";
+	| "warp"
+	| "deepseek";
 export type Provider = KnownProvider | string;
 
 import type { Effort } from "./model-thinking";

@@ -4913,6 +4913,30 @@
 				"minLevel": "minimal",
 				"maxLevel": "xhigh"
 			}
+		},
+		"deepseek-chat": {
+			"id": "deepseek-chat",
+			"name": "DeepSeek V3",
+			"api": "openai-completions",
+			"provider": "deepseek",
+			"baseUrl": "https://api.deepseek.com/v1",
+			"reasoning": false,
+			"input": ["text"],
+			"cost": { "input": 0.27, "output": 1.10, "cacheRead": 0.07, "cacheWrite": 0 },
+			"contextWindow": 131072,
+			"maxTokens": 8192
+		},
+		"deepseek-reasoner": {
+			"id": "deepseek-reasoner",
+			"name": "DeepSeek R1",
+			"api": "openai-completions",
+			"provider": "deepseek",
+			"baseUrl": "https://api.deepseek.com/v1",
+			"reasoning": true,
+			"input": ["text"],
+			"cost": { "input": 0.55, "output": 2.19, "cacheRead": 0.14, "cacheWrite": 0 },
+			"contextWindow": 131072,
+			"maxTokens": 32768
 		}
 	},
 	"fireworks": {
@@ -57417,5 +57441,6 @@
 				"maxLevel": "xhigh"
 			}
 		}
+
 	}
 }

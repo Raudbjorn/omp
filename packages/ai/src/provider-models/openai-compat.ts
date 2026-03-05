@@ -635,6 +635,39 @@ export function fireworksModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// DeepSeek — native API (OpenAI-compatible, https://api.deepseek.com/v1)
+// ---------------------------------------------------------------------------
+
+export interface DeepSeekModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function deepseekModelManagerOptions(
+	config?: DeepSeekModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://api.deepseek.com/v1";
+	const references = createBundledReferenceMap<"openai-completions">("deepseek");
+	return {
+		providerId: "deepseek",
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "deepseek",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						return mapWithBundledReference(entry, defaults, reference);
+					},
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 7. Mistral
 // ---------------------------------------------------------------------------
 
