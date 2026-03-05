@@ -10,8 +10,8 @@ set -e
 #   --ref <ref>    Install specific tag/commit/branch
 #   -r <ref>       Shorthand for --ref
 
-REPO="can1357/oh-my-pi"
-PACKAGE="@oh-my-pi/pi-coding-agent"
+REPO="mrayden/oh-my-pi-multimodal"
+PACKAGE="@oh-my-pi/pi-coding-agent"  # unused for fork; source install always clones REPO
 INSTALL_DIR="${PI_INSTALL_DIR:-$HOME/.local/bin}"
 MIN_BUN_VERSION="1.3.7"
 
@@ -64,6 +64,10 @@ done
 # If a ref is provided, default to source install
 if [ -n "$REF" ] && [ -z "$MODE" ]; then
     MODE="source"
+fi
+# Fork: source without --ref defaults to main branch (no npm package for this fork)
+if [ "$MODE" = "source" ] && [ -z "$REF" ]; then
+    REF="main"
 fi
 
 # Check if bun is available
