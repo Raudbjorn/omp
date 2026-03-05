@@ -278,8 +278,8 @@ ${chalk.bold("Plugin Options:")}
   --plugin-dir <path>        Load plugin from directory (repeatable)
 
 ${chalk.bold("Useful Commands:")}
-  ompm agents unpack           - Export bundled subagents to ~/.omp/agent/agents (default)
-  ompm agents unpack --project - Export bundled subagents to ./.omp/agents`;
+  ompm agents unpack           - Export bundled subagents to ~/.ompm/agent/agents (default)
+  ompm agents unpack --project - Export bundled subagents to ./.ompm/agents`;
 }
 
 export function printHelp(): void {

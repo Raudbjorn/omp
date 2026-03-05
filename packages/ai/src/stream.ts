@@ -165,6 +165,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	xiaomi: "XIAOMI_API_KEY",
 	devin: "DEVIN_API_KEY",
 	warp: "WARP_API_KEY",
+	deepseek: "DEEPSEEK_API_KEY",
 };
 
 /**
