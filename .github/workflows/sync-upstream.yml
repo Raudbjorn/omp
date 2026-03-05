@@ -1,3 +1,7 @@
+# Syncs upstream can1357/oh-my-pi main → fork main weekly.
+# Set DISCORD_WEBHOOK_URL in repo Settings → Secrets → Actions for notifications
+# (optional — the workflow runs fine without it).
+
 name: Sync Upstream
 
 on:
@@ -120,6 +124,7 @@ jobs:
 
       - name: Create or update PR
         if: steps.delta.outputs.ahead != '0'
+        id: pr
         uses: peter-evans/create-pull-request@v6
         with:
           branch: ${{ env.SYNC_BRANCH }}
@@ -130,3 +135,39 @@ jobs:
             upstream-sync
             ${{ steps.merge.outputs.conflicts == 'true' && 'needs-conflict-resolution' || 'automerge-candidate' }}
           delete-branch: false
+
+      # Discord notifications — all three states are no-ops if the webhook
+      # secret is unset, so the workflow stays useful without it.
+      - name: Discord notification — PR opened (clean merge)
+        if: steps.delta.outputs.ahead != '0' && steps.merge.outputs.conflicts != 'true' && env.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          AHEAD: ${{ steps.delta.outputs.ahead }}
+          PR_URL: ${{ steps.pr.outputs.pull-request-url }}
+        run: |
+          curl -fsS -X POST "$DISCORD_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg ahead "$AHEAD" --arg url "$PR_URL" \
+              '{embeds:[{title:"Upstream sync PR ready",color:5763719,description:"Clean merge.",fields:[{name:"Commits pulled",value:$ahead,inline:true},{name:"PR",value:$url,inline:false}],timestamp:(now|todateiso8601)}]}')"
+
+      - name: Discord notification — PR opened (with conflicts)
+        if: steps.delta.outputs.ahead != '0' && steps.merge.outputs.conflicts == 'true' && env.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          AHEAD: ${{ steps.delta.outputs.ahead }}
+          PR_URL: ${{ steps.pr.outputs.pull-request-url }}
+          CONFLICTED_FILES: ${{ steps.merge.outputs.conflicted_files }}
+        run: |
+          curl -fsS -X POST "$DISCORD_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg ahead "$AHEAD" --arg url "$PR_URL" --arg files "$CONFLICTED_FILES" \
+              '{embeds:[{title:"Upstream sync PR — conflicts need resolution",color:15548997,description:"Manual merge required.",fields:[{name:"Commits pulled",value:$ahead,inline:true},{name:"PR",value:$url,inline:false},{name:"Conflicted files",value:("```\n"+$files+"\n```"),inline:false}],timestamp:(now|todateiso8601)}]}')"
+
+      - name: Discord notification — already up to date
+        if: steps.delta.outputs.ahead == '0' && env.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          curl -fsS -X POST "$DISCORD_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n '{embeds:[{title:"Upstream sync — already up to date",color:9807270,description:"No new commits from upstream.",timestamp:(now|todateiso8601)}]}')"
