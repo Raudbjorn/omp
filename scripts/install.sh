@@ -143,47 +143,131 @@ has_git_lfs() {
     command -v git-lfs >/dev/null 2>&1
 }
 
-# Install via bun
+# Add INSTALL_DIR to shell rc files if not already present
+setup_path() {
+    case ":$PATH:" in
+        *":$INSTALL_DIR:"*) return 0 ;;
+    esac
+    LINE="export PATH=\"$INSTALL_DIR:\$PATH\""
+    for RC in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+        [ -f "$RC" ] || continue
+        grep -qF "$INSTALL_DIR" "$RC" 2>/dev/null && continue
+        printf '\n# ompm\n%s\n' "$LINE" >> "$RC"
+        echo "  Added $INSTALL_DIR to PATH in $RC"
+    done
+    echo "  Reload your shell or run: export PATH=\"$INSTALL_DIR:\$PATH\""
+}
+
+# Install via bun — source mode only (fork is a monorepo; not published to npm)
 install_via_bun() {
     echo "Installing via bun..."
     if [ -n "$REF" ]; then
         if ! has_git; then
-            echo "git is required for --ref when installing from source"
+            echo "git is required for source installs"
             exit 1
         fi
 
-        TMP_DIR="$(mktemp -d)"
-        trap 'rm -rf "$TMP_DIR"' EXIT
+        OMPM_HOME="${OMPM_HOME:-$HOME/.local/share/ompm}"
+        OMPM_TMP="${OMPM_HOME}.tmp.$$"
 
-        if git clone --depth 1 --branch "$REF" "https://github.com/${REPO}.git" "$TMP_DIR" >/dev/null 2>&1; then
-            :
-        else
-            git clone "https://github.com/${REPO}.git" "$TMP_DIR"
-            (cd "$TMP_DIR" && git checkout "$REF")
+        # Ensure temp dir is removed if we exit early (failure, Ctrl-C, etc.)
+        _cleanup() { rm -rf "$OMPM_TMP"; }
+        trap '_cleanup' EXIT INT TERM
+
+        # ── Incremental update path (fast) ───────────────────────────────────────
+        # If a valid git repo already lives at OMPM_HOME, try to update in-place.
+        # This avoids a full re-clone on re-install or interrupted dep install.
+        NEED_CLONE=1
+        if [ -d "$OMPM_HOME/.git" ]; then
+            echo "Existing install found at $OMPM_HOME, checking for updates..."
+            if (cd "$OMPM_HOME" \
+                && git fetch --depth 1 origin "$REF" >/dev/null 2>&1 \
+                && git reset --hard FETCH_HEAD >/dev/null 2>&1); then
+                NEED_CLONE=0
+                echo "  Updated to latest $REF"
+            else
+                echo "  In-place update failed — will reinstall from scratch"
+            fi
         fi
 
-        # Pull LFS files
-        if has_git_lfs; then
-            (cd "$TMP_DIR" && git lfs pull)
+        # ── Full clone path (first install or recovery) ───────────────────────────
+        if [ "$NEED_CLONE" = "1" ]; then
+            # Clone into a temp dir so the existing install (if any) stays intact
+            # until the new one is fully ready. Atomic: rm old + mv new.
+            rm -rf "$OMPM_TMP"
+            echo "Cloning $REPO@$REF..."
+            if git clone --depth 1 --branch "$REF" \
+               "https://github.com/${REPO}.git" "$OMPM_TMP" >/dev/null 2>&1; then
+                :
+            else
+                # Shallow clone may fail for non-branch refs (commit SHAs, etc.)
+                git clone "https://github.com/${REPO}.git" "$OMPM_TMP"
+                (cd "$OMPM_TMP" && git checkout "$REF")
+            fi
+
+            if has_git_lfs; then
+                (cd "$OMPM_TMP" && git lfs pull 2>/dev/null || true)
+            fi
+
+            if [ ! -d "$OMPM_TMP/packages/coding-agent" ]; then
+                echo "Clone succeeded but packages/coding-agent not found — wrong repo?"
+                exit 1
+            fi
+
+            # Atomically replace. From this point a failure leaves OMPM_HOME intact.
+            rm -rf "$OMPM_HOME"
+            mv "$OMPM_TMP" "$OMPM_HOME"
+            trap - EXIT INT TERM  # tmp is gone; nothing left to clean up
         fi
 
-        if [ ! -d "$TMP_DIR/packages/coding-agent" ]; then
-            echo "Expected package at ${TMP_DIR}/packages/coding-agent"
-            exit 1
-        fi
-
-        bun install -g "$TMP_DIR/packages/coding-agent" || {
-            echo "Failed to install from source"
+        # ── Dependency install ────────────────────────────────────────────────────
+        # Must run from monorepo root so all workspace siblings are resolved.
+        # bun install is idempotent; safe to re-run on retry.
+        echo "Installing workspace dependencies..."
+        (cd "$OMPM_HOME" && bun install) || {
+            echo ""
+            echo "bun install failed. To retry:"
+            echo "  cd $OMPM_HOME && bun install"
             exit 1
         }
+
+        # ── Wrapper script ────────────────────────────────────────────────────────
+        # Runs cli.ts via bun so node_modules resolution walks up to
+        # $OMPM_HOME/node_modules and finds all workspace siblings.
+        # Handles bun not in PATH by probing known install locations.
+        mkdir -p "$INSTALL_DIR"
+        WRAPPER="$INSTALL_DIR/ompm"
+        WRAPPER_TMP="${WRAPPER}.tmp.$$"
+        # Write atomically via tmp so a half-written wrapper is never executed
+        {
+            echo '#!/usr/bin/env sh'
+            echo '# ompm — generated by install.sh; do not edit'
+            printf 'OMPM_HOME="%s"\n' "$OMPM_HOME"
+            cat << 'WRAPPER_BODY'
+if command -v bun >/dev/null 2>&1; then
+    _BUN=bun
+elif [ -x "$HOME/.bun/bin/bun" ]; then
+    _BUN="$HOME/.bun/bin/bun"
+else
+    echo "ompm: bun not found — install bun: curl -fsSL https://bun.sh/install | sh" >&2
+    exit 1
+fi
+exec "$_BUN" "$OMPM_HOME/packages/coding-agent/src/cli.ts" "$@"
+WRAPPER_BODY
+        } > "$WRAPPER_TMP"
+        chmod +x "$WRAPPER_TMP"
+        mv "$WRAPPER_TMP" "$WRAPPER"
+
     else
         bun install -g "$PACKAGE" || {
             echo "Failed to install $PACKAGE"
             exit 1
         }
     fi
+
     echo ""
-    echo "✓ Installed ompm via bun"
+    echo "✓ Installed ompm to $INSTALL_DIR/ompm"
+    setup_path
     echo "Run 'ompm' to get started!"
 }
 
