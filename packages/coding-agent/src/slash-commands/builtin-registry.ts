@@ -498,57 +498,27 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 	},
 	{
 		name: "login",
-		description: "Login with OAuth provider",
-		inlineHint: "[provider|redirect URL]",
+		description: "Manage provider authentication via the AI auth proxy",
+		inlineHint: "[provider]",
 		allowArgs: true,
-		handle: (command, runtime) => {
-			const manualInput = runtime.ctx.oauthManualInput;
-			const args = command.args.trim();
-			if (args.length > 0) {
-				const matchedProvider = getOAuthProviders().find(provider => provider.id === args);
-				if (matchedProvider) {
-					if (manualInput.hasPending()) {
-						const pendingProvider = manualInput.pendingProviderId;
-						const message = pendingProvider
-							? `OAuth login already in progress for ${pendingProvider}. Paste the redirect URL with /login <url>.`
-							: "OAuth login already in progress. Paste the redirect URL with /login <url>.";
-						runtime.ctx.showWarning(message);
-						runtime.ctx.editor.setText("");
-						return;
-					}
-					void runtime.ctx.showOAuthSelector("login", matchedProvider.id);
-					runtime.ctx.editor.setText("");
-					return;
-				}
-				const submitted = manualInput.submit(args);
-				if (submitted) {
-					runtime.ctx.showStatus("OAuth callback received; completing login…");
-				} else {
-					runtime.ctx.showWarning("No OAuth login is waiting for a manual callback.");
-				}
-				runtime.ctx.editor.setText("");
-				return;
-			}
-
-			if (manualInput.hasPending()) {
-				const provider = manualInput.pendingProviderId;
-				const message = provider
-					? `OAuth login already in progress for ${provider}. Paste the redirect URL with /login <url>.`
-					: "OAuth login already in progress. Paste the redirect URL with /login <url>.";
-				runtime.ctx.showWarning(message);
-				runtime.ctx.editor.setText("");
-				return;
-			}
-
-			void runtime.ctx.showOAuthSelector("login");
+		handle: (_command, runtime) => {
+			runtime.ctx.showWarning(
+				"Authentication is managed centrally by the AI auth proxy.\n" +
+				"Add API keys with: aiproxy add-key <provider> <key>\n" +
+				"View status with:  aiproxy status",
+			);
 			runtime.ctx.editor.setText("");
 		},
 	},
 	{
 		name: "logout",
-		description: "Logout from OAuth provider",
+		description: "Manage provider authentication via the AI auth proxy",
 		handle: (_command, runtime) => {
-			void runtime.ctx.showOAuthSelector("logout");
+			runtime.ctx.showWarning(
+				"Authentication is managed centrally by the AI auth proxy.\n" +
+				"Remove API keys with: aiproxy list-keys, then aiproxy remove-key <id>\n" +
+				"Revoke VM access with: aiproxy whitelist remove <ip>",
+			);
 			runtime.ctx.editor.setText("");
 		},
 	},
