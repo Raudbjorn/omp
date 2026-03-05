@@ -179,8 +179,8 @@ install_via_bun() {
         }
     fi
     echo ""
-    echo "✓ Installed omp via bun"
-    echo "Run 'omp' to get started!"
+    echo "✓ Installed ompm via bun"
+    echo "Run 'ompm' to get started!"
 }
 
 # Install binary from GitHub releases
@@ -228,8 +228,8 @@ install_binary() {
     # Download binary
     BINARY_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY}"
     echo "Downloading ${BINARY}..."
-    curl -fsSL "$BINARY_URL" -o "${INSTALL_DIR}/omp"
-    chmod +x "${INSTALL_DIR}/omp"
+    curl -fsSL "$BINARY_URL" -o "${INSTALL_DIR}/ompm"
+    chmod +x "${INSTALL_DIR}/ompm"
     downloaded_native=0
     if [ "$ARCH" = "x64" ]; then
         for variant in modern baseline; do
@@ -250,13 +250,13 @@ install_binary() {
         downloaded_native=1
     fi
     echo ""
-    echo "✓ Installed omp to ${INSTALL_DIR}/omp"
+    echo "✓ Installed ompm to ${INSTALL_DIR}/ompm"
     echo "✓ Installed ${downloaded_native} native addon file(s) to ${INSTALL_DIR}"
 
     # Check if in PATH
     case ":$PATH:" in
-        *":$INSTALL_DIR:"*) echo "Run 'omp' to get started!" ;;
-        *) echo "Add ${INSTALL_DIR} to your PATH, then run 'omp'" ;;
+        *":$INSTALL_DIR:"*) echo "Run 'ompm' to get started!" ;;
+        *) echo "Add ${INSTALL_DIR} to your PATH, then run 'ompm'" ;;
     esac
 }
 
