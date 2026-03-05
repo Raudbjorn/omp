@@ -12,6 +12,7 @@ import {
 	anthropicModelManagerOptions,
 	cerebrasModelManagerOptions,
 	cloudflareAiGatewayModelManagerOptions,
+	deepseekModelManagerOptions,
 	githubCopilotModelManagerOptions,
 	groqModelManagerOptions,
 	huggingfaceModelManagerOptions,
@@ -273,6 +274,7 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 		config => cursorModelManagerOptions(config),
 		catalog("Cursor", ["CURSOR_API_KEY"], { oauthProvider: "cursor" }),
 	),
+	descriptor("deepseek", "deepseek-chat", config => deepseekModelManagerOptions(config)),
 ] as const;
 
 /** Default model IDs for all known providers, built from descriptors + special providers. */
@@ -291,4 +293,5 @@ export const DEFAULT_MODEL_PER_PROVIDER: Record<KnownProvider, string> = {
 	"gitlab-duo": "duo-chat-sonnet-4-5",
 	devin: "devin",
 	warp: "claude-4.5-sonnet",
+	deepseek: "deepseek-chat",
 } as Record<KnownProvider, string>;
