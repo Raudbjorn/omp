@@ -34,21 +34,10 @@ interface RoleAssignment {
 
 type RoleSelectCallback = (model: Model, role: ModelRole | null, thinkingLevel?: ThinkingLevel) => void;
 type CancelCallback = () => void;
-interface MenuRoleAction {
-	label: string;
-	role: ModelRole;
-}
-
-const MENU_ROLE_ACTIONS: MenuRoleAction[] = MODEL_ROLE_IDS.map(role => {
-	const roleInfo = MODEL_ROLES[role];
-	const roleLabel = roleInfo.tag ? `${roleInfo.tag} (${roleInfo.name})` : roleInfo.name;
-	return {
-		label: `Set as ${roleLabel}`,
-		role,
-	};
-});
+type MenuAction = { kind: "role"; label: string; role: ModelRole } | { kind: "favourite"; label: string };
 
 const ALL_TAB = "ALL";
+const FAVS_TAB = "FAVS";
 
 /**
  * Component that renders a model selector with provider tabs and context menu.
@@ -85,6 +74,7 @@ export class ModelSelectorComponent extends Container {
 	#menuSelectedIndex: number = 0;
 	#menuStep: "role" | "thinking" = "role";
 	#menuSelectedRole: ModelRole | null = null;
+	#menuActions: MenuAction[] = [];
 
 	constructor(
 		tui: TUI,
@@ -222,6 +212,10 @@ export class ModelSelectorComponent extends Container {
 			const aRank = modelRank(a);
 			const bRank = modelRank(b);
 			if (aRank !== bRank) return aRank - bRank;
+			// Favourite models sort above non-favourites (within same role rank)
+			const aFav = this.#settings.isFavouriteModel(aKey);
+			const bFav = this.#settings.isFavouriteModel(bKey);
+			if (aFav !== bFav) return aFav ? -1 : 1;
 
 			// Then MRU order (models in mruIndex come before those not in it)
 			const aMru = mruIndex.get(aKey) ?? Number.MAX_SAFE_INTEGER;
@@ -322,7 +316,7 @@ export class ModelSelectorComponent extends Container {
 			providerSet.add(provider.toUpperCase());
 		}
 		const sortedProviders = Array.from(providerSet).sort();
-		this.#providers = [ALL_TAB, ...sortedProviders];
+		this.#providers = [ALL_TAB, FAVS_TAB, ...sortedProviders];
 	}
 
 	async #refreshSelectedProvider(): Promise<void> {
@@ -366,14 +360,16 @@ export class ModelSelectorComponent extends Container {
 
 		// Start with all models or filter by provider
 		let baseModels = this.#allModels;
-		if (activeProvider !== ALL_TAB) {
+		if (activeProvider === FAVS_TAB) {
+			baseModels = this.#allModels.filter(m => this.#settings.isFavouriteModel(`${m.provider}/${m.id}`));
+		} else if (activeProvider !== ALL_TAB) {
 			baseModels = this.#allModels.filter(m => m.provider.toUpperCase() === activeProvider);
 		}
 
 		// Apply fuzzy filter if query is present
 		if (query.trim()) {
 			// If user is searching, auto-switch to ALL tab to show global results
-			if (activeProvider !== ALL_TAB) {
+			if (activeProvider !== ALL_TAB && activeProvider !== FAVS_TAB) {
 				this.#activeTabIndex = 0;
 				if (this.#tabBar && this.#tabBar.getActiveIndex() !== 0) {
 					this.#tabBar.setActiveIndex(0);
@@ -447,7 +443,7 @@ export class ModelSelectorComponent extends Container {
 		const endIndex = Math.min(startIndex + maxVisible, this.#filteredModels.length);
 
 		const activeProvider = this.#getActiveProvider();
-		const showProvider = activeProvider === ALL_TAB;
+		const showProvider = activeProvider === ALL_TAB || activeProvider === FAVS_TAB;
 
 		// Show visible slice of filtered models
 		for (let i = startIndex; i < endIndex; i++) {
@@ -466,6 +462,10 @@ export class ModelSelectorComponent extends Container {
 				const badge = makeInvertedBadge(tag, color ?? "success");
 				const thinkingLabel = getThinkingLevelMetadata(assigned.thinkingLevel).label;
 				roleBadgeTokens.push(`${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`);
+			}
+			// Favourite star badge
+			if (this.#settings.isFavouriteModel(`${item.provider}/${item.id}`)) {
+				roleBadgeTokens.push(theme.fg("warning", "★"));
 			}
 			const badgeText = roleBadgeTokens.length > 0 ? ` ${roleBadgeTokens.join(" ")}` : "";
 
@@ -529,6 +529,14 @@ export class ModelSelectorComponent extends Container {
 
 	#openMenu(): void {
 		if (this.#filteredModels.length === 0) return;
+		const selectedModel = this.#filteredModels[this.#selectedIndex];
+		if (!selectedModel) return;
+
+		const isFav = this.#settings.isFavouriteModel(`${selectedModel.provider}/${selectedModel.id}`);
+		this.#menuActions = [
+			...MODEL_ROLE_IDS.map(role => ({ kind: "role" as const, label: `Set as ${MODEL_ROLES[role].name}`, role })),
+			{ kind: "favourite" as const, label: isFav ? "Remove from Favourites" : "Add to Favourites" },
+		];
 
 		this.#isMenuOpen = true;
 		this.#menuStep = "role";
@@ -558,7 +566,7 @@ export class ModelSelectorComponent extends Container {
 					const label = getThinkingLevelMetadata(thinkingLevel).label;
 					return `${prefix}${label}`;
 				})
-			: MENU_ROLE_ACTIONS.map((action, index) => {
+			: this.#menuActions.map((action, index) => {
 					const prefix = index === this.#menuSelectedIndex ? `  ${theme.nav.cursor} ` : "    ";
 					return `${prefix}${action.label}`;
 				});
@@ -663,7 +671,7 @@ export class ModelSelectorComponent extends Container {
 		const optionCount =
 			this.#menuStep === "thinking" && this.#menuSelectedRole !== null
 				? this.#getThinkingLevelsForModel(selectedModel.model).length
-				: MENU_ROLE_ACTIONS.length;
+				: this.#menuActions.length;
 		if (optionCount === 0) return;
 
 		if (matchesKey(keyData, "up")) {
@@ -680,8 +688,16 @@ export class ModelSelectorComponent extends Container {
 
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			if (this.#menuStep === "role") {
-				const action = MENU_ROLE_ACTIONS[this.#menuSelectedIndex];
+				const action = this.#menuActions[this.#menuSelectedIndex];
 				if (!action) return;
+				if (action.kind === "favourite") {
+					const modelKey = `${selectedModel.model.provider}/${selectedModel.model.id}`;
+					this.#settings.toggleFavouriteModel(modelKey);
+					this.#filterModels(this.#searchInput.getValue());
+					this.#tui.requestRender();
+					this.#closeMenu();
+					return;
+				}
 				this.#menuSelectedRole = action.role;
 				this.#menuStep = "thinking";
 				this.#menuSelectedIndex = this.#getThinkingPreselectIndex(action.role, selectedModel.model);
@@ -701,7 +717,7 @@ export class ModelSelectorComponent extends Container {
 		if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc") || matchesKey(keyData, "ctrl+c")) {
 			if (this.#menuStep === "thinking" && this.#menuSelectedRole !== null) {
 				this.#menuStep = "role";
-				const roleIndex = MENU_ROLE_ACTIONS.findIndex(action => action.role === this.#menuSelectedRole);
+				const roleIndex = this.#menuActions.findIndex(a => a.kind === "role" && a.role === this.#menuSelectedRole);
 				this.#menuSelectedRole = null;
 				this.#menuSelectedIndex = roleIndex >= 0 ? roleIndex : 0;
 				this.#updateMenu();

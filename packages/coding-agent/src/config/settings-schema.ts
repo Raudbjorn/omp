@@ -158,6 +158,8 @@ export const SETTINGS_SCHEMA = {
 
 	modelRoles: { type: "record", default: EMPTY_STRING_RECORD },
 
+	favouriteModels: { type: "array", default: EMPTY_STRING_ARRAY },
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Appearance
 	// ────────────────────────────────────────────────────────────────────────

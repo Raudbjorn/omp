@@ -384,6 +384,35 @@ export class Settings {
 	}
 
 	/**
+	 * Get all favourite model IDs.
+	 */
+	getFavouriteModels(): string[] {
+		return this.get("favouriteModels");
+	}
+
+	/**
+	 * Check whether a model ID is in the favourites list.
+	 */
+	isFavouriteModel(modelId: string): boolean {
+		return this.get("favouriteModels").includes(modelId);
+	}
+
+	/**
+	 * Toggle a model ID in/out of the favourites list.
+	 */
+	toggleFavouriteModel(modelId: string): void {
+		const favs = this.get("favouriteModels");
+		if (favs.includes(modelId)) {
+			this.set(
+				"favouriteModels",
+				favs.filter(id => id !== modelId),
+			);
+		} else {
+			this.set("favouriteModels", [...favs, modelId]);
+		}
+	}
+
+	/**
 	 * Set disabled providers (for compatibility with discovery system).
 	 */
 	setDisabledProviders(ids: string[]): void {
