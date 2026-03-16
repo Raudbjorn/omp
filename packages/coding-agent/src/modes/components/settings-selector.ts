@@ -3,6 +3,7 @@ import type { Effort } from "@oh-my-pi/pi-ai";
 import {
 	Container,
 	Input,
+	isKeyRelease,
 	matchesKey,
 	type SelectItem,
 	SelectList,
@@ -162,6 +163,8 @@ class SelectSubmenu extends Container {
 	}
 
 	handleInput(data: string): void {
+		// Ignore key-release events to prevent focus-shift ghost input.
+		if (isKeyRelease(data)) return;
 		this.#selectList.handleInput(data);
 	}
 }
@@ -595,6 +598,8 @@ export class SettingsSelectorComponent extends Container {
 	}
 
 	handleInput(data: string): void {
+		// Ignore key-release events to prevent focus-shift ghost input.
+		if (isKeyRelease(data)) return;
 		// Handle tab switching — but NOT when a text input is active, since
 		// arrow keys must reach the cursor and Tab must not switch tabs.
 		if (

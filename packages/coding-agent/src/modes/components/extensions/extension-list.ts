@@ -8,6 +8,7 @@
 import {
 	type Component,
 	extractPrintableText,
+	isKeyRelease,
 	matchesKey,
 	padding,
 	truncateToWidth,
@@ -399,6 +400,8 @@ export class ExtensionList implements Component {
 	}
 
 	handleInput(data: string): void {
+		// Ignore key-release events to prevent focus-shift ghost input.
+		if (isKeyRelease(data)) return;
 		// Navigation
 		if (matchesKey(data, "up") || data === "k") {
 			this.#moveSelectionUp();
