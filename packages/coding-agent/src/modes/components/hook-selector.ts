@@ -6,6 +6,7 @@ import {
 	Container,
 	isKeyRelease,
 	Markdown,
+	isKeyRelease,
 	matchesKey,
 	padding,
 	renderInlineMarkdown,
