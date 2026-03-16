@@ -3,6 +3,7 @@ import {
 	Container,
 	Ellipsis,
 	Input,
+	isKeyRelease,
 	matchesKey,
 	padding,
 	Spacer,
@@ -116,6 +117,8 @@ export class HistorySearchComponent extends Container {
 	}
 
 	handleInput(keyData: string): void {
+		// Ignore key-release events to prevent focus-shift ghost input.
+		if (isKeyRelease(keyData)) return;
 		if (matchesKey(keyData, "up")) {
 			if (this.#results.length === 0) return;
 			this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
