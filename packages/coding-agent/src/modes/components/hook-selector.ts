@@ -5,6 +5,7 @@
 import {
 	Container,
 	Markdown,
+	isKeyRelease,
 	matchesKey,
 	padding,
 	renderInlineMarkdown,
@@ -161,6 +162,9 @@ export class HookSelectorComponent extends Container {
 	}
 
 	handleInput(keyData: string): void {
+		// Ignore key-release events to prevent focus-shift ghost input.
+		if (isKeyRelease(keyData)) return;
+
 		// Reset countdown on any interaction
 		this.#countdown?.reset();
 
