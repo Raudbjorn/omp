@@ -356,7 +356,7 @@ export const SETTINGS_SCHEMA = {
 	"tui.maxInlineImageColumns": {
 		type: "number",
 		default: 100,
-		description: "Maximum width in terminal columns for inline images (default 100). Set to 0 for unlimited.",
+		description: "Maximum width in terminal columns for inline images (default 100). Set to 0 for unlimited (bounded only by terminal width).",
 	},
 
 	// Display rendering

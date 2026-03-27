@@ -531,7 +531,7 @@ export class ToolExecutionComponent extends Container {
 						imageData,
 						imageMimeType,
 						{ fallbackColor: (s: string) => theme.fg("toolOutput", s) },
-						{ maxWidthCells: settings.get("tui.maxInlineImageColumns") || undefined },
+						{ maxWidthCells: settings.get("tui.maxInlineImageColumns") },
 					);
 					this.#imageComponents.push(imageComponent);
 					this.addChild(imageComponent);
