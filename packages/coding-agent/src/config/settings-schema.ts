@@ -1860,7 +1860,7 @@ export const SETTINGS_SCHEMA = {
 	// Async jobs
 	"async.enabled": {
 		type: "boolean",
-		default: false,
+		default: true,
 		ui: {
 			tab: "tools",
 			label: "Async Execution",
