@@ -126,6 +126,7 @@ export type KnownProvider =
 	| "vllm"
 	| "xiaomi"
 	| "zenmux"
+	| "upb"
 	| "lm-studio";
 export type Provider = KnownProvider | string;
 
