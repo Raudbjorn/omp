@@ -45,6 +45,7 @@ import { loginKagi } from "./utils/oauth/kagi";
 import { loginKilo } from "./utils/oauth/kilo";
 import { loginKimi } from "./utils/oauth/kimi";
 import { loginLiteLLM } from "./utils/oauth/litellm";
+import { loginUPB } from "./utils/oauth/upb";
 import { loginLmStudio } from "./utils/oauth/lm-studio";
 import { loginMiniMaxCode, loginMiniMaxCodeCn } from "./utils/oauth/minimax-code";
 import { loginMoonshot } from "./utils/oauth/moonshot";
@@ -876,6 +877,11 @@ export class AuthStorage {
 			}
 			case "litellm": {
 				const apiKey = await loginLiteLLM(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "upb": {
+				const apiKey = await loginUPB(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
