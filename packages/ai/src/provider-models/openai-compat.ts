@@ -1223,6 +1223,37 @@ export function litellmModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// UPB AI Gateway (Universität Paderborn — LiteLLM-based proxy)
+// ---------------------------------------------------------------------------
+
+export interface UPBModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function upbModelManagerOptions(config?: UPBModelManagerConfig): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://ai-gateway.uni-paderborn.de/v1";
+	const references = createBundledReferenceMap<"openai-completions">("upb" as Parameters<typeof getBundledModels>[0]);
+	return {
+		providerId: "upb",
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "upb",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						return mapWithBundledReference(entry, defaults, reference);
+					},
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 22. vLLM
 // ---------------------------------------------------------------------------
 
