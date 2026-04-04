@@ -42,6 +42,7 @@ import {
 	xaiModelManagerOptions,
 	xiaomiModelManagerOptions,
 	zenmuxModelManagerOptions,
+	upbModelManagerOptions,
 } from "./openai-compat";
 import { cursorModelManagerOptions, zaiModelManagerOptions } from "./special";
 
