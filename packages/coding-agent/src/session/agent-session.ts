@@ -5181,8 +5181,8 @@ export class AgentSession {
 
 	#isTransientTransportErrorMessage(errorMessage: string): boolean {
 		// Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504,
-		// service unavailable, network/connection errors, fetch failed, terminated, retry delay exceeded
-		return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay|stream stall/i.test(
+		// service unavailable, network/connection errors, fetch failed, upstream errors, terminated, retry delay exceeded
+		return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?(connect|error)|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay|stream stall/i.test(
 			errorMessage,
 		);
 	}
