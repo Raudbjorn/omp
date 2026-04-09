@@ -2986,6 +2986,12 @@ export class AgentSession {
 		this.#slashCommands = [...slashCommands];
 	}
 
+	/** Replace loaded skills and warnings after runtime rediscovery. */
+	setSkills(skills: Skill[], warnings: SkillWarning[]): void {
+		this.#skills = [...skills];
+		this.#skillWarnings = [...warnings];
+	}
+
 	/** Loaded file-based slash commands (read-only). */
 	get fileCommands(): ReadonlyArray<FileSlashCommand> {
 		return this.#slashCommands;
