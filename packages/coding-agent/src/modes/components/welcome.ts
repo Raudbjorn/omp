@@ -2,6 +2,9 @@ import { type Component, padding, TERMINAL, truncateToWidth, visibleWidth } from
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { theme } from "../../modes/theme/theme";
 
+const WELCOME_BORDER_HOT_PINK_ANSI = "\x1b[38;2;247;18;232m";
+const ANSI_FOREGROUND_RESET = "\x1b[39m";
+
 export interface RecentSession {
 	name: string;
 	timeAgo: string;
@@ -96,8 +99,24 @@ export class WelcomeComponent implements Component {
 		const leftCol = showRightColumn ? dualLeftCol : boxWidth - 2;
 		const rightCol = showRightColumn ? dualRightCol : 0;
 
-		// Logo: pick a frame from the intro animation if active, else the resting frame.
-		const logoColored = this.#currentLogoFrame();
+		// Block-based OMP logo (gradient: magenta → cyan)
+		// biome-ignore format: preserve ASCII art layout
+		const piLogo = [
+      "     #▓░▓##       ",
+      "   #░░░░░░░▓#     ",
+      "  ##░░░░░░░▓░#    ",
+      "  #█▒██\ue22c ██▓█#    ",
+      "  #█ X ██ X █#    ",
+      "  #█░░█  ░░██#    ",
+      "░░  (██░███)  /░  ",
+      "░▒*._█ █  █  /░░/ ",
+      "    \\#// /       ",
+      "░░░▒** - - *░░░░\\ ",
+      "░░           ░▓  ",
+    ];
+
+		// Apply gradient to logo
+		const logoColored = this.#radialGradient(piLogo, 8, 4);
 
 		// Left column - centered content
 		const leftLines = [
@@ -112,7 +131,7 @@ export class WelcomeComponent implements Component {
 
 		// Right column separator
 		const separatorWidth = Math.max(0, rightCol - 2); // padding on each side
-		const separator = ` ${theme.fg("dim", theme.boxRound.horizontal.repeat(separatorWidth))}`;
+		const separator = ` ${this.#hotPink(theme.boxRound.horizontal.repeat(separatorWidth))}`;
 
 		// Recent sessions content
 		const sessionLines: string[] = [];
@@ -170,28 +189,27 @@ export class WelcomeComponent implements Component {
 			"",
 		];
 
-		// Border characters (dim)
+		// Border characters (ANSI hot pink)
 		const hChar = theme.boxRound.horizontal;
-		const h = theme.fg("dim", hChar);
-		const v = theme.fg("dim", theme.boxRound.vertical);
-		const tl = theme.fg("dim", theme.boxRound.topLeft);
-		const tr = theme.fg("dim", theme.boxRound.topRight);
-		const bl = theme.fg("dim", theme.boxRound.bottomLeft);
-		const br = theme.fg("dim", theme.boxRound.bottomRight);
+		const v = this.#hotPink(theme.boxRound.vertical);
+		const tl = this.#hotPink(theme.boxRound.topLeft);
+		const tr = this.#hotPink(theme.boxRound.topRight);
+		const bl = this.#hotPink(theme.boxRound.bottomLeft);
+		const br = this.#hotPink(theme.boxRound.bottomRight);
 
 		const lines: string[] = [];
 
 		// Top border with embedded title
 		const title = ` ${APP_NAME} v${this.version} `;
 		const titlePrefixRaw = hChar.repeat(3);
-		const titleStyled = theme.fg("dim", titlePrefixRaw) + theme.fg("muted", title);
+		const titleStyled = this.#hotPink(titlePrefixRaw) + theme.fg("muted", title);
 		const titleVisLen = visibleWidth(titlePrefixRaw) + visibleWidth(title);
 		const titleSpace = boxWidth - 2;
 		if (titleVisLen >= titleSpace) {
 			lines.push(tl + truncateToWidth(titleStyled, titleSpace) + tr);
 		} else {
 			const afterTitle = titleSpace - titleVisLen;
-			lines.push(tl + titleStyled + theme.fg("dim", hChar.repeat(afterTitle)) + tr);
+			lines.push(tl + titleStyled + this.#hotPink(hChar.repeat(afterTitle)) + tr);
 		}
 
 		// Content rows
@@ -207,9 +225,15 @@ export class WelcomeComponent implements Component {
 		}
 		// Bottom border
 		if (showRightColumn) {
-			lines.push(bl + h.repeat(leftCol) + theme.fg("dim", theme.boxSharp.teeUp) + h.repeat(rightCol) + br);
+			lines.push(
+				bl +
+					this.#hotPink(hChar.repeat(leftCol)) +
+					this.#hotPink(theme.boxSharp.teeUp) +
+					this.#hotPink(hChar.repeat(rightCol)) +
+					br,
+			);
 		} else {
-			lines.push(bl + h.repeat(leftCol) + br);
+			lines.push(bl + this.#hotPink(hChar.repeat(leftCol)) + br);
 		}
 
 		return lines;
@@ -226,6 +250,64 @@ export class WelcomeComponent implements Component {
 		return padding(leftPad) + text + padding(rightPad);
 	}
 
+	/** Apply a radial gradient (cyan at center → magenta at edges) to the logo */
+	#radialGradient(logo: string[], centerCol: number, centerRow: number): string[] {
+		const cx = centerCol - 1;
+		const cy = centerRow - 1;
+
+		let maxDist = 0;
+		for (let row = 0; row < logo.length; row++) {
+			for (let col = 0; col < logo[row].length; col++) {
+				if (logo[row][col] !== " ") {
+					const dist = Math.sqrt((col - cx) ** 2 + (row - cy) ** 2);
+					if (dist > maxDist) maxDist = dist;
+				}
+			}
+		}
+
+		const stops = [
+			[0, 255, 255],
+			[75, 200, 255],
+			[122, 122, 230],
+			[154, 90, 230],
+			[179, 45, 198],
+			[45, 20, 80],
+		];
+		const reset = "\x1b[0m";
+
+		return logo.map((line, row) => {
+			let result = "";
+			for (let col = 0; col < line.length; col++) {
+				const char = line[col];
+				const isAfterCenter = col === cx + 1 && row === cy && char === " ";
+				if (char === " " && !isAfterCenter) {
+					result += char;
+					continue;
+				}
+				if (isAfterCenter) {
+					result += `\x1b[48;2;40;112;140m ${reset}\x1b[49m`;
+					continue;
+				}
+				const dist = Math.sqrt((col - cx) ** 2 + (row - cy) ** 2);
+				const t = maxDist > 0 ? Math.min(1, dist / maxDist) : 0;
+				const scaledT = t * (stops.length - 1);
+				const idx = Math.min(Math.floor(scaledT), stops.length - 2);
+				const frac = scaledT - idx;
+				const r = Math.round(stops[idx][0] + (stops[idx + 1][0] - stops[idx][0]) * frac);
+				const g = Math.round(stops[idx][1] + (stops[idx + 1][1] - stops[idx][1]) * frac);
+				const b = Math.round(stops[idx][2] + (stops[idx + 1][2] - stops[idx][2]) * frac);
+				const isCenter = col === cx && row === cy;
+				const bg = isCenter ? "\x1b[48;2;40;112;140m" : "";
+				const bgReset = isCenter ? "\x1b[49m" : "";
+				result += `${bg}\x1b[38;2;${r};${g};${b}m${char}${reset}${bgReset}`;
+			}
+			return result;
+		});
+	}
+
+	#hotPink(text: string): string {
+		return `${WELCOME_BORDER_HOT_PINK_ANSI}${text}${ANSI_FOREGROUND_RESET}`;
+	}
 	/** Fit string to exact width with ANSI-aware truncation/padding */
 	#fitToWidth(str: string, width: number): string {
 		const visLen = visibleWidth(str);
@@ -267,7 +349,13 @@ export class WelcomeComponent implements Component {
 }
 
 // biome-ignore format: preserve ASCII art layout
-const PI_LOGO = ["▀██████████▀", " ╘██    ██  ", "  ██    ██  ", "  ██    ██  ", " ▄██▄  ▄██▄ "];
+const PI_LOGO = [
+  "▀██████████▀",
+  " ╘██    ██  ",
+  "  ██    ██  ",
+  "  ██    ██  ",
+  " ▄██▄  ▄██▄ ",
+];
 
 /**
  * Apply magenta→cyan diagonal gradient (bottom-left → top-right) across multi-line art.
