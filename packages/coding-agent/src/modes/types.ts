@@ -36,6 +36,7 @@ export type CompactionQueuedMessage = {
 export type SubmittedUserInput = {
 	text: string;
 	images?: ImageContent[];
+	continueFromContext?: boolean;
 	cancelled: boolean;
 	started: boolean;
 };

@@ -2986,6 +2986,11 @@ export class AgentSession {
 		this.#slashCommands = [...slashCommands];
 	}
 
+	/** Loaded file-based slash commands (read-only). */
+	get fileCommands(): ReadonlyArray<FileSlashCommand> {
+		return this.#slashCommands;
+	}
+
 	/** Custom commands (TypeScript slash commands and MCP prompts) */
 	get customCommands(): ReadonlyArray<LoadedCustomCommand> {
 		if (this.#mcpPromptCommands.length === 0) return this.#customCommands;
@@ -3700,6 +3705,15 @@ export class AgentSession {
 			message.details,
 			message.attribution ?? "agent",
 		);
+	}
+
+	/**
+	 * Start a turn from the existing session context without appending a new message.
+	 * Used by multi-block submissions when all user-visible blocks have already been persisted.
+	 */
+	async continueFromContext(): Promise<void> {
+		await this.agent.continue();
+		await this.#waitForPostPromptRecovery();
 	}
 
 	/**
