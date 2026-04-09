@@ -1,7 +1,12 @@
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
-import { parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
+import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { slashCommandCapability } from "../capability/slash-command";
-import { appendInlineArgsFallback, templateUsesInlineArgPlaceholders } from "../config/prompt-templates";
+import type { SourceMeta } from "../capability/types";
+import {
+	appendInlineArgsFallback,
+	renderPromptTemplate,
+	templateUsesInlineArgPlaceholders,
+} from "../config/prompt-templates";
 import type { SlashCommand } from "../discovery";
 import { loadCapability } from "../discovery";
 import {
@@ -11,6 +16,7 @@ import {
 } from "../slash-commands/builtin-registry";
 import { EMBEDDED_COMMAND_TEMPLATES } from "../task/commands";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
+import { interpolateShellExpressions } from "./shell-interpolation";
 
 export type SlashCommandSource = "extension" | "prompt" | "skill";
 
@@ -125,7 +131,7 @@ export interface FileSlashCommand {
 	content: string;
 	source: string; // e.g., "via Claude Code (User)"
 	/** Source metadata for display */
-	_source?: { providerName: string; level: "user" | "project" | "native" };
+	_source?: SourceMeta;
 }
 
 const EMBEDDED_SLASH_COMMANDS = EMBEDDED_COMMAND_TEMPLATES;
@@ -177,7 +183,7 @@ export async function loadSlashCommands(options: LoadSlashCommandsOptions = {}):
 			description,
 			content: body,
 			source: sourceStr,
-			_source: { providerName: cmd._source.providerName, level: cmd.level },
+			_source: cmd._source,
 		};
 	});
 
@@ -206,7 +212,11 @@ export async function loadSlashCommands(options: LoadSlashCommandsOptions = {}):
  * Expand a slash command if it matches a file-based command.
  * Returns the expanded content or the original text if not a slash command.
  */
-export function expandSlashCommand(text: string, fileCommands: FileSlashCommand[]): string {
+export async function expandSlashCommand(
+	text: string,
+	fileCommands: FileSlashCommand[],
+	options: { cwd: string },
+): Promise<string> {
 	if (!text.startsWith("/")) return text;
 
 	const spaceIndex = text.indexOf(" ");
@@ -219,8 +229,16 @@ export function expandSlashCommand(text: string, fileCommands: FileSlashCommand[
 		const argsText = args.join(" ");
 		const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(fileCommand.content);
 		const substituted = substituteArgs(fileCommand.content, args);
-		const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
-		return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
+		const rendered = renderPromptTemplate(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
+		const expanded =
+			fileCommand._source?.provider === "native"
+				? await interpolateShellExpressions({
+						body: rendered,
+						cwd: options.cwd,
+						sourceLabel: `/${fileCommand.name}`,
+					})
+				: rendered;
+		return appendInlineArgsFallback(expanded, argsText, usesInlineArgPlaceholders);
 	}
 
 	return text;

@@ -2,8 +2,9 @@ import * as fs from "node:fs/promises";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
 import type { AutocompleteProvider, EditorSubmitMetadata, SlashCommand } from "@oh-my-pi/pi-tui";
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
+import { interpolateShellExpressions } from "../../extensibility/shell-interpolation";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import { theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
@@ -686,28 +687,36 @@ export class InputController {
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
-		const skillPath = this.ctx.skillCommands?.get(commandName);
-		if (!skillPath) {
+		const skillCommand = this.ctx.skillCommands?.get(commandName);
+		if (!skillCommand) {
 			return "not-handled";
 		}
+		const { filePath: skillPath, isNative } = skillCommand;
 		if (options?.addToHistory !== false) {
 			this.ctx.editor.addToHistory(text);
 		}
 		this.ctx.editor.setText("");
 		try {
 			const content = await Bun.file(skillPath).text();
-			const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
-			const metaLines = [`Skill: ${skillPath}`];
+			const { body } = parseFrontmatter(content, { source: skillPath, level: "fatal" });
+			const skillName = commandName.slice("skill:".length);
+			const expandedBody = isNative
+				? await interpolateShellExpressions({
+						body,
+						cwd: this.ctx.sessionManager.getCwd(),
+						sourceLabel: `skill:${skillName}`,
+					})
+				: body;
+			const metaLines = [`Skill: ${skillPath}`, `Do not read SKILL.md for ${skillName}.`];
 			if (args) {
 				metaLines.push(`User: ${args}`);
 			}
-			const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
-			const skillName = commandName.slice("skill:".length);
+			const message = `${expandedBody}\n\n---\n\n${metaLines.join("\n")}`;
 			const details: SkillPromptDetails = {
 				name: skillName || commandName,
 				path: skillPath,
 				args: args || undefined,
-				lineCount: body ? body.split("\n").length : 0,
+				lineCount: expandedBody ? expandedBody.split("\n").length : 0,
 			};
 			if (options?.suppressTurn) {
 				const wasStreaming = this.ctx.session.isStreaming;
