@@ -19,7 +19,7 @@ const TERMINAL_TITLE_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 
 const MAX_INPUT_CHARS = 2000;
 
-function getTitleModel(
+export function getTitleModel(
 	registry: ModelRegistry,
 	settings: Settings,
 	currentModel?: Model<Api>,
