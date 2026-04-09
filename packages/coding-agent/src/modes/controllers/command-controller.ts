@@ -980,7 +980,9 @@ export class CommandController {
 			setProjectDir(resolvedPath);
 			clearClaudePluginRootsCache(); // re-warms preloadedPluginRoots with new project dir (async)
 			resetCapabilities();
-			await this.ctx.refreshSlashCommandState(resolvedPath);
+			// Fork integration: after /move, refresh runtime state so OMP hot reloading follows the new cwd.
+			await this.ctx.refreshRuntimeCommandState(resolvedPath);
+			await this.ctx.syncOmpLiveReloadState(resolvedPath);
 
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorTopBorder();
