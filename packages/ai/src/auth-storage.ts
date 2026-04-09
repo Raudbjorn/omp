@@ -188,12 +188,23 @@ function resolveDefaultRankingStrategy(provider: Provider): CredentialRankingStr
 	return DEFAULT_RANKING_STRATEGIES.get(provider);
 }
 
+const CODEX_PROVIDER = "openai-codex";
+
+const CODEX_SWITCH_REASONS = {
+	usageBlocked: "usage_blocked",
+	definitiveAuthFailure: "definitive_auth_failure",
+	pinMissingOrStale: "pin_missing_or_stale",
+	fallbackAllBlocked: "fallback_all_blocked",
+} as const;
+
+type CodexSwitchReason = (typeof CODEX_SWITCH_REASONS)[keyof typeof CODEX_SWITCH_REASONS];
+
 function parseUsageCacheEntry<T>(raw: string): UsageCacheEntry<T> | undefined {
 	try {
-		const parsed = JSON.parse(raw) as { value?: T; expiresAt?: unknown };
+		const parsed = JSON.parse(raw) as { value?: T | null; expiresAt?: unknown };
 		const expiresAt = typeof parsed.expiresAt === "number" ? parsed.expiresAt : undefined;
 		if (!expiresAt || !Number.isFinite(expiresAt)) return undefined;
-		return { value: parsed.value as T, expiresAt };
+		return { value: (parsed.value ?? (null as unknown as T)) as T, expiresAt };
 	} catch {
 		return undefined;
 	}
@@ -213,7 +224,10 @@ class AuthStorageUsageCache implements UsageCache {
 	}
 
 	set<T>(key: string, entry: UsageCacheEntry<T>): void {
-		const payload = JSON.stringify({ value: entry.value, expiresAt: entry.expiresAt });
+		const payload = JSON.stringify({
+			value: entry.value ?? null,
+			expiresAt: entry.expiresAt,
+		});
 		this.store.setCache(`${USAGE_CACHE_PREFIX}${key}`, payload, Math.floor(entry.expiresAt / 1000));
 	}
 
@@ -558,6 +572,82 @@ export class AuthStorage {
 		}
 
 		return fallback;
+	}
+
+	#getOAuthCredentialIdentity(
+		provider: string,
+		index: number,
+	): {
+		index: number;
+		accountId?: string;
+		email?: string;
+	} {
+		const credential = this.#getCredentialsForProvider(provider)[index];
+		if (!credential || credential.type !== "oauth") {
+			return { index };
+		}
+		return {
+			index,
+			accountId: credential.accountId,
+			email: credential.email,
+		};
+	}
+
+	#logCodexSwitch(args: {
+		sessionId: string | undefined;
+		previous: { type: AuthCredential["type"]; index: number } | undefined;
+		previousIdentity: { index: number; accountId?: string; email?: string } | undefined;
+		reason?: CodexSwitchReason;
+	}): void {
+		if (!args.sessionId || !args.previous || args.previous.type !== "oauth" || !args.previousIdentity) {
+			return;
+		}
+		const current = this.#getSessionCredential(CODEX_PROVIDER, args.sessionId);
+		if (!current || current.type !== "oauth") {
+			return;
+		}
+		const currentIdentity = this.#getOAuthCredentialIdentity(CODEX_PROVIDER, current.index);
+		const isSameIdentity =
+			currentIdentity.index === args.previousIdentity.index &&
+			currentIdentity.accountId === args.previousIdentity.accountId &&
+			currentIdentity.email === args.previousIdentity.email;
+		if (isSameIdentity) {
+			return;
+		}
+		const providerKey = this.#getProviderTypeKey(CODEX_PROVIDER, "oauth");
+		const reason =
+			args.reason ??
+			(this.#isCredentialBlocked(providerKey, args.previous.index)
+				? CODEX_SWITCH_REASONS.usageBlocked
+				: CODEX_SWITCH_REASONS.pinMissingOrStale);
+		logger.debug("AuthStorage codex credential switched", {
+			event: "auth_storage.codex_credential_switched",
+			provider: CODEX_PROVIDER,
+			sessionId: args.sessionId,
+			reason,
+			previousCredential: args.previousIdentity,
+			newCredential: currentIdentity,
+		});
+	}
+
+	#logCodexCredentialOmittedFromRanking(args: {
+		sessionId: string | undefined;
+		selection: { credential: OAuthCredential; index: number };
+		reason: "missing_usage_report";
+		modelId?: string;
+	}): void {
+		logger.warn("AuthStorage codex credential omitted from ranking", {
+			event: "auth_storage.codex_credential_omitted_from_ranking",
+			provider: CODEX_PROVIDER,
+			sessionId: args.sessionId,
+			reason: args.reason,
+			modelId: args.modelId,
+			credential: {
+				index: args.selection.index,
+				accountId: args.selection.credential.accountId,
+				email: args.selection.credential.email,
+			},
+		});
 	}
 
 	/**
@@ -1544,7 +1634,24 @@ export class AuthStorage {
 		return Math.min(Math.max(usedFraction, 0), 1);
 	}
 
-	/** Computes `usedFraction / elapsedHours` — consumption rate per hour within the current window. Lower drain rate = less pressure = preferred. */
+	#requireCodexSecondaryResetAt(usage: UsageReport): number {
+		const windows = codexRankingStrategy.findWindowLimits(usage);
+		const secondary = windows.secondary;
+		if (!secondary) {
+			throw new Error(
+				"Codex multi-account ranking requires a secondary usage window for every non-blocked account.",
+			);
+		}
+		const resetAt = this.#resolveWindowResetAt(secondary.window);
+		if (resetAt === undefined) {
+			throw new Error(
+				"Codex multi-account ranking requires secondary.window.resetsAt for every non-blocked account.",
+			);
+		}
+		return resetAt;
+	}
+
+	/** Computes `usedFraction / elapsedHours` - consumption rate per hour within the current window. Lower drain rate = less pressure = preferred. */
 	#computeWindowDrainRate(limit: UsageLimit | undefined, nowMs: number, fallbackDurationMs: number): number {
 		const usedFraction = this.#normalizeUsageFraction(limit);
 		const durationMs = limit?.window?.durationMs ?? fallbackDurationMs;
@@ -1571,6 +1678,7 @@ export class AuthStorage {
 	async #rankOAuthSelections(args: {
 		providerKey: string;
 		provider: string;
+		sessionId?: string;
 		order: number[];
 		credentials: Array<{ credential: OAuthCredential; index: number }>;
 		options?: AuthApiKeyOptions;
@@ -1591,12 +1699,16 @@ export class AuthStorage {
 			blocked: boolean;
 			blockedUntil?: number;
 			hasPriorityBoost: boolean;
+			hasUntouchedSecondaryWindow: boolean;
+			secondaryResetAt?: number;
 			secondaryUsed: number;
 			secondaryDrainRate: number;
 			primaryUsed: number;
 			primaryDrainRate: number;
 			orderPos: number;
 		}> = [];
+		let omittedMissingUsageCount = 0;
+		let hadNonBlockedUsageReport = false;
 		// Pre-fetch usage reports in parallel for non-blocked credentials
 		const usageResults = await Promise.all(
 			args.order.map(async idx => {
@@ -1619,15 +1731,40 @@ export class AuthStorage {
 			let { blockedUntil } = result;
 			let blocked = blockedUntil !== undefined;
 			if (!blocked && usage && this.#isUsageLimitReached(usage)) {
+				hadNonBlockedUsageReport = true;
 				const resetAtMs = this.#getUsageResetAtMs(usage, nowMs);
 				blockedUntil = resetAtMs ?? Date.now() + AuthStorage.#defaultBackoffMs;
 				this.#markCredentialBlocked(args.providerKey, selection.index, blockedUntil);
 				blocked = true;
 			}
+			if (!blocked && args.provider === CODEX_PROVIDER && !usage) {
+				omittedMissingUsageCount += 1;
+				this.#logCodexCredentialOmittedFromRanking({
+					sessionId: args.sessionId,
+					selection,
+					reason: "missing_usage_report",
+					modelId: args.options?.modelId,
+				});
+				continue;
+			}
+			if (!blocked && usage) {
+				hadNonBlockedUsageReport = true;
+			}
 			const windows = usage ? strategy.findWindowLimits(usage) : undefined;
 			const primary = windows?.primary;
 			const secondary = windows?.secondary;
 			const secondaryTarget = secondary ?? primary;
+			const secondaryUsed = this.#normalizeUsageFraction(secondaryTarget);
+			const secondaryResetAt =
+				!blocked && args.provider === CODEX_PROVIDER && usage
+					? this.#requireCodexSecondaryResetAt(usage)
+					: undefined;
+			const hasUntouchedSecondaryWindow =
+				!blocked &&
+				args.provider === CODEX_PROVIDER &&
+				usage !== null &&
+				secondary !== undefined &&
+				secondaryUsed === 0;
 			ranked.push({
 				selection,
 				usage,
@@ -1635,7 +1772,9 @@ export class AuthStorage {
 				blocked,
 				blockedUntil,
 				hasPriorityBoost: strategy.hasPriorityBoost?.(primary) ?? false,
-				secondaryUsed: this.#normalizeUsageFraction(secondaryTarget),
+				hasUntouchedSecondaryWindow,
+				secondaryResetAt,
+				secondaryUsed,
 				secondaryDrainRate: this.#computeWindowDrainRate(
 					secondaryTarget,
 					nowMs,
@@ -1645,6 +1784,9 @@ export class AuthStorage {
 				primaryDrainRate: this.#computeWindowDrainRate(primary, nowMs, strategy.windowDefaults.primaryMs),
 				orderPos,
 			});
+		}
+		if (args.provider === CODEX_PROVIDER && omittedMissingUsageCount > 0 && !hadNonBlockedUsageReport) {
+			return [];
 		}
 		ranked.sort((left, right) => {
 			if (left.blocked !== right.blocked) return left.blocked ? 1 : -1;
@@ -1658,6 +1800,17 @@ export class AuthStorage {
 				const leftPlanPriority = getOpenAICodexPlanPriority(left.usage);
 				const rightPlanPriority = getOpenAICodexPlanPriority(right.usage);
 				if (leftPlanPriority !== rightPlanPriority) return leftPlanPriority - rightPlanPriority;
+			}
+			if (
+				args.provider === CODEX_PROVIDER &&
+				left.hasUntouchedSecondaryWindow !== right.hasUntouchedSecondaryWindow
+			) {
+				return left.hasUntouchedSecondaryWindow ? -1 : 1;
+			}
+			if (args.provider === CODEX_PROVIDER && left.secondaryResetAt !== right.secondaryResetAt) {
+				const leftResetAt = left.secondaryResetAt ?? Number.POSITIVE_INFINITY;
+				const rightResetAt = right.secondaryResetAt ?? Number.POSITIVE_INFINITY;
+				if (leftResetAt !== rightResetAt) return leftResetAt - rightResetAt;
 			}
 			if (left.hasPriorityBoost !== right.hasPriorityBoost) return left.hasPriorityBoost ? -1 : 1;
 			if (left.secondaryDrainRate !== right.secondaryDrainRate)
@@ -1695,8 +1848,13 @@ export class AuthStorage {
 		const strategy = this.#rankingStrategyResolver?.(provider);
 		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
 		const checkUsage = strategy !== undefined && (credentials.length > 1 || requiresProModel);
-		const sessionCredential = this.#getSessionCredential(provider, sessionId);
-		const sessionPreferredIndex = sessionCredential?.type === "oauth" ? sessionCredential.index : undefined;
+		const previousSessionCredential = this.#getSessionCredential(provider, sessionId);
+		const previousCodexIdentity =
+			provider === CODEX_PROVIDER && previousSessionCredential?.type === "oauth"
+				? this.#getOAuthCredentialIdentity(provider, previousSessionCredential.index)
+				: undefined;
+		const sessionPreferredIndex =
+			previousSessionCredential?.type === "oauth" ? previousSessionCredential.index : undefined;
 		// Skip ranking only when the session already has a working preferred credential — re-ranking
 		// mid-session causes account switches that cold-start the server-side prompt cache. New sessions
 		// (no preference) and sessions whose preferred is blocked still rank, so we pick the account
@@ -1705,7 +1863,15 @@ export class AuthStorage {
 			sessionPreferredIndex !== undefined && !this.#isCredentialBlocked(providerKey, sessionPreferredIndex);
 		const shouldRank = checkUsage && (!sessionPreferredIsAvailable || requiresProModel);
 		const candidates = shouldRank
-			? await this.#rankOAuthSelections({ providerKey, provider, order, credentials, options, strategy: strategy! })
+			? await this.#rankOAuthSelections({
+					providerKey,
+					provider,
+					sessionId,
+					order,
+					credentials,
+					options,
+					strategy: strategy!,
+				})
 			: order
 					.map(idx => credentials[idx])
 					.filter((selection): selection is { credential: OAuthCredential; index: number } => Boolean(selection))
@@ -1720,6 +1886,15 @@ export class AuthStorage {
 			if (sessionPreferredCandidate > 0) {
 				const [preferred] = candidates.splice(sessionPreferredCandidate, 1);
 				candidates.unshift(preferred);
+			}
+		}
+
+		let codexSwitchReason: CodexSwitchReason | undefined;
+		if (provider === CODEX_PROVIDER && sessionPreferredIndex !== undefined && !sessionPreferredIsAvailable) {
+			if (!credentials.some(entry => entry.index === sessionPreferredIndex)) {
+				codexSwitchReason = CODEX_SWITCH_REASONS.pinMissingOrStale;
+			} else {
+				codexSwitchReason = CODEX_SWITCH_REASONS.usageBlocked;
 			}
 		}
 		await Promise.all(
@@ -1759,17 +1934,49 @@ export class AuthStorage {
 				usagePrechecked: candidate.usageChecked,
 				enforceProRequirement,
 			});
-			if (apiKey) return apiKey;
+			if (apiKey) {
+				if (provider === CODEX_PROVIDER) {
+					this.#logCodexSwitch({
+						sessionId,
+						previous: previousSessionCredential,
+						previousIdentity: previousCodexIdentity,
+						reason: codexSwitchReason,
+					});
+				}
+				return apiKey;
+			}
 		}
 
 		if (fallback && this.#isCredentialBlocked(providerKey, fallback.selection.index)) {
-			return this.#tryOAuthCredential(provider, fallback.selection, providerKey, sessionId, options, {
-				checkUsage,
-				allowBlocked: true,
-				prefetchedUsage: fallback.usage,
-				usagePrechecked: fallback.usageChecked,
-				enforceProRequirement,
-			});
+			const fallbackApiKey = await this.#tryOAuthCredential(
+				provider,
+				fallback.selection,
+				providerKey,
+				sessionId,
+				options,
+				{
+					checkUsage,
+					allowBlocked: true,
+					prefetchedUsage: fallback.usage,
+					usagePrechecked: fallback.usageChecked,
+					enforceProRequirement,
+				},
+			);
+			if (fallbackApiKey) {
+				if (provider === CODEX_PROVIDER) {
+					this.#logCodexSwitch({
+						sessionId,
+						previous: previousSessionCredential,
+						previousIdentity: previousCodexIdentity,
+						reason:
+							codexSwitchReason ??
+							(fallback.selection.index !== previousSessionCredential?.index
+								? CODEX_SWITCH_REASONS.fallbackAllBlocked
+								: undefined),
+					});
+				}
+				return fallbackApiKey;
+			}
 		}
 
 		return undefined;
