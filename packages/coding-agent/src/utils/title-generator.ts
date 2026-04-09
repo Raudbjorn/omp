@@ -4,6 +4,7 @@
 import * as path from "node:path";
 
 import { type Api, completeSimple, type Model } from "@oh-my-pi/pi-ai";
+import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
@@ -17,14 +18,18 @@ const TERMINAL_TITLE_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 
 const MAX_INPUT_CHARS = 2000;
 
-function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel?: Model<Api>): Model<Api> | undefined {
+export function getTitleModel(
+	registry: ModelRegistry,
+	settings: Settings,
+	currentModel?: Model<Api>,
+): { model: Model<Api>; thinkingLevel?: ThinkingLevel } | undefined {
 	const availableModels = registry.getAvailable();
 	if (availableModels.length === 0) return undefined;
 
 	const titleModel = resolveRoleSelection(["commit", "smol"], settings, availableModels, registry)?.model;
-	if (titleModel) return titleModel;
+	if (titleModel) return { model: titleModel };
 
-	if (currentModel) return currentModel;
+	if (currentModel) return { model: currentModel };
 
 	return undefined;
 }
@@ -44,11 +49,12 @@ export async function generateSessionTitle(
 	sessionId?: string,
 	currentModel?: Model<Api>,
 ): Promise<string | null> {
-	const model = getTitleModel(registry, settings, currentModel);
-	if (!model) {
+	const titleResult = getTitleModel(registry, settings, currentModel);
+	if (!titleResult) {
 		logger.debug("title-generator: no title model found");
 		return null;
 	}
+	const model = titleResult.model;
 
 	// Truncate message if too long
 	const truncatedMessage =
