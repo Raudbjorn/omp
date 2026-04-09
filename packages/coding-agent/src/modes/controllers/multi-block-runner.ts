@@ -298,7 +298,9 @@ async function executeCommandBlock(
 			startsTurn: hasPromptContent,
 		};
 	}
-	const expanded = expandSlashCommand(commandText, options.fileCommands);
+	const expanded = await expandSlashCommand(commandText, options.fileCommands, {
+		cwd: options.ctx.sessionManager.getCwd(),
+	});
 	return {
 		success: true,
 		appendedText: expanded,
