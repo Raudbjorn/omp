@@ -3110,7 +3110,7 @@ export class AgentSession {
 			// Try file-based slash commands (markdown files from commands/ directories)
 			// Only if text still starts with "/" (wasn't transformed by custom command)
 			if (text.startsWith("/")) {
-				text = expandSlashCommand(text, this.#slashCommands);
+				text = await expandSlashCommand(text, this.#slashCommands, { cwd: this.sessionManager.getCwd() });
 			}
 		}
 

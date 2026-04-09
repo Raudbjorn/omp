@@ -41,6 +41,17 @@ export type SubmittedUserInput = {
 	started: boolean;
 };
 
+/**
+ * Resolved target for a `/skill:` command.
+ *
+ * The map stores only what the input layer needs at invocation time: where the
+ * skill lives on disk and whether native OMP-only body interpolation is allowed.
+ */
+export interface SkillCommandBinding {
+	filePath: string;
+	isNative: boolean;
+}
+
 export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
 
 export type TodoItem = {
@@ -119,7 +130,7 @@ export interface InteractiveModeContext {
 	lastStatusSpacer: Spacer | undefined;
 	lastStatusText: Text | undefined;
 	fileSlashCommands: Set<string>;
-	skillCommands: Map<string, string>;
+	skillCommands: Map<string, SkillCommandBinding>;
 	oauthManualInput: OAuthManualInputManager;
 	todoPhases: TodoPhase[];
 

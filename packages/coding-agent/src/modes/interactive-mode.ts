@@ -204,7 +204,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	lastStatusSpacer: Spacer | undefined = undefined;
 	lastStatusText: Text | undefined = undefined;
 	fileSlashCommands: Set<string> = new Set();
-	skillCommands: Map<string, string> = new Map();
+	skillCommands: Map<string, { filePath: string; isNative: boolean }> = new Map();
 	oauthManualInput: OAuthManualInputManager = new OAuthManualInputManager();
 
 	#pendingSlashCommands: SlashCommand[] = [];
@@ -325,7 +325,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (settings.get("skills.enableSkillCommands")) {
 			for (const skill of this.session.skills) {
 				const commandName = `skill:${skill.name}`;
-				this.skillCommands.set(commandName, skill.filePath);
+				this.skillCommands.set(commandName, {
+					filePath: skill.filePath,
+					isNative: skill._source?.level === "native",
+				});
 				skillCommandList.push({ name: commandName, description: skill.description });
 			}
 		}

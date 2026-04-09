@@ -183,6 +183,10 @@ export function appendInlineArgsFallback(
 	return `${rendered}\n\n${argsText}`;
 }
 
+export function renderPromptTemplate(template: string, context: Record<string, unknown> = {}): string {
+	return prompt.render(template, context);
+}
+
 /**
  * Recursively scan a directory for .md files (and symlinks to .md files) and load them as prompt templates
  */
@@ -309,7 +313,7 @@ export function expandPromptTemplate(text: string, templates: PromptTemplate[]):
 		const argsText = args.join(" ");
 		const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(template.content);
 		const substituted = substituteArgs(template.content, args);
-		const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
+		const rendered = renderPromptTemplate(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
 		return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
 	}
 
