@@ -389,4 +389,31 @@ describe("ACP agent", () => {
 		harness.abortController.abort();
 		await Bun.sleep(0);
 	});
+
+	it("flattens custom replay content into user message chunks", async () => {
+		const harness = await createHarness();
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendCustomMessageEntry(
+			"skill-prompt",
+			[{ type: "text", text: "Skill prompt body" }],
+			true,
+			{ name: "demo", path: "/tmp/demo.md", lineCount: 1 },
+			"user",
+		);
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		await harness.agent.loadSession({ sessionId: stored.sessionId, cwd: harness.cwdA, mcpServers: [] });
+
+		const replayUserChunks = harness.updates.filter(
+			update => update.sessionId === stored.sessionId && update.update.sessionUpdate === "user_message_chunk",
+		);
+
+		expect(replayUserChunks.length).toBeGreaterThan(0);
+		expect(replayUserChunks.some(update => JSON.stringify(update.update).includes("Skill prompt body"))).toBe(true);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
 });
