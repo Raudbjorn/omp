@@ -2155,6 +2155,17 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: { tab: "tasks", label: "Claude Project Commands", description: "Load commands from .claude/commands/" },
 	},
+	// Fork integration for hot reloading of native OMP commands/skills.
+	"commands.liveReloadMode": {
+		type: "enum",
+		values: ["omp", "none"] as const,
+		default: "none",
+		ui: {
+			tab: "tools",
+			label: "OMP command/skill live reload",
+			description: "Watch native .omp roots and refresh commands/skills without restart",
+		},
+	},
 
 	"commands.enableOpencodeUser": {
 		type: "boolean",
