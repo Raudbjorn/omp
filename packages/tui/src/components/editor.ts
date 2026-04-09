@@ -1,6 +1,7 @@
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import type { AutocompleteProvider, CombinedAutocompleteProvider } from "../autocomplete";
 import { BracketedPasteHandler } from "../bracketed-paste";
+import type { EditorSubmitMetadata, PasteIntent, SubmissionLineIntent } from "../editor-component";
 import { getKeybindings, type KeybindingsManager } from "../keybindings";
 import { extractPrintableText, matchesKey } from "../keys";
 import { KillRing } from "../kill-ring";
@@ -310,6 +311,11 @@ interface HistoryStorage {
 
 type HistoryCursorAnchor = "start" | "end";
 
+interface PasteRecord {
+	text: string;
+	intent: PasteIntent;
+}
+
 export class Editor implements Component, Focusable {
 	#state: EditorState = {
 		lines: [""],
@@ -358,8 +364,9 @@ export class Editor implements Component, Focusable {
 	onAutocompleteUpdate?: () => void;
 
 	// Paste tracking for large pastes
-	#pastes: Map<number, string> = new Map();
+	#pastes: Map<number, PasteRecord> = new Map();
 	#pasteCounter: number = 0;
+	#pasteSegments: PasteRecord[] = [];
 
 	// Bracketed paste mode buffering
 	#pasteHandler = new BracketedPasteHandler();
@@ -376,7 +383,7 @@ export class Editor implements Component, Focusable {
 	// Debounce timer for autocomplete updates
 	#autocompleteTimeout?: NodeJS.Timeout;
 
-	onSubmit?: (text: string) => void;
+	onSubmit?: (text: string, metadata?: EditorSubmitMetadata) => void;
 	onAltEnter?: (text: string) => void;
 	onChange?: (text: string) => void;
 	onAutocompleteCancel?: () => void;
@@ -917,7 +924,7 @@ export class Editor implements Component, Focusable {
 		const paste = this.#pasteHandler.process(data);
 		if (paste.handled) {
 			if (paste.pasteContent !== undefined) {
-				this.#handlePaste(paste.pasteContent);
+				this.#handlePaste(paste.pasteContent, "safe");
 				if (paste.remaining.length > 0) {
 					this.handleInput(paste.remaining);
 				}
@@ -1352,9 +1359,9 @@ export class Editor implements Component, Focusable {
 
 	#expandPasteMarkers(text: string): string {
 		let result = text;
-		for (const [pasteId, pasteContent] of this.#pastes) {
+		for (const [pasteId, paste] of this.#pastes) {
 			const markerRegex = new RegExp(`\\[paste #${pasteId}( (\\+\\d+ lines|\\d+ chars))?\\]`, "g");
-			result = result.replace(markerRegex, () => pasteContent);
+			result = result.replace(markerRegex, () => paste.text);
 		}
 		return result;
 	}
@@ -1446,6 +1453,9 @@ export class Editor implements Component, Focusable {
 	setText(text: string): void {
 		this.#historyIndex = -1; // Exit history browsing mode
 		this.#resetKillSequence();
+		this.#pastes.clear();
+		this.#pasteCounter = 0;
+		this.#pasteSegments = [];
 		this.#setTextInternal(text);
 	}
 
@@ -1475,6 +1485,10 @@ export class Editor implements Component, Focusable {
 		if (this.onChange) {
 			this.onChange(this.getText());
 		}
+	}
+
+	insertPastedText(text: string, intent: PasteIntent): void {
+		this.#handlePaste(text, intent);
 	}
 
 	// All the editor methods from before...
@@ -1537,7 +1551,7 @@ export class Editor implements Component, Focusable {
 		}
 	}
 
-	#handlePaste(pastedText: string): void {
+	#handlePaste(pastedText: string, intent: PasteIntent): void {
 		this.#historyIndex = -1; // Exit history browsing mode
 		this.#resetKillSequence();
 		this.#recordUndoState();
@@ -1574,7 +1588,8 @@ export class Editor implements Component, Focusable {
 				// Store the paste and insert a marker
 				this.#pasteCounter++;
 				const pasteId = this.#pasteCounter;
-				this.#pastes.set(pasteId, filteredText);
+				this.#pastes.set(pasteId, { text: filteredText, intent });
+				this.#pasteSegments.push({ text: filteredText, intent });
 
 				// Insert marker like "[paste #1 +123 lines]" or "[paste #1 1234 chars]"
 				const marker =
@@ -1588,6 +1603,7 @@ export class Editor implements Component, Focusable {
 
 			if (pastedLines.length === 1) {
 				// Single line - insert character by character to trigger autocomplete
+				this.#pasteSegments.push({ text: filteredText, intent });
 				for (const char of filteredText) {
 					this.#insertCharacter(char);
 				}
@@ -1595,6 +1611,7 @@ export class Editor implements Component, Focusable {
 			}
 
 			// Multi-line paste - use insertTextAtCursor for proper handling
+			this.#pasteSegments.push({ text: filteredText, intent });
 			this.#insertTextAtCursor(filteredText);
 		});
 	}
@@ -1633,20 +1650,67 @@ export class Editor implements Component, Focusable {
 		return this.#state.cursorCol > 0 && currentLine[this.#state.cursorCol - 1] === "\\";
 	}
 
+	#buildSubmissionLineIntents(submission: string): SubmissionLineIntent[] {
+		if (this.#pasteSegments.length === 0 || submission.length === 0) {
+			return [];
+		}
+
+		const lines = submission.split("\n");
+		const lineStarts: number[] = [];
+		let offset = 0;
+		for (const line of lines) {
+			lineStarts.push(offset);
+			offset += line.length + 1;
+		}
+
+		const lineIntentByIndex = new Map<number, PasteIntent>();
+		let searchOffset = 0;
+		for (const segment of this.#pasteSegments) {
+			if (!segment.text) {
+				continue;
+			}
+
+			const segmentStart = submission.indexOf(segment.text, searchOffset);
+			if (segmentStart === -1) {
+				continue;
+			}
+			const segmentEnd = segmentStart + segment.text.length;
+
+			for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+				const lineText = lines[lineIndex] ?? "";
+				const leadingWhitespace = lineText.match(/^\s*/)?.[0].length ?? 0;
+				if (leadingWhitespace >= lineText.length) {
+					continue;
+				}
+
+				const firstNonWhitespaceOffset = (lineStarts[lineIndex] ?? 0) + leadingWhitespace;
+				if (firstNonWhitespaceOffset >= segmentStart && firstNonWhitespaceOffset < segmentEnd) {
+					lineIntentByIndex.set(lineIndex, segment.intent);
+				}
+			}
+
+			searchOffset = segmentEnd;
+		}
+
+		return [...lineIntentByIndex.entries()].sort(([a], [b]) => a - b).map(([line, intent]) => ({ line, intent }));
+	}
+
 	#submitValue(): void {
 		this.#resetKillSequence();
 
 		const result = this.#expandPasteMarkers(this.#state.lines.join("\n")).trim();
+		const lineIntents = this.#buildSubmissionLineIntents(result);
 
 		this.#state = { lines: [""], cursorLine: 0, cursorCol: 0 };
 		this.#pastes.clear();
 		this.#pasteCounter = 0;
+		this.#pasteSegments = [];
 		this.#historyIndex = -1;
 		this.#scrollOffset = 0;
 		this.#undoStack.length = 0;
 
 		if (this.onChange) this.onChange("");
-		if (this.onSubmit) this.onSubmit(result);
+		if (this.onSubmit) this.onSubmit(result, { lineIntents });
 	}
 
 	#handleBackspace(): void {

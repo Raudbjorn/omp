@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
-import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
+import type { AutocompleteProvider, EditorSubmitMetadata, SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
@@ -10,7 +10,7 @@ import type { InteractiveModeContext } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
-import { copyToClipboard, readImageFromClipboard } from "../../utils/clipboard";
+import { copyToClipboard, readImageFromClipboard, readTextFromClipboard } from "../../utils/clipboard";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { ensureSupportedImageInput } from "../../utils/image-loading";
 import { resizeImage } from "../../utils/image-resize";
@@ -22,6 +22,13 @@ interface Expandable {
 
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
+}
+
+const EXECUTE_INTENT_PASTE_UNAVAILABLE_STATUS =
+	"Clipboard text unavailable for execute-intent paste (use terminal paste for safe text)";
+
+function startsWithSafePasteIntent(metadata?: EditorSubmitMetadata): boolean {
+	return metadata?.lineIntents.some(entry => entry.line === 0 && entry.intent === "safe") ?? false;
 }
 
 export class InputController {
@@ -162,6 +169,9 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("app.message.followUp")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleFollowUp());
 		}
+		for (const key of this.ctx.keybindings.getKeys("app.clipboard.pasteExec")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleExecuteIntentPaste());
+		}
 		for (const key of this.ctx.keybindings.getKeys("app.stt.toggle")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleSTTToggle());
 		}
@@ -185,8 +195,10 @@ export class InputController {
 	}
 
 	setupEditorSubmitHandler(): void {
-		this.ctx.editor.onSubmit = async (text: string) => {
+		this.ctx.editor.onSubmit = async (text: string, metadata) => {
 			text = text.trim();
+			const isSingleLineSubmission = !text.includes("\n");
+			const safePasteIntent = startsWithSafePasteIntent(metadata);
 
 			// Empty submit while streaming with queued messages: flush queues immediately
 			if (!text && this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount > 0) {
@@ -202,7 +214,11 @@ export class InputController {
 				if (this.ctx.onInputCallback) {
 					this.ctx.editor.setText("");
 					this.ctx.pendingImages = [];
-					this.ctx.onInputCallback({ text: "", cancelled: false, started: true });
+					this.ctx.onInputCallback({
+						text: "",
+						cancelled: false,
+						started: true,
+					});
 				}
 				return;
 			}
@@ -228,20 +244,22 @@ export class InputController {
 			if (!text) return;
 
 			// Handle built-in slash commands
-			const slashResult = await executeBuiltinSlashCommand(text, {
-				ctx: this.ctx,
-				handleBackgroundCommand: () => this.handleBackgroundCommand(),
-			});
-			if (slashResult === true) {
-				return;
-			}
-			if (typeof slashResult === "string") {
-				// Command handled but returned remaining text to use as prompt
-				text = slashResult;
+			if (isSingleLineSubmission && !safePasteIntent) {
+				const slashResult = await executeBuiltinSlashCommand(text, {
+					ctx: this.ctx,
+					handleBackgroundCommand: () => this.handleBackgroundCommand(),
+				});
+				if (slashResult === true) {
+					return;
+				}
+				if (typeof slashResult === "string") {
+					// Command handled but returned remaining text to use as prompt
+					text = slashResult;
+				}
 			}
 
 			// Handle skill commands (/skill:name [args])
-			if (text.startsWith("/skill:")) {
+			if (isSingleLineSubmission && !safePasteIntent && text.startsWith("/skill:")) {
 				const spaceIndex = text.indexOf(" ");
 				const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 				const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
@@ -282,7 +300,7 @@ export class InputController {
 			}
 
 			// Handle bash command (! for normal, !! for excluded from context)
-			if (text.startsWith("!")) {
+			if (isSingleLineSubmission && !safePasteIntent && text.startsWith("!")) {
 				const isExcluded = text.startsWith("!!");
 				const command = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (command) {
@@ -300,7 +318,7 @@ export class InputController {
 			}
 
 			// Handle python command ($ for normal, $$ for excluded from context)
-			if (text.startsWith("$")) {
+			if (isSingleLineSubmission && !safePasteIntent && text.startsWith("$")) {
 				const isExcluded = text.startsWith("$$");
 				const code = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (code) {
@@ -546,6 +564,25 @@ export class InputController {
 		process.kill(0, "SIGTSTP");
 	}
 
+	/**
+	 * Execute-intent paste exists to preserve executable clipboard text under an
+	 * explicit shortcut while default terminal paste remains non-executable.
+	 */
+	async handleExecuteIntentPaste(): Promise<void> {
+		try {
+			const clipboardText = await readTextFromClipboard();
+			if (!clipboardText) {
+				this.ctx.showStatus(EXECUTE_INTENT_PASTE_UNAVAILABLE_STATUS);
+				return;
+			}
+
+			this.ctx.editor.insertPastedText(clipboardText, "exec");
+			this.ctx.ui.requestRender();
+		} catch {
+			this.ctx.showStatus(EXECUTE_INTENT_PASTE_UNAVAILABLE_STATUS);
+		}
+	}
+
 	async handleImagePaste(): Promise<boolean> {
 		try {
 			const image = await readImageFromClipboard();
@@ -567,7 +604,11 @@ export class InputController {
 							data: imageData.data,
 							mimeType: imageData.mimeType,
 						});
-						imageData = { type: "image", data: resized.data, mimeType: resized.mimeType };
+						imageData = {
+							type: "image",
+							data: resized.data,
+							mimeType: resized.mimeType,
+						};
 					} catch {
 						// Keep the normalized image when resize fails.
 					}
@@ -761,7 +802,10 @@ export class InputController {
 				? [ttyHandle.fd, ttyHandle.fd, ttyHandle.fd]
 				: ["inherit", "inherit", "inherit"];
 
-			const result = await openInEditor(editorCmd, currentText, { extension: ".omp.md", stdio });
+			const result = await openInEditor(editorCmd, currentText, {
+				extension: ".omp.md",
+				stdio,
+			});
 			if (result !== null) {
 				this.ctx.editor.setText(result);
 			}
