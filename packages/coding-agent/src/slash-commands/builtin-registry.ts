@@ -6,6 +6,7 @@ import { getConfigDirName } from "@oh-my-pi/pi-utils";
 import { invalidate as invalidateFsCache } from "../capability/fs";
 import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
+import { dangerPiBundledBuiltinSlashCommands } from "../danger-pi/slash-commands";
 import {
 	clearClaudePluginRootsCache,
 	resolveActiveProjectRegistryPath,
@@ -52,7 +53,7 @@ interface ParsedBuiltinSlashCommand {
 	text: string;
 }
 
-interface BuiltinSlashCommandSpec extends BuiltinSlashCommand {
+export interface BuiltinSlashCommandSpec extends BuiltinSlashCommand {
 	aliases?: string[];
 	allowArgs?: boolean;
 	/**
@@ -101,7 +102,7 @@ const shutdownHandler = (_command: ParsedBuiltinSlashCommand, runtime: BuiltinSl
 	void runtime.ctx.shutdown();
 };
 
-const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
+const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 	{
 		name: "settings",
 		description: "Open settings menu",
@@ -953,6 +954,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		description: "Quit the application",
 		handle: shutdownHandler,
 	},
+];
+
+const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
+	...CORE_BUILTIN_SLASH_COMMAND_REGISTRY,
+	...dangerPiBundledBuiltinSlashCommands,
 ];
 
 const BUILTIN_SLASH_COMMAND_LOOKUP = new Map<string, BuiltinSlashCommandSpec>();

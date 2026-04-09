@@ -35,6 +35,7 @@ import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import "./discovery";
 import { resolveConfigValue } from "./config/resolve-config-value";
+import { dangerPiBundledExtensions } from "./danger-pi/extensions";
 import { initializeWithSettings } from "./discovery";
 import { TtsrManager } from "./export/ttsr";
 import {
@@ -246,12 +247,23 @@ export interface CreateAgentSessionResult {
 
 export type { PromptTemplate } from "./config/prompt-templates";
 export { Settings, type SkillsSettings } from "./config/settings";
-export type { CustomCommand, CustomCommandFactory } from "./extensibility/custom-commands/types";
-export type { CustomTool, CustomToolFactory } from "./extensibility/custom-tools/types";
+export type {
+	CustomCommand,
+	CustomCommandFactory,
+} from "./extensibility/custom-commands/types";
+export type {
+	CustomTool,
+	CustomToolFactory,
+} from "./extensibility/custom-tools/types";
 export type * from "./extensibility/extensions";
 export type { Skill } from "./extensibility/skills";
 export type { FileSlashCommand } from "./extensibility/slash-commands";
-export type { MCPManager, MCPServerConfig, MCPServerConnection, MCPToolsLoadResult } from "./mcp";
+export type {
+	MCPManager,
+	MCPServerConfig,
+	MCPServerConnection,
+	MCPToolsLoadResult,
+} from "./mcp";
 export type { Tool } from "./tools";
 
 export {
@@ -288,7 +300,9 @@ export async function discoverAuthStorage(agentDir: string = getDefaultAgentDir(
 	const dbPath = getAgentDbPath(agentDir);
 	logger.debug("discoverAuthStorage", { agentDir, dbPath });
 
-	const storage = await AuthStorage.create(dbPath, { configValueResolver: resolveConfigValue });
+	const storage = await AuthStorage.create(dbPath, {
+		configValueResolver: resolveConfigValue,
+	});
 	await storage.reload();
 	return storage;
 }
@@ -458,7 +472,11 @@ function customToolToDefinition(tool: CustomTool): ToolDefinition {
 			? (result, options, theme): Component => {
 					const component = tool.renderResult?.(
 						result,
-						{ expanded: options.expanded, isPartial: options.isPartial, spinnerFrame: options.spinnerFrame },
+						{
+							expanded: options.expanded,
+							isPartial: options.isPartial,
+							spinnerFrame: options.spinnerFrame,
+						},
 						theme,
 					);
 					// Return empty component if undefined to match Component type requirement
@@ -482,7 +500,10 @@ function createCustomToolsExtension(tools: CustomTool[]): ExtensionFactory {
 				try {
 					await tool.onSession(event, createCustomToolContext(ctx));
 				} catch (err) {
-					logger.warn("Custom tool onSession error", { tool: tool.name, error: String(err) });
+					logger.warn("Custom tool onSession error", {
+						tool: tool.name,
+						error: String(err),
+					});
 				}
 			}
 		};
@@ -503,7 +524,14 @@ function createCustomToolsExtension(tools: CustomTool[]): ExtensionFactory {
 			runOnSession({ reason: "shutdown", previousSessionFile: undefined }, ctx),
 		);
 		api.on("auto_compaction_start", async (event, ctx) =>
-			runOnSession({ reason: "auto_compaction_start", trigger: event.reason, action: event.action }, ctx),
+			runOnSession(
+				{
+					reason: "auto_compaction_start",
+					trigger: event.reason,
+					action: event.action,
+				},
+				ctx,
+			),
 		);
 		api.on("auto_compaction_end", async (event, ctx) =>
 			runOnSession(
@@ -661,7 +689,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
 	const discoveredSkillsPromise =
 		options.skills === undefined
-			? discoverSkills(cwd, agentDir, { ...skillsSettings, disabledExtensions: disabledExtensionIds })
+			? discoverSkills(cwd, agentDir, {
+					...skillsSettings,
+					disabledExtensions: disabledExtensionIds,
+				})
 			: undefined;
 
 	// Initialize provider preferences from settings
@@ -868,7 +899,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					const formattedResult = await formatAsyncResultForFollowUp(result);
 					if (asyncJobManager!.isDeliverySuppressed(jobId)) return;
 
-					const message = prompt.render(asyncResultTemplate, { jobId, result: formattedResult });
+					const message = prompt.render(asyncResultTemplate, {
+						jobId,
+						result: formattedResult,
+					});
 					const durationMs = job ? Math.max(0, Date.now() - job.startTime) : undefined;
 					await session.sendCustomMessage(
 						{
@@ -1073,7 +1107,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			customTools.push(...discoveredCustomTools.tools.map(loaded => loaded.tool));
 		}
 
-		const inlineExtensions: ExtensionFactory[] = options.extensions ? [...options.extensions] : [];
+		const inlineExtensions: ExtensionFactory[] = [...dangerPiBundledExtensions, ...(options.extensions ?? [])];
 		inlineExtensions.push(createAutoresearchExtension);
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));
@@ -1282,7 +1316,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const hasDiscoverableMCPTools =
 				mcpDiscoveryEnabled && toolNames.includes("search_tool_bm25") && discoverableMCPTools.length > 0;
 			const promptTools = buildSystemPromptToolMetadata(tools, {
-				search_tool_bm25: { description: renderSearchToolBm25Description(discoverableMCPTools) },
+				search_tool_bm25: {
+					description: renderSearchToolBm25Description(discoverableMCPTools),
+				},
 			});
 			const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
 
@@ -1438,7 +1474,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						if (hasImages) {
 							const filteredContent = content
 								.map(c =>
-									c.type === "image" ? { type: "text" as const, text: "Image reading is disabled." } : c,
+									c.type === "image"
+										? {
+												type: "text" as const,
+												text: "Image reading is disabled.",
+											}
+										: c,
 								)
 								.filter((c, i, arr) => {
 									// Dedupe consecutive "Image reading is disabled." texts
@@ -1638,7 +1679,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						eventBus.emit(LSP_STARTUP_EVENT_CHANNEL, event);
 					} catch (error) {
 						const errorMessage = error instanceof Error ? error.message : String(error);
-						logger.warn("LSP server warmup failed", { cwd, error: errorMessage });
+						logger.warn("LSP server warmup failed", {
+							cwd,
+							error: errorMessage,
+						});
 						for (const server of lspServers ?? []) {
 							server.status = "error";
 							server.error = errorMessage;
@@ -1672,7 +1716,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			mcpManager.setOnPromptsChanged(serverName => {
 				const promptCommands = buildMCPPromptCommands(mcpManager);
 				session.setMCPPromptCommands(promptCommands);
-				logger.debug("MCP prompt commands refreshed", { path: `mcp:${serverName}` });
+				logger.debug("MCP prompt commands refreshed", {
+					path: `mcp:${serverName}`,
+				});
 			});
 			const notificationDebounceTimers = new Map<string, Timer>();
 			const clearDebounceTimers = () => {
@@ -1681,7 +1727,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			};
 			postmortem.register("mcp-notification-cleanup", clearDebounceTimers);
 			mcpManager.setOnResourcesChanged((serverName, uri) => {
-				logger.debug("MCP resources changed", { path: `mcp:${serverName}`, uri });
+				logger.debug("MCP resources changed", {
+					path: `mcp:${serverName}`,
+					uri,
+				});
 				if (!settings.get("mcp.notifications")) return;
 				const debounceMs = settings.get("mcp.notificationDebounceMs");
 				const key = `${serverName}:${uri}`;
