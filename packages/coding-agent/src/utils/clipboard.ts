@@ -4,6 +4,22 @@ import * as native from "@oh-my-pi/pi-natives";
 
 const hasDisplay = process.platform !== "linux" || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 
+async function readClipboardCommand(command: string[]): Promise<string | null> {
+	try {
+		const child = Bun.spawn(command, {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+		if (exitCode !== 0) {
+			return null;
+		}
+		return stdout;
+	} catch {
+		return null;
+	}
+}
+
 /**
  * Copy text to the system clipboard.
  *
@@ -53,7 +69,7 @@ export async function copyToClipboard(text: string): Promise<void> {
 			}
 		}
 
-		await native.copyToClipboard(text);
+		native.copyToClipboard(text);
 	} catch {
 		// Ignore — clipboard copy is best-effort
 	}
@@ -77,4 +93,51 @@ export async function readImageFromClipboard(): Promise<ClipboardImage | null> {
 	}
 
 	return (await native.readImageFromClipboard()) ?? null;
+}
+
+/**
+ * Read text from the system clipboard.
+ *
+ * Uses platform clipboard commands when available and stays non-blocking when
+ * clipboard access is unavailable in headless or remote sessions.
+ */
+export async function readTextFromClipboard(): Promise<string | null> {
+	if (process.env.TERMUX_VERSION) {
+		if (Bun.which("termux-clipboard-get")) {
+			return await readClipboardCommand(["termux-clipboard-get"]);
+		}
+		return null;
+	}
+
+	if (process.platform === "darwin") {
+		if (Bun.which("pbpaste")) {
+			return await readClipboardCommand(["pbpaste"]);
+		}
+		return null;
+	}
+
+	if (process.platform === "win32") {
+		if (Bun.which("powershell")) {
+			return await readClipboardCommand(["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"]);
+		}
+		return null;
+	}
+
+	if (!hasDisplay) {
+		return null;
+	}
+
+	if (process.env.WAYLAND_DISPLAY && Bun.which("wl-paste")) {
+		return await readClipboardCommand(["wl-paste", "--no-newline"]);
+	}
+
+	if (Bun.which("xclip")) {
+		return await readClipboardCommand(["xclip", "-selection", "clipboard", "-o"]);
+	}
+
+	if (Bun.which("xsel")) {
+		return await readClipboardCommand(["xsel", "--clipboard", "--output"]);
+	}
+
+	return null;
 }
