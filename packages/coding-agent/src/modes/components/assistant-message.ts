@@ -1,10 +1,10 @@
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { Container, Image, ImageProtocol, Markdown, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
-import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { resolveImageOptions } from "../../tools/render-utils";
 import { convertToPng } from "../../utils/image-convert";
+import { formatAssistantUsageMetadata } from "./assistant-usage-format";
 
 /**
  * Component that renders a complete assistant message
@@ -16,6 +16,7 @@ export class AssistantMessageComponent extends Container {
 	#usageInfo?: Usage;
 	#convertedKittyImages = new Map<string, ImageContent>();
 	#kittyConversionsInFlight = new Set<string>();
+	#elapsedTimeMs?: number;
 
 	constructor(
 		message?: AssistantMessage,
@@ -103,9 +104,19 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
+	setElapsedTime(elapsedTimeMs: number | undefined): void {
+		this.#elapsedTimeMs = elapsedTimeMs;
+		if (this.#lastMessage) {
+			this.updateContent(this.#lastMessage);
+		}
+	}
+
 	#renderToolImages(): void {
 		const imageEntries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) =>
-			images.map((image, index) => ({ image, key: `${toolCallId}:${index}` })),
+			images.map((image, index) => ({
+				image,
+				key: `${toolCallId}:${index}`,
+			})),
 		);
 		if (imageEntries.length === 0) return;
 
@@ -208,16 +219,10 @@ export class AssistantMessageComponent extends Container {
 
 		// Token usage metadata
 		if (settings.get("display.showTokenUsage") && this.#usageInfo) {
-			const usage = this.#usageInfo;
-			const totalInput = usage.input + usage.cacheWrite;
-			const parts: string[] = [];
-			parts.push(`${theme.icon.input} ${formatNumber(totalInput)}`);
-			parts.push(`${theme.icon.output} ${formatNumber(usage.output)}`);
-			if (usage.cacheRead > 0) {
-				parts.push(`cache: ${formatNumber(usage.cacheRead)}`);
-			}
 			this.#contentContainer.addChild(new Spacer(1));
-			this.#contentContainer.addChild(new Text(theme.fg("dim", parts.join("  ")), 1, 0));
+			this.#contentContainer.addChild(
+				new Text(formatAssistantUsageMetadata(this.#usageInfo, this.#elapsedTimeMs), 1, 0),
+			);
 		}
 	}
 }
