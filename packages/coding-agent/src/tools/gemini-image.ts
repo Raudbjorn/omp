@@ -35,11 +35,14 @@ interface ImageApiKey {
 }
 
 const responseModalitySchema = StringEnum(["IMAGE", "TEXT"]);
-const aspectRatioSchema = StringEnum(["1:1", "3:4", "4:3", "9:16", "16:9"], {
-	description: "Aspect ratio (1:1, 3:4, 4:3, 9:16, 16:9).",
-});
-const imageSizeSchema = StringEnum(["1024x1024", "1536x1024", "1024x1536"], {
-	description: "Image size, mainly for gemini-3-pro-image-preview.",
+const aspectRatioSchema = StringEnum(
+	["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"],
+	{
+		description: "Aspect ratio (1:1, 1:4, 1:8, 2:3, 3:2, 3:4, 4:1, 4:3, 4:5, 5:4, 8:1, 9:16, 16:9, 21:9).",
+	},
+);
+const imageSizeSchema = StringEnum(["512", "1K", "2K", "4K"], {
+	description: "Image size (512, 1K, 2K, 4K).",
 });
 
 const inputImageSchema = Type.Object(
