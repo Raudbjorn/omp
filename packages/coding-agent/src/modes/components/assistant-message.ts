@@ -1,9 +1,10 @@
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { Container, Image, ImageProtocol, Markdown, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
-import { formatNumber } from "@oh-my-pi/pi-utils";
+import { formatNumber, logger } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { resolveImageOptions } from "../../tools/render-utils";
+import { formatAssistantUsageMetadata } from "./assistant-usage-format";
 
 /**
  * Component that renders a complete assistant message
@@ -13,6 +14,7 @@ export class AssistantMessageComponent extends Container {
 	#lastMessage?: AssistantMessage;
 	#toolImagesByCallId = new Map<string, ImageContent[]>();
 	#usageInfo?: Usage;
+	#elapsedTimeMs?: number;
 
 	constructor(
 		message?: AssistantMessage,
@@ -55,6 +57,13 @@ export class AssistantMessageComponent extends Container {
 
 	setUsageInfo(usage: Usage): void {
 		this.#usageInfo = usage;
+		if (this.#lastMessage) {
+			this.updateContent(this.#lastMessage);
+		}
+	}
+
+	setElapsedTime(elapsedTimeMs: number | undefined): void {
+		this.#elapsedTimeMs = elapsedTimeMs;
 		if (this.#lastMessage) {
 			this.updateContent(this.#lastMessage);
 		}
@@ -162,16 +171,10 @@ export class AssistantMessageComponent extends Container {
 
 		// Token usage metadata
 		if (settings.get("display.showTokenUsage") && this.#usageInfo) {
-			const usage = this.#usageInfo;
-			const totalInput = usage.input + usage.cacheWrite;
-			const parts: string[] = [];
-			parts.push(`${theme.icon.input} ${formatNumber(totalInput)}`);
-			parts.push(`${theme.icon.output} ${formatNumber(usage.output)}`);
-			if (usage.cacheRead > 0) {
-				parts.push(`cache: ${formatNumber(usage.cacheRead)}`);
-			}
 			this.#contentContainer.addChild(new Spacer(1));
-			this.#contentContainer.addChild(new Text(theme.fg("dim", parts.join("  ")), 1, 0));
+			this.#contentContainer.addChild(
+				new Text(formatAssistantUsageMetadata(this.#usageInfo, this.#elapsedTimeMs), 1, 0),
+			);
 		}
 	}
 }

@@ -3,6 +3,7 @@ import type { AssistantMessage, ImageContent, Message } from "@oh-my-pi/pi-ai";
 import { Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
+import { getElapsedSincePreviousAssistant } from "../../modes/components/assistant-usage-format";
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BranchSummaryMessageComponent } from "../../modes/components/branch-summary-message";
 import { CompactionSummaryMessageComponent } from "../../modes/components/compaction-summary-message";
@@ -274,6 +275,9 @@ export class UiHelpers {
 				const lastChild = this.ctx.chatContainer.children[this.ctx.chatContainer.children.length - 1];
 				const assistantComponent = lastChild instanceof AssistantMessageComponent ? lastChild : undefined;
 				if (assistantComponent) {
+					assistantComponent.setElapsedTime(
+						getElapsedSincePreviousAssistant(sessionContext.messages, message.timestamp),
+					);
 					assistantComponent.setUsageInfo(message.usage);
 				}
 				readGroup = null;
