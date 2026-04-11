@@ -1,0 +1,41 @@
+---
+setup: bun install && uv tool run prek install --prepare-hooks
+changelog:
+  exclude:
+    - ./packages/ai/src/models.json
+rebase:
+  continue_check: bun fix
+---
+
+* Prek (a modern pre-commit equivalent) is installed on this project, and runs on commit.
+* If it fails, check the logs, but be aware that a `bun fix:ts` will fix some of the easier issues that you're likely to encounter.
+
+## Fork feature set
+
+This fork adds the following feature areas on top of upstream:
+
+### Agent workflow and submission handling
+- Multi-block submissions in interactive mode
+- Fenced multi-block shortcut syntax
+- Streaming multi-block queue ordering so prompt text and command results stay in authored order
+- Execute-intent paste for explicit executable clipboard input
+
+### Runtime and session behavior
+- Native `.omp` live reload for commands and skills
+- `/reload` support for refreshing runtime state
+- Fork-local bundled `/title` extension for manually setting the current session title from interactive mode
+- Codex OAuth account stickiness per session / top-level agent
+- Fork-local Codex account selection: keep reusing a still-usable sticky pin to avoid cache churn; when a new pin is needed, prefer Spark/Pro accounts first, then choose the non-exhausted account whose long window renews soonest; fail fast if Codex ranking data is missing so regressions surface immediately.
+- Codex affinity and cache-observability logging
+- Fork-local assistant token line in interactive mode: when `display.showTokenUsage` is enabled, assistant messages show dim input/output counts, a `\uf49b` cache segment with explicit cached-token count including `0` and hit/miss tinting, plus a trailing `` elapsed segment derived from assistant-message timestamps in compact `d/h/m/s` form
+- Native shell interpolation in rendered command and skill bodies
+
+### Supporting platform and tooling changes
+- Better extension discovery, including symlinked package dirs
+- Package name derivation fixes for discovered extensions
+- Session token tracking and related session-link fixes
+- Clipboard and native integration improvements
+- Nano Banana 2 image-generation pipeline upgrade
+- OpenRouter image-generation requests now send `modalities` and forward `image_config` (`aspect_ratio`, `image_size`) when provided
+- Fork-local bundled Danger Pi extensions now live in `packages/coding-agent/src/danger-pi/extensions/index.ts` and are wired directly into `sdk.ts` inline extensions, separate from filesystem-discovered user/project extensions
+- Added fork-local `meta` bundled extension slash command for UI/autocomplete experimentation with `foo`, `bar`, and `baz` argument suggestions
