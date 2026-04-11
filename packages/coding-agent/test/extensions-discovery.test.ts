@@ -46,6 +46,10 @@ describe("extensions discovery", () => {
 		}
 	`;
 
+	const createDirectorySymlink = (targetDir: string, linkPath: string) => {
+		fs.symlinkSync(targetDir, linkPath, process.platform === "win32" ? "junction" : "dir");
+	};
+
 	it("discovers direct .ts files in extensions/", async () => {
 		fs.writeFileSync(path.join(extensionsDir, "foo.ts"), extensionCode);
 		fs.writeFileSync(path.join(extensionsDir, "bar.ts"), extensionCode);
@@ -90,6 +94,44 @@ describe("extensions discovery", () => {
 		expect(result.errors).toHaveLength(0);
 		expect(result.extensions).toHaveLength(1);
 		expect(result.extensions[0].path).toContain("index.js");
+	});
+
+	it("discovers symlinked subdirectory with index.ts", async () => {
+		const targetDir = path.join(tempDir.path(), "linked-index-package");
+		fs.mkdirSync(targetDir);
+		fs.writeFileSync(path.join(targetDir, "index.ts"), extensionCodeWithTool("linked-index"));
+		createDirectorySymlink(targetDir, path.join(extensionsDir, "linked-index-package"));
+
+		const result = await discoverForTest();
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.extensions).toHaveLength(1);
+		expect(path.basename(result.extensions[0].path)).toBe("index.ts");
+		expect(result.extensions[0].tools.has("linked-index")).toBe(true);
+	});
+
+	it("discovers symlinked subdirectory with package.json omp field", async () => {
+		const targetDir = path.join(tempDir.path(), "linked-manifest-package");
+		const srcDir = path.join(targetDir, "src");
+		fs.mkdirSync(srcDir, { recursive: true });
+		fs.writeFileSync(path.join(srcDir, "main.ts"), extensionCodeWithTool("linked-manifest"));
+		fs.writeFileSync(
+			path.join(targetDir, "package.json"),
+			JSON.stringify({
+				name: "linked-manifest-package",
+				omp: {
+					extensions: ["./src/main.ts"],
+				},
+			}),
+		);
+		createDirectorySymlink(targetDir, path.join(extensionsDir, "linked-manifest-package"));
+
+		const result = await discoverForTest();
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.extensions).toHaveLength(1);
+		expect(path.basename(result.extensions[0].path)).toBe("main.ts");
+		expect(result.extensions[0].tools.has("linked-manifest")).toBe(true);
 	});
 
 	it("prefers index.ts over index.js", async () => {
@@ -259,6 +301,25 @@ describe("extensions discovery", () => {
 		expect(result.errors).toHaveLength(0);
 		expect(result.extensions).toHaveLength(1);
 		expect(result.extensions[0].path).toContain("exists.ts");
+	});
+
+	it("does not fall back to index.ts when manifest entries are all missing", async () => {
+		const subdir = path.join(extensionsDir, "manifest-only-package");
+		fs.mkdirSync(subdir);
+		fs.writeFileSync(path.join(subdir, "index.ts"), extensionCodeWithTool("from-index"));
+		fs.writeFileSync(
+			path.join(subdir, "package.json"),
+			JSON.stringify({
+				omp: {
+					extensions: ["./missing.ts"],
+				},
+			}),
+		);
+
+		const result = await discoverForTest();
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.extensions).toHaveLength(0);
 	});
 
 	it("loads extensions and registers commands", async () => {
