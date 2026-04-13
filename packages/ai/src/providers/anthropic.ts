@@ -1935,6 +1935,12 @@ function buildParams(
 		params.system = systemBlocks;
 	}
 	disableThinkingIfToolChoiceForced(params);
+	// GitHub Copilot's Anthropic proxy rejects thinking and output_config with
+	// a misleading model_not_supported 400. Strip them before sending.
+	if (model.provider === "github-copilot") {
+		delete params.thinking;
+		delete params.output_config;
+	}
 	ensureMaxTokensForThinking(params, model);
 	applyPromptCaching(params, cacheControl);
 	enforceCacheControlLimit(params, 4);
