@@ -7,6 +7,7 @@ log() {
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_PACKAGE_JSON="$ROOT_DIR/package.json"
 DEFAULT_ENV_FILE="$ROOT_DIR/.env.local-registry"
 FALLBACK_ENV_FILE="$ROOT_DIR/.env"
 ENV_FILE=${LOCAL_REGISTRY_ENV_FILE:-}
@@ -226,6 +227,7 @@ patch_package_json() {
 	local pkg_name=${PACKAGE_NAME_BY_DIR[$pkg_dir]}
 	local pkg_version=${PACKAGE_NEW_VERSION[$pkg_name]}
 	local pkg_json="$ROOT_DIR/packages/$pkg_dir/package.json"
+	local root_package_json="$ROOT_PACKAGE_JSON"
 	local -a map_args=()
 	local name
 	for name in "${!PACKAGE_NEW_VERSION[@]}"; do
@@ -234,8 +236,13 @@ patch_package_json() {
 	backup_package_json "$pkg_json"
 	# shellcheck disable=SC2016
 	bun -e 'const args = process.argv.slice(1);
-const [pkgPath, newVersion, ...rest] = args;
+const [pkgPath, rootPackagePath, newVersion, ...rest] = args;
 const pkg = JSON.parse(await Bun.file(pkgPath).text());
+const rootPackage = JSON.parse(await Bun.file(rootPackagePath).text());
+const catalog = rootPackage.workspaces?.catalog;
+if (!catalog || typeof catalog !== "object") {
+	throw new Error(`Missing workspaces.catalog in ${rootPackagePath}`);
+}
 const map = new Map();
 for (let i = 0; i < rest.length; i += 2) {
 	map.set(rest[i], rest[i + 1]);
@@ -248,13 +255,19 @@ for (const section of ["dependencies", "devDependencies", "optionalDependencies"
 		const replacement = map.get(key);
 		if (replacement) {
 			deps[key] = replacement;
+		} else if (deps[key] === "catalog:") {
+			const catalogVersion = catalog[key];
+			if (typeof catalogVersion !== "string") {
+				throw new Error(`Missing catalog version for ${key} in ${rootPackagePath}`);
+			}
+			deps[key] = catalogVersion;
 		} else if (typeof deps[key] === "string" && deps[key].startsWith("workspace:")) {
 			deps[key] = deps[key].replace(/^workspace:/, "");
 		}
 	}
 }
 await Bun.write(pkgPath, `${JSON.stringify(pkg, null, "\t")}\n`);
-' "$pkg_json" "$pkg_version" "${map_args[@]}"
+' "$pkg_json" "$root_package_json" "$pkg_version" "${map_args[@]}"
 }
 
 create_user_token() {
