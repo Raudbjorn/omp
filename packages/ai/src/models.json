@@ -4701,6 +4701,27 @@
 			}
 		}
 	},
+	"devin": {
+		"devin": {
+			"id": "devin",
+			"name": "Devin",
+			"api": "devin-agent",
+			"provider": "devin",
+			"baseUrl": "https://api.devin.ai/v3",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 64000
+		}
+	},
 	"github-copilot": {
 		"claude-haiku-4.5": {
 			"id": "claude-haiku-4.5",
@@ -46118,6 +46139,46 @@
 				"minLevel": "minimal",
 				"maxLevel": "xhigh"
 			}
+		}
+	},
+	"warp": {
+		"claude-4.5-sonnet": {
+			"id": "claude-4.5-sonnet",
+			"name": "Claude Sonnet 4.5 (Warp)",
+			"api": "warp-agent",
+			"provider": "warp",
+			"baseUrl": "https://app.warp.dev/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 64000
+		},
+		"auto": {
+			"id": "auto",
+			"name": "Warp Auto",
+			"api": "warp-agent",
+			"provider": "warp",
+			"baseUrl": "https://app.warp.dev/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 64000
 		}
 	},
 	"xai": {

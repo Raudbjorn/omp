@@ -36,6 +36,7 @@ import { loginAnthropic } from "./utils/oauth/anthropic";
 import { loginCerebras } from "./utils/oauth/cerebras";
 import { loginCloudflareAiGateway } from "./utils/oauth/cloudflare-ai-gateway";
 import { loginCursor } from "./utils/oauth/cursor";
+import { loginDevin } from "./utils/oauth/devin";
 import { loginGitHubCopilot } from "./utils/oauth/github-copilot";
 import { loginGitLabDuo } from "./utils/oauth/gitlab-duo";
 import { loginAntigravity } from "./utils/oauth/google-antigravity";
@@ -65,6 +66,7 @@ import { loginUPB } from "./utils/oauth/upb";
 import { loginVenice } from "./utils/oauth/venice";
 import { loginVercelAiGateway } from "./utils/oauth/vercel-ai-gateway";
 import { loginVllm } from "./utils/oauth/vllm";
+import { loginWarp } from "./utils/oauth/warp";
 import { loginXiaomi } from "./utils/oauth/xiaomi";
 import { loginZai } from "./utils/oauth/zai";
 import { loginZenMux } from "./utils/oauth/zenmux";
@@ -957,6 +959,16 @@ export class AuthStorage {
 			}
 			case "tavily": {
 				const apiKey = await loginTavily(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "devin": {
+				const apiKey = await loginDevin(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "warp": {
+				const apiKey = await loginWarp(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
