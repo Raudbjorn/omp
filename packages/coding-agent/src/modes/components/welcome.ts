@@ -70,24 +70,24 @@ export class WelcomeComponent implements Component {
 		const leftCol = showRightColumn ? dualLeftCol : boxWidth - 2;
 		const rightCol = showRightColumn ? dualRightCol : 0;
 
-		// Block-based OMP logo (gradient: magenta → cyan)
+		// Block-based OMP bear logo (radial warm-honey → dark-bark gradient)
 		// biome-ignore format: preserve ASCII art layout
-		const piLogo = [
-			"     #▓░▓##       ",
-			"   #░░░░░░░▓#     ",
-			"  ##░░░░░░░▓░#    ",
-			"  #█▒██\ue22c ██▓█#    ",
-			"  #█ X ██ X █#    ",
-			"  #█░░█  ░░██#    ",
-			"░░  (██░███)  /░  ",
-			"░▒*._█ █  █  /░░/ ",
-			"    \\#// /       ",
-			"░░░▒** - - *░░░░\\ ",
-			"░░           ░▓  ",
+		const bearLogo = [
+			"  #▓░▓##▓░▓#  ",
+			" #░░░░░░░░░░# ",
+			"##░░░░░░░░░░##",
+			"#░██░░░░░░██░#",
+			"#░░░░██████░░#",
+			"##░░░██░░██░░#",
+			" ░░░░░░░░░░░░ ",
+			"  ░░░░░░░░░░  ",
+			"   ░░░░░░░░   ",
+			"    ░░░░░░    ",
+			"     ░░░░     ",
 		];
 
-		// Apply gradient to logo
-		const logoColored = this.#radialGradient(piLogo, 8, 4);
+		// Apply gradient to bear (warm honey center → dark bark edges)
+		const logoColored = this.#radialGradient(bearLogo, 7, 5);
 
 		// Left column - centered content
 		const leftLines = [
@@ -221,7 +221,7 @@ export class WelcomeComponent implements Component {
 		return padding(leftPad) + text + padding(rightPad);
 	}
 
-	/** Apply a radial gradient (cyan at center → magenta at edges) to the logo */
+	/** Apply a radial gradient (warm honey at center → dark bark at edges) to the bear logo */
 	#radialGradient(logo: string[], centerCol: number, centerRow: number): string[] {
 		const cx = centerCol - 1;
 		const cy = centerRow - 1;
@@ -237,12 +237,12 @@ export class WelcomeComponent implements Component {
 		}
 
 		const stops = [
-			[0, 255, 255],
-			[75, 200, 255],
-			[122, 122, 230],
-			[154, 90, 230],
-			[179, 45, 198],
-			[45, 20, 80],
+			[255, 210, 130],
+			[230, 165, 80],
+			[190, 115, 55],
+			[140, 75, 35],
+			[85, 45, 20],
+			[35, 18, 8],
 		];
 		const reset = "\x1b[0m";
 
@@ -250,13 +250,8 @@ export class WelcomeComponent implements Component {
 			let result = "";
 			for (let col = 0; col < line.length; col++) {
 				const char = line[col];
-				const isAfterCenter = col === cx + 1 && row === cy && char === " ";
-				if (char === " " && !isAfterCenter) {
+				if (char === " ") {
 					result += char;
-					continue;
-				}
-				if (isAfterCenter) {
-					result += `\x1b[48;2;40;112;140m ${reset}\x1b[49m`;
 					continue;
 				}
 				const dist = Math.sqrt((col - cx) ** 2 + (row - cy) ** 2);
@@ -267,10 +262,7 @@ export class WelcomeComponent implements Component {
 				const r = Math.round(stops[idx][0] + (stops[idx + 1][0] - stops[idx][0]) * frac);
 				const g = Math.round(stops[idx][1] + (stops[idx + 1][1] - stops[idx][1]) * frac);
 				const b = Math.round(stops[idx][2] + (stops[idx + 1][2] - stops[idx][2]) * frac);
-				const isCenter = col === cx && row === cy;
-				const bg = isCenter ? "\x1b[48;2;40;112;140m" : "";
-				const bgReset = isCenter ? "\x1b[49m" : "";
-				result += `${bg}\x1b[38;2;${r};${g};${b}m${char}${reset}${bgReset}`;
+				result += `\x1b[38;2;${r};${g};${b}m${char}${reset}`;
 			}
 			return result;
 		});
