@@ -29,7 +29,47 @@ import { kimiUsageProvider } from "./usage/kimi";
 import { codexRankingStrategy, openaiCodexUsageProvider } from "./usage/openai-codex";
 import { zaiUsageProvider } from "./usage/zai";
 import { getOAuthApiKey, getOAuthProvider, refreshOAuthToken } from "./utils/oauth";
+// Re-export login functions so consumers of AuthStorage.login() have access
+// (these are used inside the login() switch-case)
+import { loginAlibabaCodingPlan } from "./utils/oauth/alibaba-coding-plan";
+import { loginAnthropic } from "./utils/oauth/anthropic";
+import { loginCerebras } from "./utils/oauth/cerebras";
+import { loginCloudflareAiGateway } from "./utils/oauth/cloudflare-ai-gateway";
+import { loginCursor } from "./utils/oauth/cursor";
+import { loginDevin } from "./utils/oauth/devin";
+import { loginGitHubCopilot } from "./utils/oauth/github-copilot";
+import { loginGitLabDuo } from "./utils/oauth/gitlab-duo";
+import { loginAntigravity } from "./utils/oauth/google-antigravity";
+import { loginGeminiCli } from "./utils/oauth/google-gemini-cli";
+import { loginHuggingface } from "./utils/oauth/huggingface";
+import { loginKagi } from "./utils/oauth/kagi";
+import { loginKilo } from "./utils/oauth/kilo";
+import { loginKimi } from "./utils/oauth/kimi";
+import { loginLiteLLM } from "./utils/oauth/litellm";
+import { loginLmStudio } from "./utils/oauth/lm-studio";
+import { loginMiniMaxCode, loginMiniMaxCodeCn } from "./utils/oauth/minimax-code";
+import { loginMoonshot } from "./utils/oauth/moonshot";
+import { loginNanoGPT } from "./utils/oauth/nanogpt";
+import { loginNvidia } from "./utils/oauth/nvidia";
+import { loginOllama } from "./utils/oauth/ollama";
+import { loginOpenAICodex } from "./utils/oauth/openai-codex";
+import { loginOpenCode } from "./utils/oauth/opencode";
+import { loginParallel } from "./utils/oauth/parallel";
+import { loginPerplexity } from "./utils/oauth/perplexity";
+import { loginQianfan } from "./utils/oauth/qianfan";
+import { loginQwenPortal } from "./utils/oauth/qwen-portal";
+import { loginSynthetic } from "./utils/oauth/synthetic";
+import { loginTavily } from "./utils/oauth/tavily";
+import { loginTogether } from "./utils/oauth/together";
 import type { OAuthController, OAuthCredentials, OAuthProvider, OAuthProviderId } from "./utils/oauth/types";
+import { loginUPB } from "./utils/oauth/upb";
+import { loginVenice } from "./utils/oauth/venice";
+import { loginVercelAiGateway } from "./utils/oauth/vercel-ai-gateway";
+import { loginVllm } from "./utils/oauth/vllm";
+import { loginWarp } from "./utils/oauth/warp";
+import { loginXiaomi } from "./utils/oauth/xiaomi";
+import { loginZai } from "./utils/oauth/zai";
+import { loginZenMux } from "./utils/oauth/zenmux";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Credential Types
@@ -967,6 +1007,16 @@ export class AuthStorage {
 			case "tavily": {
 				const { loginTavily } = await import("./utils/oauth/tavily");
 				const apiKey = await loginTavily(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "devin": {
+				const apiKey = await loginDevin(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "warp": {
+				const apiKey = await loginWarp(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}

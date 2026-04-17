@@ -9,6 +9,118 @@ import type {
 	OAuthProviderInterface,
 } from "./types";
 
+/**
+ * OAuth credential management for AI providers.
+ *
+ * This module handles login, token refresh, and credential storage
+ * for OAuth-based providers:
+ * - Anthropic (Claude Pro/Max)
+ * - GitHub Copilot
+ * - Google Cloud Code Assist (Gemini CLI)
+ * - Antigravity (Gemini 3, Claude, GPT-OSS via Google Cloud)
+ * - Kimi Code
+ * - Kilo Gateway
+ * - Kagi
+ * - Cerebras
+ * - Hugging Face Inference
+ * - Synthetic
+ * - Perplexity (Pro/Max — desktop app extraction or manual cookie)
+ * - NVIDIA
+ * - NanoGPT
+ * - Venice
+ * - vLLM
+ * - ZenMux
+ * - Alibaba Coding Plan
+ */
+// Alibaba Coding Plan
+export { loginAlibabaCodingPlan } from "./alibaba-coding-plan";
+// Anthropic
+export { loginAnthropic, refreshAnthropicToken } from "./anthropic";
+// Cerebras (API key)
+export { loginCerebras } from "./cerebras";
+// Cloudflare AI Gateway (API key)
+export { loginCloudflareAiGateway } from "./cloudflare-ai-gateway";
+// Cursor
+export {
+	generateCursorAuthParams,
+	isCursorTokenExpiringSoon,
+	loginCursor,
+	pollCursorAuth,
+	refreshCursorToken,
+} from "./cursor";
+// Devin (API key)
+export { loginDevin } from "./devin";
+// GitHub Copilot
+export {
+	getGitHubCopilotBaseUrl,
+	loginGitHubCopilot,
+	normalizeDomain,
+	refreshGitHubCopilotToken,
+} from "./github-copilot";
+// GitLab Duo
+export { loginGitLabDuo, refreshGitLabDuoToken } from "./gitlab-duo";
+// Google Antigravity
+export { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
+// Google Gemini CLI
+export { loginGeminiCli, refreshGoogleCloudToken } from "./google-gemini-cli";
+// Hugging Face Inference (API key)
+export { loginHuggingface } from "./huggingface";
+// Kagi (API key)
+export { loginKagi } from "./kagi";
+// Kilo Gateway
+export { loginKilo } from "./kilo";
+// Kimi Code
+export { loginKimi, refreshKimiToken } from "./kimi";
+// LiteLLM (API key)
+export { loginLiteLLM } from "./litellm";
+// LM Studio (optional API key)
+export { DEFAULT_LOCAL_TOKEN, loginLmStudio } from "./lm-studio";
+// MiniMax Coding Plan (API key)
+export { loginMiniMaxCode, loginMiniMaxCodeCn } from "./minimax-code";
+// Moonshot (API key)
+export { loginMoonshot } from "./moonshot";
+// NanoGPT (API key)
+export { loginNanoGPT } from "./nanogpt";
+// NVIDIA (API key)
+export { loginNvidia } from "./nvidia";
+// Ollama (optional API key)
+export { loginOllama } from "./ollama";
+export type { OpenAICodexLoginOptions } from "./openai-codex";
+// OpenAI Codex (ChatGPT OAuth)
+export { loginOpenAICodex, refreshOpenAICodexToken } from "./openai-codex";
+// OpenCode Zen / OpenCode Go (API key)
+export { loginOpenCode } from "./opencode";
+// Parallel (API key)
+export { loginParallel } from "./parallel";
+// Perplexity
+export { loginPerplexity } from "./perplexity";
+// Qianfan (API key)
+export { loginQianfan } from "./qianfan";
+// Qwen Portal (OAuth token/API key)
+export { loginQwenPortal } from "./qwen-portal";
+// Synthetic (API key)
+export { loginSynthetic } from "./synthetic";
+// Tavily (API key)
+export { loginTavily } from "./tavily";
+// Together (API key)
+export { loginTogether } from "./together";
+export * from "./types";
+// Venice (API key)
+export { loginVenice } from "./venice";
+// Vercel AI Gateway (API key)
+export { loginVercelAiGateway } from "./vercel-ai-gateway";
+// vLLM (API key)
+export { loginVllm } from "./vllm";
+// Warp (API key)
+export { loginWarp } from "./warp";
+// Xiaomi MiMo (API key)
+export { loginXiaomi } from "./xiaomi";
+// Z.AI (API key)
+export { loginZai } from "./zai";
+// ZenMux (API key)
+export { loginZenMux } from "./zenmux";
+
+
 const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "anthropic",
@@ -73,6 +185,16 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "cursor",
 		name: "Cursor (Claude, GPT, etc.)",
+		available: true,
+	},
+	{
+		id: "devin",
+		name: "Devin",
+		available: true,
+	},
+	{
+		id: "warp",
+		name: "Warp Agent Platform",
 		available: true,
 	},
 	{
@@ -332,6 +454,8 @@ export async function refreshOAuthToken(
 		case "qwen-portal":
 		case "zenmux":
 		case "vllm":
+		case "devin":
+		case "warp":
 			// API keys / static bearer tokens don't expire, return as-is
 			newCredentials = credentials;
 			break;

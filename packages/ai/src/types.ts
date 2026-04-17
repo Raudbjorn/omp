@@ -20,6 +20,7 @@ import type {
 	WriteArgs,
 	WriteResult,
 } from "./providers/cursor/gen/agent_pb";
+import type { DevinOptions } from "./providers/devin";
 import type { GoogleOptions } from "./providers/google";
 import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
 import type { GoogleVertexOptions } from "./providers/google-vertex";
@@ -27,6 +28,7 @@ import type { OllamaChatOptions } from "./providers/ollama";
 import type { OpenAICodexResponsesOptions } from "./providers/openai-codex-responses";
 import type { OpenAICompletionsOptions } from "./providers/openai-completions";
 import type { OpenAIResponsesOptions } from "./providers/openai-responses";
+import type { WarpOptions } from "./providers/warp";
 import type { AssistantMessageEventStream } from "./utils/event-stream";
 
 export type { AssistantMessageEventStream } from "./utils/event-stream";
@@ -42,7 +44,9 @@ export type KnownApi =
 	| "google-gemini-cli"
 	| "google-vertex"
 	| "ollama-chat"
-	| "cursor-agent";
+	| "cursor-agent"
+	| "devin-agent"
+	| "warp-agent";
 export type Api = KnownApi | (string & {});
 export interface ApiOptionsMap {
 	"anthropic-messages": AnthropicOptions;
@@ -56,6 +60,8 @@ export interface ApiOptionsMap {
 	"google-vertex": GoogleVertexOptions;
 	"ollama-chat": OllamaChatOptions;
 	"cursor-agent": CursorOptions;
+	"devin-agent": DevinOptions;
+	"warp-agent": WarpOptions;
 }
 // Compile-time exhaustiveness check - this will fail if ApiOptionsMap doesn't have all KnownApi keys
 type _CheckExhaustive =
@@ -136,7 +142,9 @@ export type KnownProvider =
 	| "xiaomi"
 	| "zenmux"
 	| "upb"
-	| "lm-studio";
+	| "lm-studio"
+	| "devin"
+	| "warp";
 export type Provider = KnownProvider | string;
 
 import type { Effort } from "./model-thinking";
