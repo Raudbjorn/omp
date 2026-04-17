@@ -56,6 +56,8 @@ export {
 	pollCursorAuth,
 	refreshCursorToken,
 } from "./cursor";
+// Devin (API key)
+export { loginDevin } from "./devin";
 // GitHub Copilot
 export {
 	getGitHubCopilotBaseUrl,
@@ -117,6 +119,8 @@ export { loginVenice } from "./venice";
 export { loginVercelAiGateway } from "./vercel-ai-gateway";
 // vLLM (API key)
 export { loginVllm } from "./vllm";
+// Warp (API key)
+export { loginWarp } from "./warp";
 // Xiaomi MiMo (API key)
 export { loginXiaomi } from "./xiaomi";
 // Z.AI (API key)
@@ -183,6 +187,16 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "cursor",
 		name: "Cursor (Claude, GPT, etc.)",
+		available: true,
+	},
+	{
+		id: "devin",
+		name: "Devin",
+		available: true,
+	},
+	{
+		id: "warp",
+		name: "Warp Agent Platform",
 		available: true,
 	},
 	{
@@ -411,6 +425,8 @@ export async function refreshOAuthToken(
 		case "qwen-portal":
 		case "zenmux":
 		case "vllm":
+		case "devin":
+		case "warp":
 			// API keys / static bearer tokens don't expire, return as-is
 			newCredentials = credentials;
 			break;

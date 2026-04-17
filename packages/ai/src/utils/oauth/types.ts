@@ -14,6 +14,7 @@ export type OAuthProvider =
 	| "cerebras"
 	| "cloudflare-ai-gateway"
 	| "cursor"
+	| "devin"
 	| "github-copilot"
 	| "google-gemini-cli"
 	| "google-antigravity"
@@ -43,6 +44,7 @@ export type OAuthProvider =
 	| "venice"
 	| "vercel-ai-gateway"
 	| "vllm"
+	| "warp"
 	| "xiaomi"
 	| "zenmux"
 	| "zai";
