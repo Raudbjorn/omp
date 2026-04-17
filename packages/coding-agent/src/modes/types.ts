@@ -116,7 +116,7 @@ export interface InteractiveModeContext {
 	lastStatusSpacer: Spacer | undefined;
 	lastStatusText: Text | undefined;
 	fileSlashCommands: Set<string>;
-	skillCommands: Map<string, string>;
+	skillCommands: Map<string, { filePath: string; isNative: boolean }>;
 	oauthManualInput: OAuthManualInputManager;
 	todoPhases: TodoPhase[];
 

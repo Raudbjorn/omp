@@ -245,7 +245,8 @@ export class InputController {
 				const spaceIndex = text.indexOf(" ");
 				const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 				const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
-				const skillPath = this.ctx.skillCommands?.get(commandName);
+				const skillEntry = this.ctx.skillCommands?.get(commandName);
+				const skillPath = skillEntry?.filePath;
 				if (skillPath) {
 					this.ctx.editor.addToHistory(text);
 					this.ctx.editor.setText("");

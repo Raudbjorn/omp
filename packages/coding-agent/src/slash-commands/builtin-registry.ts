@@ -51,6 +51,7 @@ interface ParsedBuiltinSlashCommand {
 export interface BuiltinSlashCommandSpec extends BuiltinSlashCommand {
 	aliases?: string[];
 	allowArgs?: boolean;
+	allowBatch?: boolean;
 	/**
 	 * Handle the command. Return a string to pass remaining text through as prompt input.
 	 * Return void/undefined to consume the input entirely.
@@ -1016,6 +1017,10 @@ for (const command of BUILTIN_SLASH_COMMAND_REGISTRY) {
 	for (const alias of command.aliases ?? []) {
 		BUILTIN_SLASH_COMMAND_LOOKUP.set(alias, command);
 	}
+}
+
+export function isBuiltinSlashCommandName(name: string): boolean {
+	return BUILTIN_SLASH_COMMAND_LOOKUP.has(name);
 }
 
 /** Builtin command metadata used for slash-command autocomplete and help text. */

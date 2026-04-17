@@ -198,7 +198,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	lastStatusSpacer: Spacer | undefined = undefined;
 	lastStatusText: Text | undefined = undefined;
 	fileSlashCommands: Set<string> = new Set();
-	skillCommands: Map<string, string> = new Map();
+	skillCommands: Map<string, { filePath: string; isNative: boolean }> = new Map();
 	oauthManualInput: OAuthManualInputManager = new OAuthManualInputManager();
 
 	#baseSlashCommands: SlashCommand[] = [];

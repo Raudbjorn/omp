@@ -24,6 +24,7 @@ const COMPACTION_SUMMARY_TEMPLATE = compactionSummaryContextPrompt;
 const BRANCH_SUMMARY_TEMPLATE = branchSummaryContextPrompt;
 
 export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt";
+export const MULTI_BLOCK_TEXT_MESSAGE_TYPE = "multi-block-text";
 
 export interface SkillPromptDetails {
 	name: string;
