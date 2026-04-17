@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { UsageProvider } from "@oh-my-pi/pi-ai";
+import type { UsageProvider, UsageReport } from "@oh-my-pi/pi-ai";
 import * as oauth from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -15,18 +15,38 @@ describe("AuthStorage account rotation", () => {
 
 	const usageProvider: UsageProvider = {
 		id: "openai-codex",
-		async fetchUsage(params) {
+		async fetchUsage(params, _ctx): Promise<UsageReport> {
 			const accountId = params.credential.accountId ?? "unknown";
+			const now = Date.now();
 			return {
 				provider: "openai-codex",
-				fetchedAt: Date.now(),
+				fetchedAt: now,
 				limits: [
 					{
-						id: `requests-${accountId}`,
-						label: "Requests",
-						scope: { provider: "openai-codex", accountId },
+						id: "openai-codex:primary",
+						label: "1 Hour",
+						scope: { provider: "openai-codex", accountId, windowId: "1h" },
 						amount: { unit: "requests", used: usageExhausted ? 100 : 10, limit: 100 },
 						status: usageExhausted ? "exhausted" : "ok",
+						window: {
+							id: "1h",
+							label: "1 Hour",
+							durationMs: 60 * 60 * 1000,
+							resetsAt: now + 60 * 60 * 1000,
+						},
+					},
+					{
+						id: "openai-codex:secondary",
+						label: "7 Day",
+						scope: { provider: "openai-codex", accountId, windowId: "7d" },
+						amount: { unit: "requests", used: usageExhausted ? 100 : 10, limit: 100 },
+						status: usageExhausted ? "exhausted" : "ok",
+						window: {
+							id: "7d",
+							label: "7 Day",
+							durationMs: 7 * 24 * 60 * 60 * 1000,
+							resetsAt: now + 7 * 24 * 60 * 60 * 1000,
+						},
 					},
 				],
 			};
