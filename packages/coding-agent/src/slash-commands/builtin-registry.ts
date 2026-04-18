@@ -180,18 +180,16 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 					runtime.ctx.editor.setText("");
 					return;
 				}
-				runtime.ctx.editor.setText(
-					`Read the saved plan at ${target.path} and tell me how you would like to proceed.`,
-				);
+				const contents = await readPlanContents(target);
+				runtime.ctx.editor.setText(contents);
 				runtime.ctx.ui.requestRender();
 				return;
 			}
 
 			const fallback = resolvePlanArg(plans, raw);
 			if (fallback) {
-				runtime.ctx.editor.setText(
-					`Read the saved plan at ${fallback.path} and tell me how you would like to proceed.`,
-				);
+				const contents = await readPlanContents(fallback);
+				runtime.ctx.editor.setText(contents);
 				runtime.ctx.ui.requestRender();
 				return;
 			}
