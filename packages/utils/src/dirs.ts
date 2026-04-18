@@ -226,6 +226,11 @@ export function getReportsDir(): string {
 	return dirs.rootSubdir("reports", "state");
 }
 
+/** Get the saved plans directory (~/.omp/plans). */
+export function getPlansDir(): string {
+	return dirs.rootSubdir("plans", "data");
+}
+
 /** Get the logs directory (~/.omp/logs). */
 export function getLogsDir(): string {
 	return dirs.rootSubdir("logs", "state");
