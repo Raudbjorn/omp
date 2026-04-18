@@ -1,4 +1,9 @@
+import * as os from "node:os";
+import * as path from "node:path";
+
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
+import { getConfigDirName, getPlansDir } from "@oh-my-pi/pi-utils";
+import { invalidate as invalidateFsCache } from "../capability/fs";
 import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
 import { dangerPiBundledBuiltinSlashCommands } from "../danger-pi/slash-commands";
@@ -17,6 +22,13 @@ import {
 } from "../extensibility/plugins/marketplace";
 import type { InteractiveModeContext } from "../modes/types";
 import { parseMarketplaceInstallArgs, parsePluginScopeArgs } from "./marketplace-install-parser";
+import {
+	deletePlanFile,
+	formatPlansList,
+	loadPlans,
+	readPlanContents,
+	resolvePlanArg,
+} from "./plans";
 
 function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
@@ -123,6 +135,67 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 			"Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Esc cancels the current iteration; /loop again to disable.",
 		handle: async (_command, runtime) => {
 			await runtime.ctx.handleLoopCommand();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "plans",
+		description: `List and load saved plans from ${getPlansDir()}`,
+		subcommands: [
+			{ name: "load", description: "Load a saved plan into the editor", usage: "load <n|id>" },
+			{ name: "show", description: "Print a saved plan to the status area", usage: "show <n|id>" },
+			{ name: "delete", description: "Delete a saved plan file", usage: "delete <n|id>" },
+		],
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const raw = command.args.trim();
+			const plans = await loadPlans();
+			if (!raw) {
+				runtime.ctx.showStatus(formatPlansList(plans));
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			const spaceIdx = raw.search(/\s/);
+			const sub = (spaceIdx === -1 ? raw : raw.slice(0, spaceIdx)).toLowerCase();
+			const rest = spaceIdx === -1 ? "" : raw.slice(spaceIdx + 1).trim();
+
+			if (sub === "load" || sub === "show" || sub === "delete") {
+				const target = resolvePlanArg(plans, rest);
+				if (!target) {
+					runtime.ctx.showWarning(
+						`No plan matches "${rest}". Run /plans to see the list.`,
+					);
+					runtime.ctx.editor.setText("");
+					return;
+				}
+				if (sub === "delete") {
+					await deletePlanFile(target);
+					runtime.ctx.showStatus(`Deleted plan: ${target.title} (${target.id})`);
+					runtime.ctx.editor.setText("");
+					return;
+				}
+				if (sub === "show") {
+					const contents = await readPlanContents(target);
+					runtime.ctx.showStatus(contents, { dim: false });
+					runtime.ctx.editor.setText("");
+					return;
+				}
+				runtime.ctx.editor.setText(
+					`Read the saved plan at ${target.path} and tell me how you would like to proceed.`,
+				);
+				runtime.ctx.ui.requestRender();
+				return;
+			}
+
+			const fallback = resolvePlanArg(plans, raw);
+			if (fallback) {
+				runtime.ctx.editor.setText(
+					`Read the saved plan at ${fallback.path} and tell me how you would like to proceed.`,
+				);
+				runtime.ctx.ui.requestRender();
+				return;
+			}
+			runtime.ctx.showStatus("Usage: /plans [load|show|delete] <n|id>");
 			runtime.ctx.editor.setText("");
 		},
 	},

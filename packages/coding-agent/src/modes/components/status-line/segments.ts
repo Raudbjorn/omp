@@ -8,7 +8,10 @@ import { shortenPath } from "../../../tools/render-utils";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../../utils/session-color";
 import { sanitizeStatusText } from "../../shared";
 import { getContextUsageLevel, getContextUsageThemeColor } from "./context-thresholds";
+import { truncateWithEllipsis } from "./truncate";
 import type { RenderedSegment, SegmentContext, StatusLineSegment, StatusLineSegmentId } from "./types";
+
+export { truncateWithEllipsis } from "./truncate";
 
 export type { SegmentContext } from "./types";
 
@@ -111,12 +114,7 @@ const pathSegment: StatusLineSegment = {
 			pwd = shortenPath(pwd);
 		}
 
-		const maxLen = opts.maxLength ?? 40;
-		if (pwd.length > maxLen) {
-			const ellipsis = "…";
-			const sliceLen = Math.max(0, maxLen - ellipsis.length);
-			pwd = `${ellipsis}${pwd.slice(-sliceLen)}`;
-		}
+		pwd = truncateWithEllipsis(pwd, opts.maxLength ?? 40);
 
 		const content = withIcon(theme.icon.folder, pwd);
 		return { content: theme.fg("statusLinePath", content), visible: true };
