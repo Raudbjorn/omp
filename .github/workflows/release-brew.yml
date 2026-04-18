@@ -119,11 +119,22 @@ jobs:
           mkdir -p "$(dirname "$TAP_FORMULA_PATH")"
           cp "$GITHUB_WORKSPACE/rendered/omp.rb" "$TAP_FORMULA_PATH"
           git add "$TAP_FORMULA_PATH"
+          if git diff --staged --quiet; then
+            echo "Rendered formula matches tap — nothing to commit or push."
+            exit 0
+          fi
           git commit -m "omp ${VERSION}"
           git push -u origin "$branch" --force-with-lease
-          gh pr create \
-            --repo "$TAP_REPO" \
-            --title "omp ${VERSION}" \
-            --body "Automated formula bump for \`${REPO}\` release ${TAG}." \
-            --head "$branch" \
-            --base main
+          title="omp ${VERSION}"
+          body="Automated formula bump for \`${REPO}\` release ${TAG}."
+          existing=$(gh pr list --repo "$TAP_REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --repo "$TAP_REPO" --title "$title" --body "$body"
+          else
+            gh pr create \
+              --repo "$TAP_REPO" \
+              --title "$title" \
+              --body "$body" \
+              --head "$branch" \
+              --base main
+          fi
