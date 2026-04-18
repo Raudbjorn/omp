@@ -98,7 +98,11 @@ export function resolvePlanArg(plans: readonly PlanEntry[], arg: string): PlanEn
 }
 
 export async function deletePlanFile(plan: PlanEntry): Promise<void> {
-	await fs.unlink(plan.path);
+	try {
+		await fs.unlink(plan.path);
+	} catch (err) {
+		if (!isEnoent(err)) throw err;
+	}
 }
 
 export async function readPlanContents(plan: PlanEntry): Promise<string> {
