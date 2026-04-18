@@ -22,13 +22,7 @@ import {
 } from "../extensibility/plugins/marketplace";
 import type { InteractiveModeContext } from "../modes/types";
 import { parseMarketplaceInstallArgs, parsePluginScopeArgs } from "./marketplace-install-parser";
-import {
-	deletePlanFile,
-	formatPlansList,
-	loadPlans,
-	readPlanContents,
-	resolvePlanArg,
-} from "./plans";
+import { deletePlanFile, formatPlansList, loadPlans, readPlanContents, resolvePlanArg } from "./plans";
 
 function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
@@ -148,8 +142,20 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
+			const warn = (op: string, err: unknown): void => {
+				const message = err instanceof Error ? err.message : String(err);
+				runtime.ctx.showWarning(`Failed to ${op}: ${message}`);
+				runtime.ctx.editor.setText("");
+			};
+
 			const raw = command.args.trim();
-			const plans = await loadPlans();
+			let plans: Awaited<ReturnType<typeof loadPlans>>;
+			try {
+				plans = await loadPlans();
+			} catch (err) {
+				warn("list plans", err);
+				return;
+			}
 			if (!raw) {
 				runtime.ctx.showStatus(formatPlansList(plans));
 				runtime.ctx.editor.setText("");
@@ -162,25 +168,33 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 			if (sub === "load" || sub === "show" || sub === "delete") {
 				const target = resolvePlanArg(plans, rest);
 				if (!target) {
-					runtime.ctx.showWarning(
-						`No plan matches "${rest}". Run /plans to see the list.`,
-					);
+					runtime.ctx.showWarning(`No plan matches "${rest}". Run /plans to see the list.`);
 					runtime.ctx.editor.setText("");
 					return;
 				}
 				if (sub === "delete") {
-					await deletePlanFile(target);
+					try {
+						await deletePlanFile(target);
+					} catch (err) {
+						warn(`delete plan ${target.id}`, err);
+						return;
+					}
 					runtime.ctx.showStatus(`Deleted plan: ${target.title} (${target.id})`);
 					runtime.ctx.editor.setText("");
 					return;
 				}
+				let contents: string;
+				try {
+					contents = await readPlanContents(target);
+				} catch (err) {
+					warn(`read plan ${target.id}`, err);
+					return;
+				}
 				if (sub === "show") {
-					const contents = await readPlanContents(target);
 					runtime.ctx.showStatus(contents, { dim: false });
 					runtime.ctx.editor.setText("");
 					return;
 				}
-				const contents = await readPlanContents(target);
 				runtime.ctx.editor.setText(contents);
 				runtime.ctx.ui.requestRender();
 				return;
@@ -188,7 +202,13 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 
 			const fallback = resolvePlanArg(plans, raw);
 			if (fallback) {
-				const contents = await readPlanContents(fallback);
+				let contents: string;
+				try {
+					contents = await readPlanContents(fallback);
+				} catch (err) {
+					warn(`read plan ${fallback.id}`, err);
+					return;
+				}
 				runtime.ctx.editor.setText(contents);
 				runtime.ctx.ui.requestRender();
 				return;

@@ -21,7 +21,7 @@ philosophy, read [the upstream README](https://github.com/can1357/oh-my-pi/blob/
 
 ## Fork lineage
 
-```
+```text
 badlogic/pi-mono          (Mario Zechner — original)
         │
         ▼
@@ -49,9 +49,11 @@ can1357/oh-my-pi          (canonical upstream; CLI: pi)
 - `/screenshot` — desktop capture with backend auto-detection: macOS
   `screencapture`, Wayland `grim` (`slurp` for region select) and X11
   `scrot` (`feat(coding-agent): add /screenshot desktop capture command`).
-- `/plans` — list, load, show, and delete saved plan files from
-  `~/.omp/plans/`. `load` reads the plan markdown into the editor; `show`
-  prints it to the status area; `delete` is idempotent on `ENOENT`.
+- `/plans` — list, load, show, and delete saved plan files. The plans
+  directory resolves through XDG: `$XDG_DATA_HOME/omp/plans` when
+  `XDG_DATA_HOME` is set, else `~/.omp/plans`. `load` reads the plan
+  markdown into the editor; `show` prints it to the status area;
+  `delete` is idempotent on `ENOENT`.
 - Bundled session-title slash commands.
 
 ### Runtime and developer ergonomics
@@ -81,10 +83,8 @@ can1357/oh-my-pi          (canonical upstream; CLI: pi)
 - Status-line truncation extracted into a reusable helper with UTF-16-code-unit
   semantics explicitly documented.
 
-### In progress (branches, not yet on `main`)
+### Active branches (state may shift after merges)
 
-- `feature/fork-harvest-omnibus` — the bundle above plus the harvest
-  filter from the unintegrated-forks report; tracked as PR #1.
 - `acp-integration` — turns `omp` into an **ACP client** that spawns and
   drives another CLI (`claude`, `gemini`, `kiro`, `copilot`) over stdio
   JSON-RPC, in addition to its existing role as an ACP server for IDEs.
@@ -141,7 +141,7 @@ will become available.
 
 - User:    `~/.omp/agent/`  (unchanged from upstream)
 - Project: `.omp/`          (unchanged from upstream)
-- Plans:   `~/.omp/plans/`  (new, for `/plans`)
+- Plans:   `~/.omp/plans/`  (new, for `/plans` — XDG: `$XDG_DATA_HOME/omp/plans` when set)
 
 ## License
 
