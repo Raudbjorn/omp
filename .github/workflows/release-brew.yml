@@ -1,0 +1,110 @@
+name: Release Homebrew Formula
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v14.1.2)"
+        type: string
+        required: true
+      dry_run:
+        description: "Dry run — render formula without opening PR"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish-formula:
+    # Disabled until the Homebrew tap repo (Raudbjorn/homebrew-omp) and
+    # HOMEBREW_TAP_TOKEN secret are provisioned. Flip to remove the guard.
+    if: false
+    runs-on: ubuntu-22.04
+    env:
+      FORMULA_TEMPLATE: packaging/homebrew/omp.rb.tmpl
+      TAP_REPO: Raudbjorn/homebrew-omp
+      TAP_FORMULA_PATH: Formula/omp.rb
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.release.tag_name }}" ]; then
+            tag="${{ github.event.release.tag_name }}"
+          else
+            tag="${{ inputs.tag }}"
+          fi
+          version="${tag#v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release_url_base=https://github.com/${{ github.repository }}/releases/download/$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Download release binaries for hashing
+        run: |
+          mkdir -p dist
+          base="https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}"
+          for asset in omp-darwin-arm64 omp-darwin-x64 omp-linux-arm64 omp-linux-x64; do
+            echo "Fetching $asset"
+            curl -fL --retry 3 -o "dist/$asset" "$base/$asset"
+          done
+
+      - name: Compute SHA256 sums
+        id: sums
+        run: |
+          cd dist
+          {
+            for asset in omp-darwin-arm64 omp-darwin-x64 omp-linux-arm64 omp-linux-x64; do
+              sha=$(sha256sum "$asset" | cut -d' ' -f1)
+              key=$(echo "$asset" | tr '[:lower:]-' '[:upper:]_')
+              echo "${key}=${sha}" >> "$GITHUB_OUTPUT"
+            done
+          }
+
+      - name: Render formula
+        id: render
+        run: |
+          mkdir -p rendered
+          sed \
+            -e "s|{{VERSION}}|${{ steps.tag.outputs.version }}|g" \
+            -e "s|{{RELEASE_URL_BASE}}|${{ steps.tag.outputs.release_url_base }}|g" \
+            -e "s|{{SHA_DARWIN_ARM64}}|${{ steps.sums.outputs.OMP_DARWIN_ARM64 }}|g" \
+            -e "s|{{SHA_DARWIN_X64}}|${{ steps.sums.outputs.OMP_DARWIN_X64 }}|g" \
+            -e "s|{{SHA_LINUX_ARM64}}|${{ steps.sums.outputs.OMP_LINUX_ARM64 }}|g" \
+            -e "s|{{SHA_LINUX_X64}}|${{ steps.sums.outputs.OMP_LINUX_X64 }}|g" \
+            "$FORMULA_TEMPLATE" > rendered/omp.rb
+          cat rendered/omp.rb
+
+      - name: Upload rendered formula artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: omp-formula-${{ steps.tag.outputs.tag }}
+          path: rendered/omp.rb
+
+      - name: Open PR against tap repo
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          tmp=$(mktemp -d)
+          cd "$tmp"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git" tap
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="omp/${{ steps.tag.outputs.tag }}"
+          git checkout -B "$branch"
+          mkdir -p "$(dirname "$TAP_FORMULA_PATH")"
+          cp "$GITHUB_WORKSPACE/rendered/omp.rb" "$TAP_FORMULA_PATH"
+          git add "$TAP_FORMULA_PATH"
+          git commit -m "omp ${{ steps.tag.outputs.version }}"
+          git push -u origin "$branch" --force-with-lease
+          gh pr create \
+            --repo "$TAP_REPO" \
+            --title "omp ${{ steps.tag.outputs.version }}" \
+            --body "Automated formula bump for \`${{ github.repository }}\` release ${{ steps.tag.outputs.tag }}." \
+            --head "$branch" \
+            --base main

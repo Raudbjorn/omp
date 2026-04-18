@@ -32,6 +32,9 @@ export type * from "./symbols";
 export * from "./terminal";
 // Terminal image support
 export * from "./terminal-capabilities";
+// Theme registry for semantic color tokens
+export * from "./theme/presets/omp-default";
+export * from "./theme/registry";
 // TTY ID
 export * from "./ttyid";
 export * from "./tui";
