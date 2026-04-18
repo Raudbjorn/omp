@@ -1,0 +1,116 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: "Upstream repo (owner/name)"
+        type: string
+        default: "can1357/oh-my-pi"
+      upstream_branch:
+        description: "Upstream branch to track"
+        type: string
+        default: "main"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-22.04
+    env:
+      UPSTREAM_REPO: ${{ inputs.upstream_repo || 'can1357/oh-my-pi' }}
+      UPSTREAM_BRANCH: ${{ inputs.upstream_branch || 'main' }}
+      SYNC_BRANCH: chore/sync-upstream
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+      - name: Check for new upstream commits
+        id: delta
+        run: |
+          ahead=$(git rev-list --count "HEAD..upstream/${UPSTREAM_BRANCH}")
+          echo "ahead=$ahead" >> "$GITHUB_OUTPUT"
+          if [ "$ahead" = "0" ]; then
+            echo "Upstream has no new commits."
+          else
+            echo "Upstream is ahead by $ahead commit(s)."
+          fi
+
+      - name: Prepare sync branch
+        if: steps.delta.outputs.ahead != '0'
+        id: merge
+        run: |
+          git checkout -B "${SYNC_BRANCH}"
+          set +e
+          git merge --no-ff --no-edit "upstream/${UPSTREAM_BRANCH}"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "conflicts=true" >> "$GITHUB_OUTPUT"
+            # Stage conflict markers so the PR surfaces them for manual review.
+            git add -A
+            git commit -m "chore(sync): upstream merge with conflicts (manual resolution required)" || true
+          else
+            echo "conflicts=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Summarize delta
+        if: steps.delta.outputs.ahead != '0'
+        id: summary
+        run: |
+          {
+            echo "body<<EOF"
+            echo "Automated weekly sync from \`${UPSTREAM_REPO}@${UPSTREAM_BRANCH}\`."
+            echo
+            echo "Commits pulled: **${{ steps.delta.outputs.ahead }}**"
+            echo
+            if [ "${{ steps.merge.outputs.conflicts }}" = "true" ]; then
+              echo "**Conflicts detected** — resolve locally before merging:"
+              echo
+              echo '```'
+              git diff --name-only --diff-filter=U || true
+              echo '```'
+            else
+              echo "Merge completed cleanly."
+            fi
+            echo
+            echo "### Incoming commits"
+            echo '```'
+            git log --oneline "HEAD~${{ steps.delta.outputs.ahead }}..HEAD" | head -n 50
+            echo '```'
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create or update PR
+        if: steps.delta.outputs.ahead != '0'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: ${{ env.SYNC_BRANCH }}
+          base: main
+          title: "chore: sync with ${{ env.UPSTREAM_REPO }} (+${{ steps.delta.outputs.ahead }})"
+          body: ${{ steps.summary.outputs.body }}
+          labels: |
+            upstream-sync
+            ${{ steps.merge.outputs.conflicts == 'true' && 'needs-conflict-resolution' || 'automerge-candidate' }}
+          delete-branch: false
