@@ -32,21 +32,28 @@ jobs:
 
       - name: Resolve release tag
         id: tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REPO: ${{ github.repository }}
         run: |
-          if [ -n "${{ github.event.release.tag_name }}" ]; then
-            tag="${{ github.event.release.tag_name }}"
+          if [ -n "$RELEASE_TAG" ]; then
+            tag="$RELEASE_TAG"
           else
-            tag="${{ inputs.tag }}"
+            tag="$INPUT_TAG"
           fi
           version="${tag#v}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "release_url_base=https://github.com/${{ github.repository }}/releases/download/$tag" >> "$GITHUB_OUTPUT"
+          echo "release_url_base=https://github.com/${REPO}/releases/download/$tag" >> "$GITHUB_OUTPUT"
 
       - name: Download release binaries for hashing
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           mkdir -p dist
-          base="https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}"
+          base="https://github.com/${REPO}/releases/download/${TAG}"
           for asset in omp-darwin-arm64 omp-darwin-x64 omp-linux-arm64 omp-linux-x64; do
             echo "Fetching $asset"
             curl -fL --retry 3 -o "dist/$asset" "$base/$asset"
@@ -66,15 +73,22 @@ jobs:
 
       - name: Render formula
         id: render
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          RELEASE_URL_BASE: ${{ steps.tag.outputs.release_url_base }}
+          SHA_DARWIN_ARM64: ${{ steps.sums.outputs.OMP_DARWIN_ARM64 }}
+          SHA_DARWIN_X64: ${{ steps.sums.outputs.OMP_DARWIN_X64 }}
+          SHA_LINUX_ARM64: ${{ steps.sums.outputs.OMP_LINUX_ARM64 }}
+          SHA_LINUX_X64: ${{ steps.sums.outputs.OMP_LINUX_X64 }}
         run: |
           mkdir -p rendered
           sed \
-            -e "s|{{VERSION}}|${{ steps.tag.outputs.version }}|g" \
-            -e "s|{{RELEASE_URL_BASE}}|${{ steps.tag.outputs.release_url_base }}|g" \
-            -e "s|{{SHA_DARWIN_ARM64}}|${{ steps.sums.outputs.OMP_DARWIN_ARM64 }}|g" \
-            -e "s|{{SHA_DARWIN_X64}}|${{ steps.sums.outputs.OMP_DARWIN_X64 }}|g" \
-            -e "s|{{SHA_LINUX_ARM64}}|${{ steps.sums.outputs.OMP_LINUX_ARM64 }}|g" \
-            -e "s|{{SHA_LINUX_X64}}|${{ steps.sums.outputs.OMP_LINUX_X64 }}|g" \
+            -e "s|{{VERSION}}|${VERSION}|g" \
+            -e "s|{{RELEASE_URL_BASE}}|${RELEASE_URL_BASE}|g" \
+            -e "s|{{SHA_DARWIN_ARM64}}|${SHA_DARWIN_ARM64}|g" \
+            -e "s|{{SHA_DARWIN_X64}}|${SHA_DARWIN_X64}|g" \
+            -e "s|{{SHA_LINUX_ARM64}}|${SHA_LINUX_ARM64}|g" \
+            -e "s|{{SHA_LINUX_X64}}|${SHA_LINUX_X64}|g" \
             "$FORMULA_TEMPLATE" > rendered/omp.rb
           cat rendered/omp.rb
 
@@ -85,9 +99,14 @@ jobs:
           path: rendered/omp.rb
 
       - name: Open PR against tap repo
-        if: ${{ !inputs.dry_run }}
+        # `inputs.*` is null on `release` events and truthy-null equals true,
+        # so require an explicit workflow_dispatch + dry_run=false opt-in.
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'false'
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
           tmp=$(mktemp -d)
           cd "$tmp"
@@ -95,16 +114,16 @@ jobs:
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          branch="omp/${{ steps.tag.outputs.tag }}"
+          branch="omp/${TAG}"
           git checkout -B "$branch"
           mkdir -p "$(dirname "$TAP_FORMULA_PATH")"
           cp "$GITHUB_WORKSPACE/rendered/omp.rb" "$TAP_FORMULA_PATH"
           git add "$TAP_FORMULA_PATH"
-          git commit -m "omp ${{ steps.tag.outputs.version }}"
+          git commit -m "omp ${VERSION}"
           git push -u origin "$branch" --force-with-lease
           gh pr create \
             --repo "$TAP_REPO" \
-            --title "omp ${{ steps.tag.outputs.version }}" \
-            --body "Automated formula bump for \`${{ github.repository }}\` release ${{ steps.tag.outputs.tag }}." \
+            --title "omp ${VERSION}" \
+            --body "Automated formula bump for \`${REPO}\` release ${TAG}." \
             --head "$branch" \
             --base main

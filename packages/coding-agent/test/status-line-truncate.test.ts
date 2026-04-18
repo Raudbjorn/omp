@@ -26,6 +26,12 @@ describe("truncateWithEllipsis", () => {
 		expect(truncateWithEllipsis("anything", -5)).toBe("");
 	});
 
+	it("caps output at maxLen when smaller than ellipsis", () => {
+		const result = truncateWithEllipsis("abcdef", 1);
+		expect(result.length).toBeLessThanOrEqual(1);
+		expect(result).toBe("…");
+	});
+
 	it("preserves the original head-truncation behavior from the path segment", () => {
 		// Mirrors the original inline implementation byte-for-byte.
 		const pwd = "projects/really/deep/nested/structure/that/exceeds/40/chars";
