@@ -160,14 +160,16 @@ Behavior:
 
 Call sites that must switch to that higher-level resolver:
 - `AgentSession.prompt(...)`
-- `modes/controllers/multi-block-runner.ts`
+- `modes/controllers/multi-block-runner.ts` (with the locked final-renderable-block-only rule for prompt-chain commands)
 
 The execution contract for a prompt-chain command must be explicit:
 1. Parse the command arguments with the same helper used today for slash commands (`parseCommandArgs(argsString)`).
 2. Store the original `stepTemplates` plus the parsed `args` on a chain object. Do **not** render all steps up front.
 3. Start the chain immediately by dispatching step index `0` through the prompt-chain runtime.
 4. Keep the remaining step templates queued.
-5. After each later `agent_end`, dispatch exactly one more queued step from the head chain.
+5. After each later completed turn (`turn_end` in the session runtime), dispatch exactly one more queued step from the head chain.
+
+There is one locked exception for multi-block submissions. The current multi-block architecture only turns the final renderable block into agent-visible prompt content; earlier text blocks are transcript-only custom messages. Because of that, prompt-chain commands in multi-block submissions are supported only when they are the final renderable block. If a prompt-chain command appears before later renderable blocks, the command runner must show an error and stop processing that submission instead of guessing at reordered semantics.
 
 That immediate first-step kickoff is required. Without it, `/foo` executed from an idle session would only enqueue the chain and nothing would happen until some unrelated later turn ended.
 
@@ -247,7 +249,7 @@ Alternative considered: create a separate command registry for chain files. Reje
 ### 4. Introduce a dedicated prompt-chain runtime with just-in-time rendering
 
 Implementation should add a fork-owned prompt-chain runtime. The runtime only needs two capabilities from the surrounding system:
-- subscribe to `agent_end`
+- subscribe to the event fired after a completed turn (`turn_end` in `AgentSession`)
 - submit prompt text
 
 The session-backed adapter should use:
@@ -415,7 +417,7 @@ Alternative considered: add a dedicated persisted warning section to session con
 
 1. Introduce the fork-owned schema, parser, duplicate resolver, prompt-chain runtime, and warning renderer for `.cmd.yaml` command files.
 2. Hook the native command discovery provider to call the new directory loader for each command directory while preserving its `LoadResult<SlashCommand>` output shape.
-3. Expand `FileSlashCommand` into explicit template vs prompt-chain variants and replace the string-only file-command execution path with a higher-level resolver used by both `AgentSession.prompt(...)` and multi-block execution.
+3. Expand `FileSlashCommand` into explicit template vs prompt-chain variants and replace the string-only file-command execution path with a higher-level resolver used by both `AgentSession.prompt(...)` and multi-block execution, where multi-block prompt-chain support is limited to final renderable blocks.
 4. Extend slash-command loading to carry warnings alongside materialized commands.
 5. Update `InteractiveMode.refreshSlashCommandState()` to emit one combined warning block per load cycle.
 6. Add focused tests covering valid `.cmd.yaml` loading, schema validation failures, same-directory duplicate handling, warning grouping, file-command execution, and startup/reload emission.

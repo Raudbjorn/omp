@@ -1,9 +1,14 @@
-import { expandSlashCommand, type FileSlashCommand } from "../../extensibility/slash-commands";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
+import {
+	executeFileSlashCommand,
+	type FileSlashCommand,
+	isPromptChainFileSlashCommand,
+} from "../../extensibility/slash-commands";
 import { executeBuiltinSlashCommand, isBuiltinSlashCommandName } from "../../slash-commands/builtin-registry";
 import type { InteractiveModeContext } from "../types";
 import { classifyMultiBlockCommand, parseSlashCommandName } from "./multi-block/command-policy";
 import { getLastHandledBlockKind, hasFutureHandledBlock } from "./multi-block/turn-contributors";
-import { type SubmissionLineIntentEntry, splitSubmissionIntoBlocks } from "./submission-blocks";
+import { type SubmissionBlock, type SubmissionLineIntentEntry, splitSubmissionIntoBlocks } from "./submission-blocks";
 
 type SkillCommandHandler = (
 	text: string,
@@ -24,6 +29,7 @@ type TextBlockDispatcher = (text: string, options: { suppressTurn: boolean }) =>
 interface ExecuteCommandBlockOptions {
 	ctx: InteractiveModeContext;
 	fileCommands: FileSlashCommand[];
+	images?: readonly ImageContent[];
 	suppressTurn: boolean;
 	handleSkillCommand: SkillCommandHandler;
 	handleBackgroundCommand: () => void;
@@ -35,6 +41,7 @@ export type MultiBlockProcessingResult =
 			processed: true;
 			success: boolean;
 			remainingText: string | null;
+			startedTurnDirectly: boolean;
 			continueFromContext: boolean;
 			fallbackPromptText: string | null;
 	  };
@@ -42,6 +49,7 @@ export type MultiBlockProcessingResult =
 export interface MultiBlockRunnerOptions {
 	ctx: InteractiveModeContext;
 	text: string;
+	images?: readonly ImageContent[];
 	lineIntents?: SubmissionLineIntentEntry[];
 	handleSkillCommand: SkillCommandHandler;
 	handleBackgroundCommand: () => void;
@@ -75,6 +83,7 @@ export async function runMultiBlockSubmission(options: MultiBlockRunnerOptions):
 			processed: true,
 			success: false,
 			remainingText: null,
+			startedTurnDirectly: false,
 			continueFromContext: false,
 			fallbackPromptText: null,
 		};
@@ -96,7 +105,23 @@ export async function runMultiBlockSubmission(options: MultiBlockRunnerOptions):
 		fileCommands,
 		hasSkillCommand: (commandName: string) => Boolean(ctx.skillCommands?.has(commandName)),
 	};
+	const invalidPromptChainCommand = findInvalidPromptChainCommand(blocks, commandPolicyOptions);
+	if (invalidPromptChainCommand) {
+		ctx.showError(
+			`Prompt-chain command "/${invalidPromptChainCommand}" must be the final renderable block in a multi-block submission.`,
+		);
+		ctx.editor.setText(editorSnapshot);
+		return {
+			processed: true,
+			success: false,
+			remainingText: null,
+			startedTurnDirectly: false,
+			continueFromContext: false,
+			fallbackPromptText: null,
+		};
+	}
 	let remainingText: string | null = null;
+	let startedTurnDirectly = false;
 	let hasPromptableContent = false;
 	let hasTurnStarter = false;
 	let fallbackPromptText: string | null = null;
@@ -104,9 +129,14 @@ export async function runMultiBlockSubmission(options: MultiBlockRunnerOptions):
 	for (let i = 0; i < blocks.length; i += 1) {
 		const block = blocks[i];
 		if (block.type === "command") {
+			const policy = classifyMultiBlockCommand(block.text, commandPolicyOptions);
+			if (isFinalRenderablePromptChainCommand(policy, blocks, i, commandPolicyOptions)) {
+				ctx.flushPendingBashComponents();
+			}
 			const result = await executeCommandBlock(block.text, {
 				ctx,
 				fileCommands,
+				images: options.images,
 				suppressTurn: true,
 				handleSkillCommand: options.handleSkillCommand,
 				handleBackgroundCommand: options.handleBackgroundCommand,
@@ -117,9 +147,13 @@ export async function runMultiBlockSubmission(options: MultiBlockRunnerOptions):
 					processed: true,
 					success: false,
 					remainingText: null,
+					startedTurnDirectly: false,
 					continueFromContext: false,
 					fallbackPromptText: null,
 				};
+			}
+			if (policy.kind === "file" && isPromptChainFileSlashCommand(policy.fileCommand)) {
+				startedTurnDirectly = true;
 			}
 			const appended = result.appendedText?.trim();
 			if (result.contributesPromptContent) {
@@ -154,6 +188,7 @@ export async function runMultiBlockSubmission(options: MultiBlockRunnerOptions):
 					processed: true,
 					success: false,
 					remainingText: null,
+					startedTurnDirectly: false,
 					continueFromContext: false,
 					fallbackPromptText: null,
 				};
@@ -175,6 +210,7 @@ export async function runMultiBlockSubmission(options: MultiBlockRunnerOptions):
 					processed: true,
 					success: false,
 					remainingText: null,
+					startedTurnDirectly: false,
 					continueFromContext: false,
 					fallbackPromptText: null,
 				};
@@ -198,9 +234,54 @@ export async function runMultiBlockSubmission(options: MultiBlockRunnerOptions):
 
 	const finalRenderableBlockKind = getLastHandledBlockKind(blocks, commandPolicyOptions);
 	const continueFromContext =
-		remainingText === null && finalRenderableBlockKind === "command" && (hasPromptableContent || hasTurnStarter);
+		remainingText === null &&
+		!startedTurnDirectly &&
+		finalRenderableBlockKind === "command" &&
+		(hasPromptableContent || hasTurnStarter);
 
-	return { processed: true, success: true, remainingText, continueFromContext, fallbackPromptText };
+	return {
+		processed: true,
+		success: true,
+		remainingText,
+		startedTurnDirectly,
+		continueFromContext,
+		fallbackPromptText,
+	};
+}
+
+function findInvalidPromptChainCommand(
+	blocks: SubmissionLineIntentEntry[] extends never ? never : ReturnType<typeof splitSubmissionIntoBlocks>["blocks"],
+	options: Parameters<typeof hasFutureHandledBlock>[2],
+): string | null {
+	for (let i = 0; i < blocks.length; i += 1) {
+		const block = blocks[i];
+		if (block?.type !== "command") {
+			continue;
+		}
+		const policy = classifyMultiBlockCommand(block.text, options);
+		if (
+			policy.kind === "file" &&
+			isPromptChainFileSlashCommand(policy.fileCommand) &&
+			hasFutureHandledBlock(blocks, i, options)
+		) {
+			return policy.commandName;
+		}
+	}
+
+	return null;
+}
+
+function isFinalRenderablePromptChainCommand(
+	policy: ReturnType<typeof classifyMultiBlockCommand>,
+	blocks: SubmissionBlock[],
+	blockIndex: number,
+	options: Parameters<typeof hasFutureHandledBlock>[2],
+): boolean {
+	return (
+		policy.kind === "file" &&
+		isPromptChainFileSlashCommand(policy.fileCommand) &&
+		!hasFutureHandledBlock(blocks, blockIndex, options)
+	);
 }
 
 function isRecognizedSlashCommand(ctx: InteractiveModeContext, candidate: string): boolean {
@@ -298,13 +379,22 @@ async function executeCommandBlock(
 			startsTurn: hasPromptContent,
 		};
 	}
-	const expanded = await expandSlashCommand(commandText, options.fileCommands, {
+	const fileResult = await executeFileSlashCommand(commandText, options.fileCommands, {
 		cwd: options.ctx.sessionManager.getCwd(),
+		images: options.images,
+		promptChainExecutor: options.ctx.session.promptChainExecutor,
 	});
+	if (fileResult.kind === "handled") {
+		return {
+			success: true,
+			contributesPromptContent: false,
+			startsTurn: true,
+		};
+	}
 	return {
 		success: true,
-		appendedText: expanded,
-		contributesPromptContent: expanded.trim().length > 0,
-		startsTurn: expanded.trim().length > 0,
+		appendedText: fileResult.text,
+		contributesPromptContent: fileResult.text.trim().length > 0,
+		startsTurn: fileResult.text.trim().length > 0,
 	};
 }

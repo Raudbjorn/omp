@@ -22,6 +22,7 @@ This fork adds the following feature areas on top of upstream:
 
 ### Runtime and session behavior
 - Native `.omp` live reload for commands and skills
+- Native `.cmd.yaml` prompt-chain command files in `.omp/commands` and `~/.omp/agent/commands`: `foo.cmd.yaml` registers `/foo`, same-directory `.md` siblings win on name collisions, and invalid YAML/schema files surface as non-fatal interactive warning blocks during startup and reload
 - `/reload` support for refreshing runtime state
 - Fork-local bundled `/title` extension for manually setting the current session title from interactive mode
 - Codex OAuth account stickiness per session / top-level agent
