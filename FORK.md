@@ -32,6 +32,7 @@ This fork adds the following feature areas on top of upstream:
 - Native shell interpolation in rendered command and skill bodies
 
 ### Supporting platform and tooling changes
+- Pre-commit blocks staged `CHANGELOG.md` files with `This is a fork. We do not modify CHANGELOG.md`
 - Better extension discovery, including symlinked package dirs
 - Package name derivation fixes for discovered extensions
 - Session token tracking and related session-link fixes
