@@ -254,6 +254,7 @@ export class InputController {
 
 			const multiBlockResult = await runMultiBlockSubmission({
 				ctx: this.ctx,
+				images: inputImages,
 				text,
 				lineIntents: metadata?.lineIntents,
 				handleSkillCommand: (commandText, options) => this.#handleSkillCommand(commandText, options),
@@ -269,6 +270,12 @@ export class InputController {
 					return;
 				}
 				const hasInputImages = Boolean(inputImages && inputImages.length > 0);
+				if (multiBlockResult.startedTurnDirectly) {
+					this.#maybeGenerateSessionTitle(multiBlockResult.fallbackPromptText ?? text);
+					this.ctx.editor.setText("");
+					this.ctx.pendingImages = [];
+					return;
+				}
 				if (multiBlockResult.continueFromContext && !hasInputImages) {
 					this.ctx.flushPendingBashComponents();
 					this.#maybeGenerateSessionTitle(multiBlockResult.fallbackPromptText ?? text);

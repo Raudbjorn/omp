@@ -3,10 +3,15 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { reset as resetCapabilities } from "../src/capability";
-import { expandSlashCommand, type FileSlashCommand, loadSlashCommands } from "../src/extensibility/slash-commands";
+import {
+	expandSlashCommand,
+	loadSlashCommands,
+	type TemplateFileSlashCommand,
+} from "../src/extensibility/slash-commands";
 
-function createCommand(overrides: Partial<FileSlashCommand> = {}): FileSlashCommand {
+function createCommand(overrides: Partial<TemplateFileSlashCommand> = {}): TemplateFileSlashCommand {
 	return {
+		kind: "template",
 		name: "demo",
 		description: "Demo command",
 		content: "",

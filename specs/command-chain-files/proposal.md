@@ -10,7 +10,7 @@ Slash commands currently come only from Markdown prompt files, even though the f
   - `description: string`
   - `steps: string[]`
 - Validate `.cmd.yaml` files at load time using the repository's existing TypeBox + Ajv direction.
-- Materialize valid `.cmd.yaml` files into registered slash commands by routing them through a prompt-chain runtime in the shared file-command execution path.
+- Materialize valid `.cmd.yaml` files into registered slash commands by routing them through a prompt-chain runtime in the shared file-command execution path. In multi-block submissions, prompt-chain commands are supported only when they are the final renderable block; earlier prompt-chain blocks are a non-fatal user error.
 - Treat malformed `.cmd.yaml` files and same-directory duplicate command names as non-fatal load problems.
 - Surface command-file load problems to the user as combined chat warnings at startup and on every slash-command reload cycle.
 - Keep `.md` files authoritative over `.cmd.yaml` when both define the same command name in the same directory.
