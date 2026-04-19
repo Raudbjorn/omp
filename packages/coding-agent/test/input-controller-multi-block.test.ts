@@ -40,6 +40,7 @@ function createTestContext() {
 	const showWarning = vi.fn();
 	const showStatus = vi.fn();
 	const setForcedToolChoiceMock = vi.fn();
+	const promptChainExecuteMock = vi.fn(async () => {});
 	const promptMock = vi.fn(async () => {});
 	const continueFromContextMock = vi.fn(async () => {});
 	const promptCustomMessageMock = vi.fn(async () => {});
@@ -48,6 +49,7 @@ function createTestContext() {
 	const handleBashCommandMock = vi.fn(async () => {});
 	const handleBtwCommandMock = vi.fn(async () => {});
 	const handlePythonCommandMock = vi.fn(async () => {});
+	const flushPendingBashComponentsMock = vi.fn();
 	const rebuildChatFromMessagesMock = vi.fn();
 	const slashCommands: FileSlashCommand[] = [];
 	const startPendingSubmission = vi.fn(
@@ -81,6 +83,7 @@ function createTestContext() {
 			promptCustomMessage: promptCustomMessageMock,
 			sendCustomMessage: sendCustomMessageMock,
 			setForcedToolChoice: setForcedToolChoiceMock,
+			promptChainExecutor: { execute: promptChainExecuteMock },
 			setSlashCommands: vi.fn((commands: FileSlashCommand[]) => {
 				slashCommands.splice(0, slashCommands.length, ...commands);
 			}),
@@ -129,7 +132,7 @@ function createTestContext() {
 		reloadTodos: vi.fn(async () => {}),
 		updatePendingMessagesDisplay: vi.fn(),
 		updateEditorBorderColor: vi.fn(),
-		flushPendingBashComponents: vi.fn(),
+		flushPendingBashComponents: flushPendingBashComponentsMock,
 		queueCompactionMessage: vi.fn(),
 		handleBashCommand: handleBashCommandMock,
 		handleBtwCommand: handleBtwCommandMock,
@@ -155,13 +158,16 @@ function createTestContext() {
 		showError,
 		showWarning,
 		showStatus,
+		promptChainExecuteMock,
 		promptMock,
 		promptCustomMessageMock,
 		continueFromContextMock,
 		setForcedToolChoiceMock,
 		planMock,
 		sendCustomMessageMock,
+		handleBashCommandMock,
 		handleBtwCommandMock,
+		flushPendingBashComponentsMock,
 		rebuildChatFromMessagesMock,
 	};
 }
@@ -458,6 +464,7 @@ describe("InputController multi-block submissions", () => {
 		const { ctx, editor, sendCustomMessageMock } = createTestContext();
 		ctx.session.setSlashCommands([
 			{
+				kind: "template",
 				name: "test-multi.block",
 				description: "",
 				content: "Generated block",
@@ -485,6 +492,110 @@ describe("InputController multi-block submissions", () => {
 			started: false,
 		});
 		expect(editor.history).toEqual(["Generated block", "Next text"]);
+	});
+
+	it("flushes earlier bash shortcut output before starting a final prompt-chain command", async () => {
+		const { ctx, editor, flushPendingBashComponentsMock, promptChainExecuteMock, handleBashCommandMock } =
+			createTestContext();
+		const onInput = vi.fn();
+		ctx.onInputCallback = onInput;
+		ctx.pendingImages = [{ type: "image", data: "diagram", mimeType: "image/png" }] as never;
+		handleBashCommandMock.mockImplementationOnce(async () => {
+			ctx.pendingBashComponents.push({} as never);
+		});
+		ctx.session.setSlashCommands([
+			{
+				kind: "prompt-chain",
+				name: "review-chain",
+				description: "",
+				stepTemplates: ["First", "Second"],
+				source: "test",
+			},
+		]);
+		ctx.fileSlashCommands = new Set(["review-chain"]);
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+
+		const submission = "!ls\n\n/review-chain parser";
+		editor.setText(submission);
+		await ctx.editor.onSubmit?.(submission);
+
+		expect(handleBashCommandMock).toHaveBeenCalledWith("ls", false);
+		expect(promptChainExecuteMock).toHaveBeenCalledWith("review-chain", ["First", "Second"], "parser", {
+			images: [{ type: "image", data: "diagram", mimeType: "image/png" }],
+			streamingBehavior: undefined,
+		});
+		expect(flushPendingBashComponentsMock).toHaveBeenCalledTimes(1);
+		expect(flushPendingBashComponentsMock.mock.invocationCallOrder[0]).toBeLessThan(
+			promptChainExecuteMock.mock.invocationCallOrder[0]!,
+		);
+		expect(onInput).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("");
+		expect(ctx.pendingImages).toEqual([]);
+	});
+
+	it("rejects prompt-chain commands before later multi-block content", async () => {
+		const { ctx, editor, promptChainExecuteMock, sendCustomMessageMock, showError } = createTestContext();
+		const onInput = vi.fn();
+		ctx.onInputCallback = onInput;
+		ctx.session.setSlashCommands([
+			{
+				kind: "prompt-chain",
+				name: "review-chain",
+				description: "",
+				stepTemplates: ["First", "Second"],
+				source: "test",
+			},
+		]);
+		ctx.fileSlashCommands = new Set(["review-chain"]);
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+
+		const submission = "/review-chain parser\n\nFollow-up text";
+		editor.setText(submission);
+		await ctx.editor.onSubmit?.(submission);
+
+		expect(promptChainExecuteMock).not.toHaveBeenCalled();
+		expect(sendCustomMessageMock).not.toHaveBeenCalled();
+		expect(showError).toHaveBeenCalledWith(
+			'Prompt-chain command "/review-chain" must be the final renderable block in a multi-block submission.',
+		);
+		expect(onInput).not.toHaveBeenCalled();
+		expect(editor.history).toEqual([]);
+		expect(editor.getText()).toBe(submission);
+	});
+
+	it("rejects prompt-chain commands before later multi-block content without running earlier handled blocks", async () => {
+		const { ctx, editor, handleBtwCommandMock, promptChainExecuteMock, sendCustomMessageMock, showError } =
+			createTestContext();
+		const onInput = vi.fn();
+		ctx.onInputCallback = onInput;
+		ctx.session.setSlashCommands([
+			{
+				kind: "prompt-chain",
+				name: "review-chain",
+				description: "",
+				stepTemplates: ["First", "Second"],
+				source: "test",
+			},
+		]);
+		ctx.fileSlashCommands = new Set(["review-chain"]);
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+
+		const submission = "/btw side question\n\n/review-chain parser\n\nTail";
+		editor.setText(submission);
+		await ctx.editor.onSubmit?.(submission);
+
+		expect(handleBtwCommandMock).not.toHaveBeenCalled();
+		expect(promptChainExecuteMock).not.toHaveBeenCalled();
+		expect(sendCustomMessageMock).not.toHaveBeenCalled();
+		expect(showError).toHaveBeenCalledWith(
+			'Prompt-chain command "/review-chain" must be the final renderable block in a multi-block submission.',
+		);
+		expect(onInput).not.toHaveBeenCalled();
+		expect(editor.history).toEqual([]);
+		expect(editor.getText()).toBe(submission);
 	});
 
 	it("executes mixed shortcut and text blocks in author order", async () => {
