@@ -32,13 +32,13 @@ import {
 	qwenPortalModelManagerOptions,
 	syntheticModelManagerOptions,
 	togetherModelManagerOptions,
+	upbModelManagerOptions,
 	veniceModelManagerOptions,
 	vercelAiGatewayModelManagerOptions,
 	vllmModelManagerOptions,
 	xaiModelManagerOptions,
 	xiaomiModelManagerOptions,
 	zenmuxModelManagerOptions,
-	upbModelManagerOptions,
 } from "./openai-compat";
 import { cursorModelManagerOptions, zaiModelManagerOptions } from "./special";
 
