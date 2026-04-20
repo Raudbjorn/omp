@@ -4,8 +4,8 @@
  */
 import {
 	Container,
-	Markdown,
 	isKeyRelease,
+	Markdown,
 	matchesKey,
 	padding,
 	renderInlineMarkdown,
