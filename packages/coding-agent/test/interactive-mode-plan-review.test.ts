@@ -96,4 +96,44 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(mode.chatContainer.children.at(-2)).toBe(marker);
 		expect(firstPreview!.render(120).join("\n")).toContain("Second plan");
 	});
+
+	it("queues Approved in the current session when that review option is selected", async () => {
+		const planFilePath = "local://PLAN.md";
+		const finalPlanFilePath = "local://CURRENT_SESSION_PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		const resolvedFinalPath = resolveLocalUrlToPath(finalPlanFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Current session plan\n\nship it");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		const submissionSpy = vi.fn();
+		mode.onInputCallback = submissionSpy;
+		vi.spyOn(mode, "showHookSelector").mockImplementation(async (_title, options) => {
+			expect(options).toContain("Approve and execute (current session)");
+			return "Approve and execute (current session)";
+		});
+
+		await mode.handleExitPlanModeTool({
+			planFilePath,
+			planExists: true,
+			title: "CURRENT_SESSION_PLAN",
+			finalPlanFilePath,
+		});
+
+		expect(mode.planModeEnabled).toBe(false);
+		expect(submissionSpy).toHaveBeenCalledTimes(1);
+		expect(submissionSpy.mock.calls[0]?.[0]).toMatchObject({
+			text: "Approved",
+			cancelled: false,
+			started: false,
+		});
+		expect(await Bun.file(resolvedPlanPath).exists()).toBe(false);
+		expect(await Bun.file(resolvedFinalPath).text()).toContain("Current session plan");
+	});
 });

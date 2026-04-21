@@ -987,14 +987,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		planContent: string,
 		options: { planFilePath: string; finalPlanFilePath: string },
 	): Promise<void> {
-		await renameApprovedPlanFile({
-			planFilePath: options.planFilePath,
-			finalPlanFilePath: options.finalPlanFilePath,
-			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-			getSessionId: () => this.sessionManager.getSessionId(),
-		});
-		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
-		await this.#exitPlanMode({ silent: true, paused: false });
+		const previousTools = await this.#finalizeApprovedPlan(options);
 		await this.handleClearCommand();
 		// The new session has a fresh local:// root — persist the approved plan there
 		// so `local://<title>.md` resolves correctly in the execution session.
@@ -1013,6 +1006,34 @@ export class InteractiveMode implements InteractiveModeContext {
 			finalPlanFilePath: options.finalPlanFilePath,
 		});
 		await this.session.prompt(planModePrompt, { synthetic: true });
+	}
+
+	async #finalizeApprovedPlan(options: { planFilePath: string; finalPlanFilePath: string }): Promise<string[]> {
+		await renameApprovedPlanFile({
+			planFilePath: options.planFilePath,
+			finalPlanFilePath: options.finalPlanFilePath,
+			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+			getSessionId: () => this.sessionManager.getSessionId(),
+		});
+		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
+		await this.#exitPlanMode({ silent: true, paused: false });
+		return previousTools;
+	}
+
+	async #approvePlanInCurrentSession(options: { planFilePath: string; finalPlanFilePath: string }): Promise<void> {
+		const previousTools = await this.#finalizeApprovedPlan(options);
+		if (previousTools.length > 0) {
+			await this.session.setActiveToolsByName(previousTools);
+		}
+		this.#submitPlanReviewInput("Approved");
+	}
+
+	#submitPlanReviewInput(text: string): void {
+		if (this.onInputCallback) {
+			this.onInputCallback(this.startPendingSubmission({ text }));
+			return;
+		}
+		this.editor.setText(text);
 	}
 
 	async handlePlanModeCommand(initialPrompt?: string): Promise<void> {
@@ -1054,14 +1075,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#renderPlanPreview(planContent);
 		const choice = await this.showHookSelector(
 			"Plan mode - next step",
-			["Approve and execute", "Refine plan", "Stay in plan mode"],
+			["Approve and execute", "Approve and execute (current session)", "Refine plan", "Stay in plan mode"],
 			{
 				helpText: this.#getPlanReviewHelpText(),
 				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
 			},
 		);
 
-		if (choice === "Approve and execute") {
+		if (choice === "Approve and execute" || choice === "Approve and execute (current session)") {
 			const finalPlanFilePath = details.finalPlanFilePath || planFilePath;
 			try {
 				const latestPlanContent = await this.#readPlanFile(planFilePath);
@@ -1069,7 +1090,11 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.showError(`Plan file not found at ${planFilePath}`);
 					return;
 				}
-				await this.#approvePlan(latestPlanContent, { planFilePath, finalPlanFilePath });
+				if (choice === "Approve and execute") {
+					await this.#approvePlan(latestPlanContent, { planFilePath, finalPlanFilePath });
+				} else {
+					await this.#approvePlanInCurrentSession({ planFilePath, finalPlanFilePath });
+				}
 			} catch (error) {
 				this.showError(
 					`Failed to finalize approved plan: ${error instanceof Error ? error.message : String(error)}`,
@@ -1080,11 +1105,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (choice === "Refine plan") {
 			const refinement = (await this.showHookInput("What should be refined?"))?.trim();
 			if (refinement) {
-				if (this.onInputCallback) {
-					this.onInputCallback(this.startPendingSubmission({ text: refinement }));
-				} else {
-					this.editor.setText(refinement);
-				}
+				this.#submitPlanReviewInput(refinement);
 			}
 		}
 	}
