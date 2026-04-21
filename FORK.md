@@ -20,6 +20,7 @@ This fork adds the following feature areas on top of upstream:
 - Streaming multi-block queue ordering so prompt text and command results stay in authored order
 - Execute-intent paste for explicit executable clipboard input
 - Plan review approval option to exit plan mode and submit `Approved` into the current session without starting a fresh execution session
+- Fork-local `fork-factorizer` daemon at `.agents/daemons/fork-factorizer/DAEMON.md` that advises on isolating fork-specific logic behind extension points/hooks during code changes to reduce upstream merge conflicts
 
 ### Runtime and session behavior
 - Native `.omp` live reload for commands and skills
