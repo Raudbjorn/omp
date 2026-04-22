@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `script` tool for programmatic multi-tool orchestration: write Python that calls registered tools as functions, with subprocess isolation, timeout control, and support for dynamically loaded MCP tools via the `tools` proxy (integrated from [beeemT/oh-my-pi](https://github.com/beeemT/oh-my-pi))
+
 ### Fixed
 
 - Fixed `local://` URL path leak on Linux where `//` collapsing to `/` produced `local:/path` forms that bypassed the internal protocol handler and leaked as filesystem paths, breaking plan mode file resolution
@@ -1377,7 +1381,6 @@
 ## [13.9.3] - 2026-03-07
 
 ### Breaking Changes
-
 - Changed `ThinkingLevel` type to be imported from `@oh-my-pi/pi-agent-core` instead of `@oh-my-pi/pi-ai`
 - Changed thinking level representation from string literals to `Effort` enum values (e.g., `Effort.High` instead of `"high"`)
 - Changed `getThinkingLevel()` return type to `ThinkingLevel | undefined` to support models without thinking support
@@ -1385,7 +1388,6 @@
 - Changed `thinkingLevel` in session context to be optional (`ThinkingLevel | undefined`) instead of always present
 
 ### Added
-
 - Added `thinking.ts` module with `getThinkingLevelMetadata()` and `resolveThinkingLevelForModel()` utilities for thinking level handling
 - Added `ThinkingConfig` support to model definitions for specifying supported thinking effort levels per model
 - Added `enrichModelThinking()` function to apply thinking configuration to models during registry initialization
@@ -1418,9 +1420,9 @@
 - Changed session context to include `serviceTier` field for tracking active service tier across session branches
 - Changed `compact()` function to accept `remoteInstructions` option for custom remote compaction prompts
 - Changed model registry to apply hardcoded policies (gpt-5.4 context window) consistently across all model loading paths
+- Changed tool prompt to document Python syntax and idioms
 
 ### Fixed
-
 - Fixed OpenAI remote compaction to correctly append incremental responses instead of replacing entire history
 - Fixed thinking level display logic in main.ts to correctly check for undefined instead of "off"
 - Fixed model registry to preserve explicit thinking configuration on runtime-registered models

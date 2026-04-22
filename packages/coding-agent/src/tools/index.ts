@@ -51,6 +51,7 @@ import { RenderMermaidTool } from "./render-mermaid";
 import { createReportToolIssueTool, isAutoQaEnabled } from "./report-tool-issue";
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
+import { ScriptTool } from "./script";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { loadSshTool } from "./ssh";
 import { SubmitResultTool } from "./submit-result";
@@ -89,6 +90,7 @@ export * from "./render-mermaid";
 export * from "./report-tool-issue";
 export * from "./resolve";
 export * from "./review";
+export * from "./script";
 export * from "./search-tool-bm25";
 export * from "./ssh";
 export * from "./submit-result";
@@ -202,6 +204,16 @@ export interface ToolSession {
 
 	/** Queue a hidden message to be injected at the next agent turn. */
 	queueDeferredMessage?(message: CustomMessage): void;
+
+	/**
+	 * Returns the currently active AgentTool instances for this session.
+	 *
+	 * Lazy getter rather than a static list: tools may be added dynamically
+	 * (e.g. MCP servers activated by a future tool_search tool) after the
+	 * ToolSession is constructed. ScriptTool reads this at execution time so
+	 * that the script bridge always reflects the live tool registry.
+	 */
+	getTools?: () => import("@oh-my-pi/pi-agent-core").AgentTool<any>[];
 }
 
 type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
@@ -242,6 +254,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	web_search: s => new SearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
+	script: ScriptTool.create,
 };
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
@@ -404,6 +417,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "calc") return session.settings.get("calc.enabled");
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
+		if (name === "script") return session.settings.get("script.enabled");
 		if (name === "task") {
 			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 2;
 			const currentDepth = session.taskDepth ?? 0;
