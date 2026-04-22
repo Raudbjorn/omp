@@ -55,7 +55,7 @@ async function checkForNewVersion(_currentVersion: string): Promise<string | und
 		return;
 	}
 	try {
-		const installDir = path.join(os.homedir(), ".local", "share", "ompm");
+		const installDir = path.join(os.homedir(), ".local", "share", "omp");
 		// Resolve current commit SHA from the local .git directory
 		const headContent = (await fs.readFile(path.join(installDir, ".git", "HEAD"), "utf8").catch(() => "")).trim();
 		let currentSha = "";

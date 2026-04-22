@@ -484,7 +484,7 @@ export class UiHelpers {
 				theme.bold(theme.fg("warning", "Update Available")) +
 					"\n" +
 					theme.fg("muted", `New commits available (${newVersion}). Run: `) +
-					theme.fg("accent", "ompm update"),
+					theme.fg("accent", "omp update"),
 				1,
 				0,
 			),
