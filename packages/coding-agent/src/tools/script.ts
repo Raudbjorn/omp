@@ -11,6 +11,8 @@
  * See script-bridge.ts for the bridge server and script-worker.txt for the
  * subprocess entry point.
  */
+import { createHash } from "node:crypto";
+import { unlinkSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -91,13 +93,30 @@ function buildSafeEnv(
 // worker source as text at build time and write it to tmpdir lazily on first
 // use. Subsequent executions reuse the same path (content is immutable).
 
-const WORKER_FILE_PATH = path.join(os.tmpdir(), `omp-script-worker-${crypto.randomUUID()}.py`);
+// Deterministic filename from worker-source content hash so concurrent OMP
+// processes share one file and restarts reuse it (content is immutable).
+const WORKER_FILE_HASH = createHash("sha256").update(workerSource).digest("hex").slice(0, 16);
+const WORKER_FILE_PATH = path.join(os.tmpdir(), `omp-script-worker-${WORKER_FILE_HASH}.py`);
 let workerReady: Promise<void> | null = null;
+let exitHandlerRegistered = false;
 
 function ensureWorkerFile(): Promise<void> {
 	if (!workerReady) {
 		workerReady = Bun.write(WORKER_FILE_PATH, workerSource)
-			.then(() => undefined)
+			.then(() => {
+				if (!exitHandlerRegistered) {
+					exitHandlerRegistered = true;
+					// Best-effort unlink on process exit. Concurrent OMP instances may race,
+					// but the file contains only workerSource — no secrets to leak.
+					process.once("exit", () => {
+						try {
+							unlinkSync(WORKER_FILE_PATH);
+						} catch {
+							// another instance may have already cleaned it up
+						}
+					});
+				}
+			})
 			.catch(err => {
 				workerReady = null; // allow retry on next call
 				throw err as Error;
