@@ -219,10 +219,10 @@ export function stream<TApi extends Api>(
 	const providerOptions = { ...options, apiKey };
 
 	// Apply proxy base URL override for deepseek
-	if ((model as any).provider === "deepseek") {
+	if (model.provider === "deepseek") {
 		const proxyBaseUrl = $env.DEEPSEEK_BASE_URL;
 		if (proxyBaseUrl) {
-			model = { ...model, baseUrl: proxyBaseUrl } as typeof model;
+			model = { ...model, baseUrl: proxyBaseUrl };
 		}
 	}
 

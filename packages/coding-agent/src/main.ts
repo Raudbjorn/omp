@@ -18,6 +18,7 @@ import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { runListModelsCommand } from "./cli/list-models";
 import { selectSession } from "./cli/session-picker";
+import { readSourceHome } from "./cli/update-cli";
 import { findConfigFile } from "./config";
 import { ModelRegistry, ModelsConfigFile } from "./config/model-registry";
 import { resolveCliModel, resolveModelRoleValue, resolveModelScope, type ScopedModel } from "./config/model-resolver";
@@ -54,8 +55,11 @@ async function checkForNewVersion(_currentVersion: string): Promise<string | und
 	if (!settings.get("startup.checkUpdate")) {
 		return;
 	}
+	// Only runs for source installs — for bun-global / binary installs, the
+	// `omp update` command performs its own semver-based check when invoked.
+	const installDir = readSourceHome();
+	if (!installDir) return undefined;
 	try {
-		const installDir = path.join(os.homedir(), ".local", "share", "omp");
 		// Resolve current commit SHA from the local .git directory
 		const headContent = (await fs.readFile(path.join(installDir, ".git", "HEAD"), "utf8").catch(() => "")).trim();
 		let currentSha = "";
