@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""
+Script worker — runs inside an isolated raw Python subprocess.
+
+Receives:
+  OMP_BRIDGE_PORT   — port of the parent's ToolBridgeServer
+  OMP_SCRIPT_FILE   — path to the .py file containing the model-authored code
+  OMP_BRIDGE_SECRET — bearer token for bridge auth
+
+Exposes to the script:
+  • Named functions for tool names that are valid Python identifiers
+  • tools proxy — dynamic attribute access for any tool name
+  • list_tools() — returns [{name, description}] from the live bridge registry
+
+Output:
+  stdout — print() output followed by repr(result) if global `result` is set
+  stderr — uncaught errors; non-zero exit signals failure to the parent
+"""
+
+from __future__ import annotations
+
+import builtins
+import json
+import keyword
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from typing import Any, Callable
+
+BRIDGE_PORT = int(os.environ.get("OMP_BRIDGE_PORT", "0"))
+SCRIPT_FILE = os.environ.get("OMP_SCRIPT_FILE", "")
+BRIDGE_SECRET = os.environ.get("OMP_BRIDGE_SECRET", "")
+
+if not BRIDGE_PORT or not SCRIPT_FILE or not BRIDGE_SECRET:
+    sys.stderr.write("omp-script-worker: missing OMP_BRIDGE_PORT, OMP_SCRIPT_FILE, or OMP_BRIDGE_SECRET\n")
+    raise SystemExit(1)
+
+BRIDGE_BASE = f"http://127.0.0.1:{BRIDGE_PORT}"
+
+
+def _bridge_request(path: str, body: Any | None = None) -> Any:
+    headers = {"X-Bridge-Token": BRIDGE_SECRET}
+    data = None
+    method = "GET"
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(body).encode("utf-8")
+        method = "POST"
+
+    request = urllib.request.Request(f"{BRIDGE_BASE}{path}", data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request) as response:
+            payload = response.read().decode("utf-8")
+            return json.loads(payload)
+    except urllib.error.HTTPError as err:
+        payload = err.read().decode("utf-8", errors="replace")
+        try:
+            data_obj = json.loads(payload)
+        except json.JSONDecodeError as decode_err:
+            raise RuntimeError(f"Tool bridge request failed with HTTP {err.code}: {payload}") from decode_err
+        message = data_obj.get("error") or data_obj.get("content") or f"HTTP {err.code}"
+        raise RuntimeError(str(message)) from err
+    except urllib.error.URLError as err:
+        raise RuntimeError(f"Script bridge unreachable ({err.reason})") from err
+
+
+def call_bridge(name: str, args: Any | None = None) -> str:
+    data = _bridge_request(f"/tool/{urllib.parse.quote(name, safe='')}", args or {})
+    if data.get("isError"):
+        raise RuntimeError(data.get("content") or f"Tool '{name}' returned an error")
+    return str(data.get("content", ""))
+
+
+def list_tools() -> list[dict[str, str]]:
+    data = _bridge_request("/tools")
+    if not isinstance(data, list):
+        raise RuntimeError("Invalid tool manifest from bridge")
+    return data
+
+
+class ToolsProxy:
+    def __getattr__(self, name: str) -> Callable[[Any | None], str]:
+        return lambda args=None: call_bridge(name, args)
+
+
+TOOLS = ToolsProxy()
+INJECTED_NAMES = {"tools", "list_tools", "result"}
+
+
+def _is_python_identifier(name: str) -> bool:
+    return name.isidentifier() and not keyword.iskeyword(name) and name not in INJECTED_NAMES
+
+
+def main() -> None:
+    manifest = list_tools()
+    namespace: dict[str, Any] = {
+        "__builtins__": builtins,
+        "tools": TOOLS,
+        "list_tools": list_tools,
+        "result": None,
+    }
+    emitted_output = False
+
+    def append_result_text(text: str) -> None:
+        nonlocal emitted_output
+        if not text:
+            return
+        if emitted_output and not text.startswith("\n"):
+            sys.stdout.write("\n")
+        sys.stdout.write(text)
+        emitted_output = True
+
+    for item in manifest:
+        name = item.get("name") if isinstance(item, dict) else None
+        if not isinstance(name, str) or not _is_python_identifier(name) or name in namespace:
+            continue
+        namespace[name] = (lambda tool_name: (lambda args=None: call_bridge(tool_name, args)))(name)
+
+    with open(SCRIPT_FILE, "r", encoding="utf-8") as handle:
+        code = handle.read()
+
+    exec(compile(code, SCRIPT_FILE, "exec"), namespace, namespace)
+
+    result = namespace.get("result")
+    if result is not None:
+        append_result_text(str(result))
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as err:
+        sys.stderr.write(str(err))
+        raise SystemExit(1) from err

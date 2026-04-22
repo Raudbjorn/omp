@@ -45,6 +45,7 @@ import { RenderMermaidTool } from "./render-mermaid";
 import { createReportToolIssueTool, isAutoQaEnabled } from "./report-tool-issue";
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
+import { ScriptTool } from "./script";
 import { SearchTool } from "./search";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { loadSshTool } from "./ssh";
@@ -87,6 +88,7 @@ export * from "./render-mermaid";
 export * from "./report-tool-issue";
 export * from "./resolve";
 export * from "./review";
+export * from "./script";
 export * from "./search";
 export * from "./search-tool-bm25";
 export * from "./ssh";
@@ -207,6 +209,16 @@ export interface ToolSession {
 
 	/** Queue a hidden message to be injected at the next agent turn. */
 	queueDeferredMessage?(message: CustomMessage): void;
+
+	/**
+	 * Returns the currently active AgentTool instances for this session.
+	 *
+	 * Lazy getter rather than a static list: tools may be added dynamically
+	 * (e.g. MCP servers activated by a future tool_search tool) after the
+	 * ToolSession is constructed. ScriptTool reads this at execution time so
+	 * that the script bridge always reflects the live tool registry.
+	 */
+	getTools?: () => import("@oh-my-pi/pi-agent-core").AgentTool<any>[];
 }
 
 type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
@@ -243,6 +255,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	retain: HindsightRetainTool.createIf,
 	recall: HindsightRecallTool.createIf,
 	reflect: HindsightReflectTool.createIf,
+	script: ScriptTool.create,
 };
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
@@ -385,6 +398,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "retain" || name === "recall" || name === "reflect") {
 			return session.settings.get("memory.backend") === "hindsight";
 		}
+		if (name === "script") return session.settings.get("script.enabled");
 		if (name === "task") {
 			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 2;
 			const currentDepth = session.taskDepth ?? 0;

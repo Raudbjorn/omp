@@ -1644,6 +1644,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		});
 
 		cursorEventEmitter = event => agent.emitExternalEvent(event);
+		// ScriptTool reads this at execution time so the bridge always reflects the
+		// live tool registry (including dynamically added MCP tools).
+		toolSession.getTools = () => agent.state.tools;
 
 		// Restore messages if session has existing data
 		if (hasExistingSession) {
