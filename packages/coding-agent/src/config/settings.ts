@@ -106,6 +106,7 @@ export class Settings {
 	#configPath: string | null;
 	#cwd: string;
 	#agentDir: string;
+	#projectConfigPath: string | null;
 	#storage: AgentStorage | null = null;
 
 	/** Global settings from config.yml */
@@ -119,9 +120,11 @@ export class Settings {
 
 	/** Paths modified during this session (for partial save) */
 	#modified = new Set<string>();
+	#projectModified = new Set<string>();
 
 	/** Pending save (debounced) */
 	#saveTimer?: NodeJS.Timeout;
+	#projectSaveTimer?: NodeJS.Timeout;
 	#savePromise?: Promise<void>;
 
 	/** Whether to persist changes */
@@ -131,6 +134,7 @@ export class Settings {
 		this.#cwd = path.normalize(options.cwd ?? getProjectDir());
 		this.#agentDir = path.normalize(options.agentDir ?? getAgentDir());
 		this.#configPath = options.inMemory ? null : path.join(this.#agentDir, "config.yml");
+		this.#projectConfigPath = options.inMemory ? null : path.join(this.#cwd, ".omp", "settings.json");
 		this.#persist = !options.inMemory;
 
 		if (options.overrides) {
@@ -207,6 +211,28 @@ export class Settings {
 	}
 
 	/**
+	 * Read a setting from project layer only (not merged).
+	 * Used by UI to distinguish project-scoped values from global.
+	 */
+	getProject<P extends SettingPath>(path: P): SettingValue<P> | undefined {
+		const segments = path.split(".");
+		const value = getByPath(this.#project, segments);
+		return value as SettingValue<P> | undefined;
+	}
+
+	/**
+	 * Set a project-scoped setting.
+	 * Writes to <cwd>/.omp/settings.json (not the global config.yml).
+	 */
+	setProject<P extends SettingPath>(path: P, value: SettingValue<P>): void {
+		const segments = path.split(".");
+		setByPath(this.#project, segments, value);
+		this.#projectModified.add(path);
+		this.#rebuildMerged();
+		this.#queueProjectSave();
+	}
+
+	/**
 	 * Set a setting value (sync).
 	 * Updates global settings and queues a background save.
 	 * Triggers hooks for settings that have side effects.
@@ -264,6 +290,13 @@ export class Settings {
 		}
 		if (this.#modified.size > 0) {
 			await this.#saveNow();
+		}
+		if (this.#projectSaveTimer) {
+			clearTimeout(this.#projectSaveTimer);
+			this.#projectSaveTimer = undefined;
+		}
+		if (this.#projectModified.size > 0) {
+			await this.#saveProjectNow();
 		}
 	}
 
@@ -664,6 +697,62 @@ export class Settings {
 		}
 
 		this.#rebuildMerged();
+	}
+
+	#queueProjectSave(): void {
+		if (!this.#persist || !this.#projectConfigPath) return;
+
+		if (this.#projectSaveTimer) {
+			clearTimeout(this.#projectSaveTimer);
+		}
+		this.#projectSaveTimer = setTimeout(() => {
+			this.#projectSaveTimer = undefined;
+			this.#saveProjectNow().catch(err => {
+				logger.warn("Settings: project save failed", { error: String(err) });
+			});
+		}, 100);
+	}
+
+	async #saveProjectNow(): Promise<void> {
+		if (!this.#persist || !this.#projectConfigPath || this.#projectModified.size === 0) return;
+
+		const configPath = this.#projectConfigPath;
+		const modifiedPaths = [...this.#projectModified];
+		this.#projectModified.clear();
+
+		try {
+			// Ensure .omp directory exists
+			const dir = path.dirname(configPath);
+			fs.mkdirSync(dir, { recursive: true });
+
+			// Read existing project settings.json (or start fresh)
+			let current: RawSettings = {};
+			try {
+				const content = await Bun.file(configPath).text();
+				const parsed = JSON.parse(content);
+				if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+					current = parsed as RawSettings;
+				}
+			} catch (err) {
+				if (!isEnoent(err)) {
+					logger.warn("Settings: failed to read project settings", { path: configPath, error: String(err) });
+				}
+			}
+
+			// Apply modified paths from project layer
+			for (const modPath of modifiedPaths) {
+				const segments = modPath.split(".");
+				const value = getByPath(this.#project, segments);
+				setByPath(current, segments, value);
+			}
+
+			await Bun.write(configPath, `${JSON.stringify(current, null, 2)}\n`);
+		} catch (error) {
+			logger.warn("Settings: project save failed", { error: String(error) });
+			for (const p of modifiedPaths) {
+				this.#projectModified.add(p);
+			}
+		}
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────

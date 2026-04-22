@@ -269,6 +269,10 @@ export const SETTINGS_SCHEMA = {
 
 	disabledExtensions: { type: "array", default: EMPTY_STRING_ARRAY },
 
+	projectDisabledExtensions: { type: "array", default: EMPTY_STRING_ARRAY },
+
+	restrictedExtensions: { type: "record", default: EMPTY_STRING_RECORD },
+
 	modelRoles: { type: "record", default: EMPTY_STRING_RECORD },
 
 	modelTags: { type: "record", default: EMPTY_MODEL_TAGS_RECORD },

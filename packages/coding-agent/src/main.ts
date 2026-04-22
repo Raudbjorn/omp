@@ -703,7 +703,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	const mode = parsedArgs.mode || "text";
 
 	// Initialize discovery system with settings for provider persistence
-	logger.time("initializeWithSettings", initializeWithSettings, settings);
+	logger.time("initializeWithSettings", initializeWithSettings, settings, cwd);
 
 	// Apply model role overrides from CLI args or env vars (ephemeral, not persisted)
 	const smolModel = parsedArgs.smol ?? $env.PI_SMOL_MODEL;

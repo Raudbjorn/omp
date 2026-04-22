@@ -43,6 +43,7 @@ export type SymbolKey =
 	| "status.running"
 	| "status.shadowed"
 	| "status.aborted"
+	| "status.restricted"
 	// Navigation
 	| "nav.cursor"
 	| "nav.selected"
@@ -204,6 +205,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"status.running": "⟳",
 	"status.shadowed": "◌",
 	"status.aborted": "⏹",
+	"status.restricted": "🔒",
 	// Navigation
 	"nav.cursor": "❯",
 	"nav.selected": "➤",
@@ -374,6 +376,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"status.shadowed": "◐",
 	// pick:  | alt:  
 	"status.aborted": "\uf04d",
+	// pick: 🔒 | alt:
+	"status.restricted": "\uf023",
 	// Navigation
 	// pick:  | alt:  
 	"nav.cursor": "\uf054",
@@ -618,6 +622,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"status.running": "[~]",
 	"status.shadowed": "[/]",
 	"status.aborted": "[-]",
+	"status.restricted": "[L]",
 	// Navigation
 	"nav.cursor": ">",
 	"nav.selected": "->",
@@ -1371,6 +1376,7 @@ export class Theme {
 			running: this.#symbols["status.running"],
 			shadowed: this.#symbols["status.shadowed"],
 			aborted: this.#symbols["status.aborted"],
+			restricted: this.#symbols["status.restricted"],
 		};
 	}
 
