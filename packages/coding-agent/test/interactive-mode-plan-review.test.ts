@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { initTheme, setThemeInstance, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { Text } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../src/config/model-registry";
@@ -135,5 +135,20 @@ describe("InteractiveMode plan review rendering", () => {
 		});
 		expect(await Bun.file(resolvedPlanPath).exists()).toBe(false);
 		expect(await Bun.file(resolvedFinalPath).text()).toContain("Current session plan");
+	});
+
+	it("unsubscribes from theme changes on stop", async () => {
+		await mode.init();
+		const invalidateSpy = vi.spyOn(mode.ui, "invalidate");
+		const requestRenderSpy = vi.spyOn(mode.ui, "requestRender");
+
+		mode.stop();
+		invalidateSpy.mockClear();
+		requestRenderSpy.mockClear();
+		_resetSettingsForTest();
+
+		expect(() => setThemeInstance(theme)).not.toThrow();
+		expect(invalidateSpy).not.toHaveBeenCalled();
+		expect(requestRenderSpy).not.toHaveBeenCalled();
 	});
 });

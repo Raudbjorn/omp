@@ -1947,8 +1947,13 @@ export function getColorBlindMode(): boolean {
 	return currentColorBlindMode;
 }
 
-export function onThemeChange(callback: () => void): void {
+export function onThemeChange(callback: () => void): () => void {
 	onThemeChangeCallback = callback;
+	return () => {
+		if (onThemeChangeCallback === callback) {
+			onThemeChangeCallback = undefined;
+		}
+	};
 }
 
 /**

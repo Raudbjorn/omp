@@ -171,6 +171,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#skillSlashCommands: SlashCommand[] = [];
 	#ompLiveReload: OmpLiveReloadController;
 	#cleanupUnsubscribe?: () => void;
+	#themeChangeUnsubscribe?: () => void;
 	readonly #version: string;
 	readonly #changelogMarkdown: string | undefined;
 	#planModePreviousTools: string[] | undefined;
@@ -435,7 +436,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#subscribeToAgent();
 
 		// Set up theme file watcher
-		onThemeChange(() => {
+		this.#themeChangeUnsubscribe = onThemeChange(() => {
 			this.ui.invalidate();
 			this.updateEditorBorderColor();
 			this.ui.requestRender();
@@ -1138,6 +1139,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.#cleanupUnsubscribe) {
 			this.#cleanupUnsubscribe();
+		}
+		if (this.#themeChangeUnsubscribe) {
+			this.#themeChangeUnsubscribe();
+			this.#themeChangeUnsubscribe = undefined;
 		}
 		if (this.isInitialized) {
 			this.ui.stop();
