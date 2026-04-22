@@ -76,12 +76,15 @@ export class ToolBridgeServer {
 						return Response.json({ error: "Invalid JSON body" }, { status: 400 });
 					}
 
+					// Single ID so validation and execution correlate in logs/traces.
+					const toolCallId = crypto.randomUUID();
+
 					// Schema validation — same path as the agent loop
 					let validatedArgs: Record<string, unknown>;
 					try {
 						validatedArgs = validateToolArguments(tool, {
 							type: "toolCall",
-							id: crypto.randomUUID(),
+							id: toolCallId,
 							name,
 							arguments: args,
 						});
@@ -91,7 +94,7 @@ export class ToolBridgeServer {
 
 					try {
 						const result = await tool.execute(
-							crypto.randomUUID(),
+							toolCallId,
 							validatedArgs,
 							signal,
 							undefined, // no streaming updates from bridge calls
