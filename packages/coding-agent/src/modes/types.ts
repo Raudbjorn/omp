@@ -123,6 +123,7 @@ export interface InteractiveModeContext {
 	// Lifecycle
 	init(): Promise<void>;
 	shutdown(): Promise<void>;
+	restart(): Promise<void>;
 	checkShutdownRequested(): Promise<void>;
 
 	// Extension UI integration

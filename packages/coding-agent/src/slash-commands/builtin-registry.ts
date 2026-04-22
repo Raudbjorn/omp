@@ -753,6 +753,14 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		},
 	},
 	{
+		name: "reload",
+		description: "Restart to apply plugin, extension, or config changes",
+		handle: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.restart();
+		},
+	},
+	{
 		name: "exit",
 		description: "Exit the application",
 		handle: shutdownHandler,

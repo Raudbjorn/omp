@@ -1301,6 +1301,44 @@ export class InteractiveMode implements InteractiveModeContext {
 		await postmortem.quit(0);
 	}
 
+	async restart(): Promise<void> {
+		if (this.#isShuttingDown) return;
+		this.#isShuttingDown = true;
+
+		// Flush pending session writes before restart
+		await this.sessionManager.flush();
+		const sessionId = this.sessionManager.getSessionId();
+
+		// Emit shutdown event to hooks
+		await this.session.dispose();
+
+		if (this.isInitialized) {
+			this.ui.requestRender(true);
+		}
+
+		// Wait for any pending renders to complete
+		await new Promise(resolve => process.nextTick(resolve));
+
+		// Drain any in-flight Kitty key release events before stopping.
+		await this.ui.terminal.drainInput(1000);
+		this.stop();
+
+		// Re-exec the process, resuming the same session so history is preserved.
+		// We intentionally omit all other CLI flags (model, system prompt, etc.)
+		// because the resumed session already has that state persisted to disk.
+		const execPath = process.execPath;
+		const scriptPath = process.argv[1];
+		const resumeArgs = sessionId ? ["--resume", sessionId] : [];
+
+		process.stderr.write(`\n${chalk.dim("Reloading...")}\n`);
+
+		const proc = Bun.spawn([execPath, scriptPath, ...resumeArgs], {
+			stdio: ["inherit", "inherit", "inherit"],
+		});
+		const exitCode = await proc.exited;
+		process.exit(exitCode ?? 0);
+	}
+
 	async checkShutdownRequested(): Promise<void> {
 		if (!this.shutdownRequested) return;
 		await this.shutdown();
