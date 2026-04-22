@@ -158,9 +158,13 @@ setup_path() {
     echo "  Run: . ~/.bashrc  (or open a new terminal)"
 }
 
-# Download precompiled native addons from upstream releases.
-# The .node files are Rust build artifacts not committed to git;
-# building them requires the full Rust toolchain, so we pull prebuilt.
+# Download precompiled native addons. The .node files are Rust build
+# artifacts not committed to git; building them requires the full Rust
+# toolchain, so we pull prebuilt binaries from an existing release.
+#
+# This fork does not publish its own native-addon assets, so we default to
+# upstream's releases. Override with PI_NATIVES_REPO if you later publish
+# fork-specific native binaries.
 install_natives() {
     OS="$(uname -s)"
     ARCH="$(uname -m)"
@@ -175,7 +179,7 @@ install_natives() {
         *) echo "  Skipping natives: unsupported arch $ARCH"; return 0 ;;
     esac
 
-    UPSTREAM="can1357/oh-my-pi"
+    UPSTREAM="${PI_NATIVES_REPO:-can1357/oh-my-pi}"
     echo "Fetching latest upstream release tag for native addons..."
     LATEST=$(curl -fsSL "https://api.github.com/repos/${UPSTREAM}/releases/latest" \
         | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
