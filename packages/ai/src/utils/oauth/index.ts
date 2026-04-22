@@ -180,6 +180,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "gemini-cli-acp",
+		name: "Gemini CLI (ACP)",
+		available: true,
+	},
+	{
 		id: "google-antigravity",
 		name: "Antigravity (Gemini 3, Claude, GPT-OSS)",
 		available: true,

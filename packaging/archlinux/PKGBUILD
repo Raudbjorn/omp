@@ -1,0 +1,170 @@
+# Maintainer: Sveinbjörn Geirsson <claude@sveinbjorn.dev>
+#
+# Build-and-install PKGBUILD for omp — Raudbjorn's fork of oh-my-pi.
+#
+# Default source is the local git worktree at $OMP_REPO (auto-detected to
+# ../.. relative to this PKGBUILD) on branch $OMP_BRANCH. Override either
+# with an env var to build a different tree/branch without editing the file:
+#
+#   OMP_BRANCH=main makepkg -si
+#   OMP_REPO=/srv/omp OMP_BRANCH=release/14.1.4 makepkg -si
+#
+# To build from GitHub instead of a local worktree, uncomment the git+https
+# source line below and comment out the git+file one.
+
+pkgname=omp
+pkgver=14.1.4.r4244.c106ab91
+pkgrel=1
+pkgdesc='Coding agent CLI with read, bash, edit, write tools and session management (Raudbjorn fork of oh-my-pi)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Raudbjorn/omp'
+license=('MIT')
+# The compiled binary bundles the bun runtime, so runtime deps are minimal.
+depends=('gcc-libs' 'glibc')
+# bun is both the package manager and the bundler; rustup provides the pinned
+# nightly toolchain declared in rust-toolchain.toml for packages/natives.
+makedepends=('bun>=1.3.5' 'rustup' 'git' 'rsync' 'jq')
+# bun's --compile output is already a stripped, standalone binary; re-stripping
+# or trying to extract debug symbols from it breaks makepkg.
+options=('!strip' '!debug' '!lto')
+provides=('omp-coding-agent')
+
+# Resolve the default repo path to the worktree containing this PKGBUILD.
+# $startdir is the directory makepkg was invoked from (where PKGBUILD lives).
+_default_repo="$(realpath -m "${startdir:-$PWD}/../..")"
+_repo="${OMP_REPO:-$_default_repo}"
+
+# Empty source: we snapshot the working tree in prepare() so uncommitted
+# changes are picked up. This is a dev-oriented PKGBUILD; to build from a
+# committed ref instead, replace with a git+https/git+file source.
+source=()
+sha256sums=()
+
+pkgver() {
+	cd "${_repo}"
+	local base
+	base="$(jq -r '.version' packages/coding-agent/package.json 2>/dev/null || echo '14.1.4')"
+	local rev sha
+	rev="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
+	sha="$(git rev-parse --short=8 HEAD 2>/dev/null || echo 00000000)"
+	printf '%s.r%s.%s' "${base}" "${rev}" "${sha}"
+}
+
+prepare() {
+	# Snapshot the worktree into $srcdir/$pkgname, excluding build artefacts
+	# and VCS internals. rsync keeps uncommitted changes visible to the build.
+	rm -rf "${srcdir}/${pkgname}"
+	mkdir -p "${srcdir}/${pkgname}"
+	rsync -a --delete \
+		--exclude='/.git/' \
+		--exclude='/node_modules/' \
+		--exclude='/target/' \
+		--exclude='/dist/' \
+		--exclude='/packaging/archlinux/src/' \
+		--exclude='/packaging/archlinux/pkg/' \
+		--exclude='/packaging/archlinux/*.pkg.tar.*' \
+		--exclude='**/node_modules/' \
+		--exclude='**/dist/' \
+		--exclude='**/target/' \
+		--exclude='**/.turbo/' \
+		--exclude='**/tsconfig.tsbuildinfo' \
+		--exclude='**/*.tsbuildinfo' \
+		"${_repo}/" "${srcdir}/${pkgname}/"
+
+	cd "${srcdir}/${pkgname}"
+
+	# Install the pinned Rust nightly (honours rust-toolchain.toml) without
+	# touching the user's default toolchain.
+	if [[ -f rust-toolchain.toml ]]; then
+		local channel
+		channel="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+		if [[ -n "${channel}" ]]; then
+			rustup toolchain install "${channel}" --profile minimal --no-self-update
+			rustup component add --toolchain "${channel}" rustfmt clippy
+		fi
+	fi
+
+	# Isolate bun's global install state to the build dir so the user's
+	# ~/.bun is untouched and the build is reproducible. Prefer the
+	# pacman-installed /usr/bin/bun (tracked as a makedep) over any older
+	# user-local bun on $PATH — e.g. ~/.bun/bin — since the build uses
+	# modern Bun APIs (Bun.Archive.write) introduced after 1.3.7.
+	export BUN_INSTALL="${srcdir}/.bun"
+	export PATH="/usr/bin:${BUN_INSTALL}/bin:${PATH}"
+
+	local bun_ver
+	bun_ver="$(/usr/bin/bun --version 2>/dev/null || true)"
+	msg2 "Using bun: /usr/bin/bun (%s)" "${bun_ver:-unknown}"
+}
+
+build() {
+	cd "${srcdir}/${pkgname}"
+
+	export BUN_INSTALL="${srcdir}/.bun"
+	export PATH="/usr/bin:${BUN_INSTALL}/bin:${PATH}"
+	# Keep bun quiet; telemetry already disabled in bunfig.toml.
+	export DO_NOT_TRACK=1
+	export CI=1
+
+	# Install workspace deps (frozen lockfile for reproducibility).
+	bun install --frozen-lockfile
+
+	# Step 1: build the native N-API addon first. This runs build-native.ts,
+	# which does the zig/napi-rs/CPU-variant detection dance and produces
+	# packages/natives/native/pi_natives.linux-x64-modern.node.
+	bun --cwd=packages/natives run build
+
+	# Step 2: workspace-wide build from the repo root. This triggers the
+	# coding-agent build (which bundles the stats client, embeds the native
+	# addon, and compiles the standalone omp binary via `bun build --compile`)
+	# as well as any other workspace packages that expose a `build` script.
+	# Running each workspace build in isolation (e.g. only `packages/coding-agent`)
+	# produces a binary that hangs on exit because the embed:native step
+	# doesn't see the freshly built addon in the right context.
+	bun run build
+}
+
+check() {
+	cd "${srcdir}/${pkgname}/packages/coding-agent/dist"
+	# Sanity: the compiled binary answers --version.
+	./omp --version >/dev/null
+}
+
+package() {
+	cd "${srcdir}/${pkgname}"
+
+	install -Dm755 packages/coding-agent/dist/omp "${pkgdir}/usr/bin/omp"
+
+	# Install the N-API native addon alongside the binary. The bun-compiled
+	# omp executable has __filename baked to the build-time source path, so
+	# at runtime it does not recognise itself as a compiled-binary and skips
+	# the ~/.omp/natives extraction path. The loader in
+	# packages/natives/native/index.js then falls through to execDir
+	# (i.e. `dirname(process.execPath)` → /usr/bin), so the .node file must
+	# be reachable as /usr/bin/pi_natives.linux-x64-*.node. We install it
+	# under /usr/lib/omp/ and symlink it into /usr/bin/ so the linter
+	# doesn't complain about a shared-object in /usr/bin.
+	#
+	# Without this, PTY/terminal ops (all in Rust via napi-rs) never load
+	# and omp hangs on exit because the session can't be cleaned up.
+	local addon
+	for addon in packages/natives/native/pi_natives.linux-x64-*.node; do
+		[[ -f "${addon}" ]] || continue
+		local base
+		base="$(basename "${addon}")"
+		install -Dm644 "${addon}" "${pkgdir}/usr/lib/${pkgname}/${base}"
+		install -d "${pkgdir}/usr/bin"
+		ln -sf "../lib/${pkgname}/${base}" "${pkgdir}/usr/bin/${base}"
+	done
+
+	install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+	install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+
+	# Stash a copy of AGENTS.md and STAGES.md alongside the README — they're
+	# the project's primary developer documentation.
+	for doc in AGENTS.md STAGES.md; do
+		if [[ -f "${doc}" ]]; then
+			install -Dm644 "${doc}" "${pkgdir}/usr/share/doc/${pkgname}/${doc}"
+		fi
+	done
+}

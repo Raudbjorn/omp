@@ -7066,6 +7066,46 @@
 			}
 		}
 	},
+	"gemini-cli-acp": {
+		"gemini-2.5-pro": {
+			"id": "gemini-2.5-pro",
+			"name": "Gemini 2.5 Pro (ACP)",
+			"api": "acp-agent",
+			"provider": "gemini-cli-acp",
+			"baseUrl": "",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65536
+		},
+		"gemini-2.5-flash": {
+			"id": "gemini-2.5-flash",
+			"name": "Gemini 2.5 Flash (ACP)",
+			"api": "acp-agent",
+			"provider": "gemini-cli-acp",
+			"baseUrl": "",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65536
+		}
+	},
 	"google-vertex": {
 		"gemini-1.5-flash": {
 			"id": "gemini-1.5-flash",

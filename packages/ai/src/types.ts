@@ -22,6 +22,7 @@ import type {
 } from "./providers/cursor/gen/agent_pb";
 import type { DevinOptions } from "./providers/devin";
 import type { GoogleOptions } from "./providers/google";
+import type { AcpAgentOptions } from "./providers/acp";
 import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
 import type { GoogleVertexOptions } from "./providers/google-vertex";
 import type { OpenAICodexResponsesOptions } from "./providers/openai-codex-responses";
@@ -44,7 +45,8 @@ export type KnownApi =
 	| "google-vertex"
 	| "cursor-agent"
 	| "devin-agent"
-	| "warp-agent";
+	| "warp-agent"
+	| "acp-agent";
 export type Api = KnownApi | (string & {});
 export interface ApiOptionsMap {
 	"anthropic-messages": AnthropicOptions;
@@ -59,6 +61,7 @@ export interface ApiOptionsMap {
 	"cursor-agent": CursorOptions;
 	"devin-agent": DevinOptions;
 	"warp-agent": WarpOptions;
+	"acp-agent": AcpAgentOptions;
 }
 // Compile-time exhaustiveness check - this will fail if ApiOptionsMap doesn't have all KnownApi keys
 type _CheckExhaustive =

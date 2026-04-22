@@ -19,6 +19,7 @@ import { type GoogleOptions, streamGoogle } from "./providers/google";
 import { type GoogleGeminiCliOptions, streamGoogleGeminiCli } from "./providers/google-gemini-cli";
 import { type GoogleVertexOptions, streamGoogleVertex } from "./providers/google-vertex";
 import { isKimiModel, streamKimi } from "./providers/kimi";
+import { type AcpAgentOptions, streamAcp } from "./providers/acp";
 import { streamOpenAICodexResponses } from "./providers/openai-codex-responses";
 import { type OpenAICompletionsOptions, streamOpenAICompletions } from "./providers/openai-completions";
 import { streamOpenAIResponses } from "./providers/openai-responses";
@@ -193,6 +194,10 @@ export function stream<TApi extends Api>(
 	} else if (model.api === "bedrock-converse-stream") {
 		// Bedrock doesn't have any API keys instead it sources credentials from standard AWS env variables or from given AWS profile.
 		return streamBedrock(model as Model<"bedrock-converse-stream">, context, (options || {}) as BedrockOptions);
+	} else if (model.api === "acp-agent") {
+		// ACP agents authenticate out-of-band (OAuth creds on disk, env vars).
+		// The adapter's probeAuth runs inside streamAcp; no API-key guard here.
+		return streamAcp(model as Model<"acp-agent">, context, (options || {}) as AcpAgentOptions);
 	}
 
 	const apiKey = options?.apiKey || getEnvApiKey(model.provider);
@@ -236,6 +241,9 @@ export function stream<TApi extends Api>(
 
 		case "warp-agent":
 			return streamWarp(model as Model<"warp-agent">, context, providerOptions as WarpOptions);
+
+		case "acp-agent":
+			return streamAcp(model as Model<"acp-agent">, context, providerOptions as AcpAgentOptions);
 
 		default:
 			throw new Error(`Unhandled API: ${api}`);
