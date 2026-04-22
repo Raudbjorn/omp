@@ -251,8 +251,8 @@ export const webSearchCustomTool: CustomTool<typeof webSearchSchema, SearchRende
 		return renderSearchCall(args, options, theme);
 	},
 
-	renderResult(result, options: RenderResultOptions, theme: Theme) {
-		return renderSearchResult(result, options, theme);
+	renderResult(result, options: RenderResultOptions, theme: Theme, args?: SearchToolParams) {
+		return renderSearchResult(result, options, theme, args);
 	},
 };
 

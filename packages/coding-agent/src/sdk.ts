@@ -490,7 +490,7 @@ export function customToolToDefinition(tool: CustomTool): ToolDefinition {
 		onSession: tool.onSession ? (event, ctx) => tool.onSession?.(event, createCustomToolContext(ctx)) : undefined,
 		renderCall: tool.renderCall,
 		renderResult: tool.renderResult
-			? (result, options, theme): Component => {
+			? (result, options, theme, args): Component => {
 					const component = tool.renderResult?.(
 						result,
 						{
@@ -499,6 +499,7 @@ export function customToolToDefinition(tool: CustomTool): ToolDefinition {
 							spinnerFrame: options.spinnerFrame,
 						},
 						theme,
+						args,
 					);
 					// Return empty component if undefined to match Component type requirement
 					return component ?? ({ render: () => [] } as unknown as Component);
