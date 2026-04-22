@@ -35,7 +35,12 @@ import { isAnthropicOAuthToken, normalizeToolCallId, resolveCacheRetention } fro
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
-import { createWatchdog, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
+import {
+	createWatchdog,
+	getAnthropicStreamIdleTimeoutMs,
+	getStreamFirstEventTimeoutMs,
+	iterateWithIdleTimeout,
+} from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { isCopilotTransientModelError } from "../utils/retry";
@@ -752,14 +757,18 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					const firstEventWatchdog = createWatchdog(firstEventTimeoutMs, () =>
 						activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
 					);
+					const idleTimeoutAbortError = new Error("Anthropic stream idle timeout");
 					let sawEvent = false;
 					let sawMessageStart = false;
 					let sawTerminalEnvelope = false;
 
-					for await (const event of anthropicStream) {
-						if (!sawEvent) {
-							clearTimeout(firstEventWatchdog);
-						}
+					for await (const event of iterateWithIdleTimeout(anthropicStream, {
+						watchdog: firstEventWatchdog,
+						firstItemTimeoutMs: 0,
+						idleTimeoutMs: getAnthropicStreamIdleTimeoutMs(),
+						errorMessage: "Anthropic stream idle timeout — no SSE event received between events",
+						onIdle: () => activeAbortTracker.abortLocally(idleTimeoutAbortError),
+					})) {
 						sawEvent = true;
 
 						if (event.type === "message_start") {
