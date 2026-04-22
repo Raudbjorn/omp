@@ -67,6 +67,8 @@ import {
 } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
+import type { ToolResultBridge } from "../context/bridge";
+import type { EffectivePromptSnapshot } from "../context/effective-prompt-snapshot";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
 import {
 	disposeKernelSessionsByOwner,
@@ -274,6 +276,10 @@ export interface AgentSessionConfig {
 	agentId?: string;
 	/** Shared agent registry (for forwarding IRC observations to the main session UI). */
 	agentRegistry?: AgentRegistry;
+	/** Fork-specific: assembler bridge for tool result interception */
+	assemblerBridge?: ToolResultBridge;
+	/** Fork-specific: returns the last effective prompt snapshot captured during transformContext */
+	getLastPromptSnapshotFn?: () => EffectivePromptSnapshot | null | undefined;
 }
 
 /** Options for AgentSession.prompt() */
@@ -522,6 +528,10 @@ export class AgentSession {
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#rebuildSystemPrompt: ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<string>) | undefined;
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
+
+	// Fork-specific: assembler introspection
+	#assemblerBridge: ToolResultBridge | undefined;
+	#getLastPromptSnapshot: (() => EffectivePromptSnapshot | null | undefined) | undefined;
 	#baseSystemPrompt: string;
 	/**
 	 * Signature of the (toolNames, tool descriptions) tuple passed to the most
@@ -641,6 +651,8 @@ export class AgentSession {
 		this.#obfuscator = config.obfuscator;
 		this.#agentId = config.agentId;
 		this.#agentRegistry = config.agentRegistry;
+		this.#assemblerBridge = config.assemblerBridge;
+		this.#getLastPromptSnapshot = config.getLastPromptSnapshotFn;
 		this.agent.setAssistantMessageEventInterceptor((message, assistantMessageEvent) => {
 			const event: AgentEvent = {
 				type: "message_update",
@@ -2525,6 +2537,20 @@ export class AgentSession {
 	/** All messages including custom types like BashExecutionMessage */
 	get messages(): AgentMessage[] {
 		return this.agent.state.messages;
+	}
+
+	/** Fork-specific: assembler bridge for tool result interception */
+	get assemblerBridge(): ToolResultBridge | undefined {
+		return this.#assemblerBridge;
+	}
+
+	set assemblerBridge(value: ToolResultBridge | undefined) {
+		this.#assemblerBridge = value;
+	}
+
+	/** Fork-specific: returns the last effective prompt snapshot from the assembler */
+	getLastPromptSnapshot(): EffectivePromptSnapshot | null | undefined {
+		return this.#getLastPromptSnapshot?.();
 	}
 
 	buildDisplaySessionContext(): SessionContext {

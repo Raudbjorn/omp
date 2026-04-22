@@ -2144,6 +2144,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			asyncJobManager,
 			agentId: resolvedAgentId,
 			agentRegistry,
+			assemblerBridge: assemblerActive ? assemblerBridge : undefined,
+			getLastPromptSnapshotFn: () => lastPromptSnapshot,
 		});
 		hasSession = true;
 
