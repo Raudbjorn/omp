@@ -6,16 +6,19 @@ export function createTitleExtension(): ExtensionFactory {
 	return api => {
 		api.registerCommand("title", {
 			description: "Set the current session title.",
-			handler: async (_args, ctx) => {
+			handler: async (args, ctx) => {
 				const sessionManager = ctx.sessionManager as SessionManager;
-				const nextTitle = await ctx.ui.editor("Session title", sessionManager.getSessionName(), undefined, {
-					promptStyle: true,
-				});
-				if (nextTitle === undefined) {
-					return;
+				let title = args.trim();
+				if (!title) {
+					const nextTitle = await ctx.ui.editor("Session title", sessionManager.getSessionName(), undefined, {
+						promptStyle: true,
+					});
+					if (nextTitle === undefined) {
+						return;
+					}
+					title = nextTitle.trim();
 				}
 
-				const title = nextTitle.trim();
 				if (!title) {
 					return;
 				}

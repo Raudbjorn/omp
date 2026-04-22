@@ -214,6 +214,32 @@ describe("InputController escape behavior", () => {
 		expect(editor.getText()).toBe("");
 	});
 
+	it("runs extension slash commands without creating optimistic submission UI", async () => {
+		const { ctx, editor, spies } = createContext();
+		(
+			ctx.session as {
+				extensionRunner: {
+					hasHandlers: (event: string) => boolean;
+					getCommand: (name: string) => object | undefined;
+				};
+			}
+		).extensionRunner = {
+			hasHandlers: () => false,
+			getCommand: (name: string) => (name === "title" ? {} : undefined),
+		};
+		const controller = new InputController(ctx);
+
+		controller.setupEditorSubmitHandler();
+		editor.setText("/title Fixing Extension Animations");
+		await editor.onSubmit?.("/title Fixing Extension Animations");
+
+		expect(spies.startPendingSubmission).not.toHaveBeenCalled();
+		expect(spies.ensureLoadingAnimation).not.toHaveBeenCalled();
+		expect(spies.onInputCallback).not.toHaveBeenCalled();
+		expect(spies.prompt).toHaveBeenCalledWith("/title Fixing Extension Animations", { images: undefined });
+		expect(editor.getText()).toBe("");
+	});
+
 	it("falls back to aborting the active session when no pending optimistic submission exists", () => {
 		const { ctx, editor, spies } = createContext();
 		ctx.loadingAnimation = {} as InteractiveModeContext["loadingAnimation"];
