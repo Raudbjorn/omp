@@ -12,7 +12,7 @@ import { $ } from "bun";
 import chalk from "chalk";
 import { theme } from "../modes/theme/theme";
 
-const REPO = "mrayden/oh-my-pi-multimodal";
+const REPO = "Raudbjorn/omp";
 // Upstream repo kept as reference: can1357/oh-my-pi
 const PACKAGE = "@oh-my-pi/pi-coding-agent"; // unused for source installs; kept for bun/binary fallback
 
@@ -329,7 +329,7 @@ async function updateViaBinaryAt(targetPath: string, expectedVersion: string): P
  */
 async function runSourceUpdate(home: string, opts: { force: boolean; check: boolean }): Promise<void> {
 	console.log(chalk.dim(`Source install at: ${home}`));
-	console.log(chalk.dim("Checking for updates on mrayden/oh-my-pi-multimodal@main..."));
+	console.log(chalk.dim(`Checking for updates on ${REPO}@main...`));
 
 	const fetch = await $`git -C ${home} fetch --depth 1 origin main`.nothrow();
 	if (fetch.exitCode !== 0) {

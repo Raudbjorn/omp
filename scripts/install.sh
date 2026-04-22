@@ -10,7 +10,7 @@ set -e
 #   --ref <ref>    Install specific tag/commit/branch
 #   -r <ref>       Shorthand for --ref
 
-REPO="mrayden/oh-my-pi-multimodal"
+REPO="Raudbjorn/omp"
 PACKAGE="@oh-my-pi/pi-coding-agent"  # unused for fork; source install always clones REPO
 INSTALL_DIR="${PI_INSTALL_DIR:-$HOME/.local/bin}"
 MIN_BUN_VERSION="1.3.7"
