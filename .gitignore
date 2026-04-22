@@ -54,6 +54,9 @@ out.jsonl
 out.html
 pi-*.html
 
+# Claude Code harness state
+.claude/scheduled_tasks.lock
+
 # Generated files
 packages/coding-agent/src/internal-urls/docs-index.generated.ts
 /runs/
