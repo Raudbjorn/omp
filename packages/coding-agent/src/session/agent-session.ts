@@ -585,10 +585,15 @@ export class AgentSession {
 					streamingBehavior: options?.streamingBehavior,
 				});
 				if (options?.streamingBehavior === "followUp") {
+					// Defer to next tick so the just-emitted turn_end event can settle
+					// before we drain the queued follow-up.
 					setTimeout(() => {
-						if (!this.agent.state.isStreaming && this.agent.hasQueuedMessages()) {
-							void this.agent.continue();
+						if (this.agent.state.isStreaming || !this.agent.hasQueuedMessages()) {
+							return;
 						}
+						this.agent.continue().catch(error => {
+							console.error("Prompt-chain follow-up continue() failed", error);
+						});
 					}, 0);
 				}
 			},

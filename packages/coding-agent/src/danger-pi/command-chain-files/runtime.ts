@@ -65,19 +65,16 @@ export function createPromptChainExecutor(host: PromptChainRuntimeHost): PromptC
 		}
 	};
 
-	const completeCurrentStep = (result: PromptChainTurnResult): void => {
+	// Only invoked after onTurnComplete has confirmed result.success, so this
+	// unconditionally advances to the next step. Failures abort the chain in the
+	// onTurnComplete callback before we get here.
+	const completeCurrentStep = (): void => {
 		const chain = queue[0];
 		if (!chain || chain.activeStepIndex === undefined) {
 			return;
 		}
-
-		const completedStepIndex = chain.activeStepIndex;
+		chain.nextStepIndex = chain.activeStepIndex + 1;
 		chain.activeStepIndex = undefined;
-		if (!result.success) {
-			return;
-		}
-
-		chain.nextStepIndex = completedStepIndex + 1;
 	};
 
 	const dispatchCurrentStep = async (chain: QueuedChainState, options?: PromptChainDispatchOptions): Promise<void> => {
@@ -110,25 +107,24 @@ export function createPromptChainExecutor(host: PromptChainRuntimeHost): PromptC
 		}
 		listenerInstalled = true;
 		host.onTurnComplete(async result => {
-			const hadActiveStep = queue[0]?.activeStepIndex !== undefined;
-			if (!result.success && hadActiveStep) {
-				clearQueue();
-				return;
-			}
-			completeCurrentStep(result);
-			removeFinishedChains();
-			const chain = queue[0];
-			if (!chain) {
-				return;
-			}
 			try {
+				const hadActiveStep = queue[0]?.activeStepIndex !== undefined;
+				if (!result.success && hadActiveStep) {
+					clearQueue();
+					return;
+				}
+				completeCurrentStep();
+				removeFinishedChains();
+				const chain = queue[0];
+				if (!chain) {
+					return;
+				}
 				await dispatchCurrentStep(chain, { streamingBehavior: "followUp" });
+				removeFinishedChains();
 			} catch (error) {
 				clearQueue();
-				console.error("Prompt chain dispatch failed; clearing queue", error);
-				return;
+				console.error("Prompt chain turn handler failed; clearing queue", error);
 			}
-			removeFinishedChains();
 		});
 	};
 
