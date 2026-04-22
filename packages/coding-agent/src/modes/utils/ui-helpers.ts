@@ -126,6 +126,12 @@ export class UiHelpers {
 						this.ctx.chatContainer.addChild(new Text(line, 1, 0));
 						break;
 					}
+					if (message.customType === SKILL_PROMPT_MESSAGE_TYPE) {
+						const component = new SkillMessageComponent(message as CustomMessage<SkillPromptDetails>);
+						component.setExpanded(this.ctx.toolOutputExpanded);
+						this.ctx.chatContainer.addChild(component);
+						break;
+					}
 					if (message.customType === MULTI_BLOCK_TEXT_MESSAGE_TYPE) {
 						const textContent = this.#getCustomMessageText(message);
 						const userComponent = new UserMessageComponent(textContent, true);

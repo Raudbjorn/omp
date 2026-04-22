@@ -46,6 +46,46 @@ describe("Danger Pi title extension", () => {
 		stdoutWrite.mockRestore();
 	});
 
+	it("uses inline args as the title without opening the editor", async () => {
+		const stdoutWrite = spyOn(process.stdout, "write").mockImplementation(() => true);
+		let handler: ((args: string, ctx: unknown) => Promise<void> | void) | undefined;
+		createTitleExtension()({
+			registerCommand(name: string, command: RegisteredCommand) {
+				if (name === "title") {
+					handler = command.handler as typeof handler;
+				}
+			},
+		} as never);
+
+		let sessionTitle: string | undefined;
+		let editorCalled = false;
+		const notifications: Array<{ message: string; type: string | undefined }> = [];
+		await handler?.("  Fixing Extension Animations  ", {
+			sessionManager: {
+				getSessionName: () => sessionTitle,
+				setSessionName: async (nextTitle: string) => {
+					sessionTitle = nextTitle;
+				},
+				getCwd: () => "/tmp/project",
+			},
+			ui: {
+				editor: async () => {
+					editorCalled = true;
+					return "should not happen";
+				},
+				notify: (message: string, type?: string) => {
+					notifications.push({ message, type });
+				},
+			},
+		});
+
+		expect(sessionTitle).toBe("Fixing Extension Animations");
+		expect(editorCalled).toBe(false);
+		expect(notifications).toEqual([{ message: "Session title updated", type: "info" }]);
+		expect(stdoutWrite).toHaveBeenCalled();
+		stdoutWrite.mockRestore();
+	});
+
 	it("treats cancel and blank input as no-ops", async () => {
 		let handler: ((args: string, ctx: unknown) => Promise<void> | void) | undefined;
 		createTitleExtension()({

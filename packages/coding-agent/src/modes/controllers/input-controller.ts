@@ -329,6 +329,18 @@ export class InputController {
 				}
 			}
 
+			if (isSingleLineSubmission && !safePasteIntent && text.startsWith("/") && runner?.getCommand) {
+				const spaceIndex = text.indexOf(" ");
+				const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+				if (runner.getCommand(commandName)) {
+					this.ctx.editor.setText("");
+					const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
+					this.ctx.pendingImages = [];
+					await this.ctx.session.prompt(text, { images });
+					return;
+				}
+			}
+
 			// Handle bash command (! for normal, !! for excluded from context)
 			if (isSingleLineSubmission && !safePasteIntent && text.startsWith("!")) {
 				const isExcluded = text.startsWith("!!");
