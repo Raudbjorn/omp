@@ -8,6 +8,7 @@ import type { AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { validateToolArguments } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Server } from "bun";
+import { ToolAbortError } from "./tool-errors";
 
 /** Tool descriptor returned by the /tools endpoint. */
 export interface BridgeToolInfo {
@@ -104,8 +105,13 @@ export class ToolBridgeServer {
 						const content = textBlocks.length > 0 ? textBlocks.map(c => c.text).join("\n") : "";
 						return Response.json({ content, isError: false });
 					} catch (err) {
-						// Surface abort as a recognisable message so the worker exits cleanly
-						if (signal.aborted) {
+						// Only treat as abort if the error is an actual abort-type error;
+						// a coincident real error during shutdown should still surface.
+						const isAbort =
+							err instanceof ToolAbortError ||
+							(err instanceof Error && err.name === "AbortError") ||
+							(typeof DOMException !== "undefined" && err instanceof DOMException && err.name === "AbortError");
+						if (isAbort) {
 							return Response.json({ content: "Tool execution aborted.", isError: true });
 						}
 						logger.debug("Script bridge tool execution error", {
