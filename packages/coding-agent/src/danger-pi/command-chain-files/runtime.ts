@@ -4,7 +4,7 @@ import { parseCommandArgs, substituteArgs } from "../../utils/command-args";
 
 export type PromptChainStreamingBehavior = "followUp" | "steer";
 
-interface PromptChainDispatchOptions {
+export interface PromptChainDispatchOptions {
 	streamingBehavior?: PromptChainStreamingBehavior;
 	images?: readonly ImageContent[];
 }
@@ -121,7 +121,13 @@ export function createPromptChainExecutor(host: PromptChainRuntimeHost): PromptC
 			if (!chain) {
 				return;
 			}
-			await dispatchCurrentStep(chain, { streamingBehavior: "followUp" });
+			try {
+				await dispatchCurrentStep(chain, { streamingBehavior: "followUp" });
+			} catch (error) {
+				clearQueue();
+				console.error("Prompt chain dispatch failed; clearing queue", error);
+				return;
+			}
 			removeFinishedChains();
 		});
 	};

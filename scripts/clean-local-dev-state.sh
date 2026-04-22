@@ -47,15 +47,15 @@ stop_local_registry() {
 
 	local pid
 	for pid in $pids; do
-		local cmd
-		cmd=$(ps -p "$pid" -o comm= | tr -d ' ')
-		if [[ "$cmd" != *verdaccio* ]]; then
-			log "Port $REGISTRY_PORT is in use by $cmd; leaving it alone"
+		local args
+		args=$(ps -p "$pid" -o args= 2>/dev/null || true)
+		if [[ "$args" != *verdaccio* ]]; then
+			log "Port $REGISTRY_PORT is in use by ${args:-pid $pid}; leaving it alone"
 			continue
 		fi
 		log "Stopping Verdaccio pid $pid on port $REGISTRY_PORT"
 		kill "$pid"
-		done
+	done
 
 	for _ in {1..10}; do
 		if ! lsof -i TCP:"$REGISTRY_PORT" >/dev/null 2>&1; then

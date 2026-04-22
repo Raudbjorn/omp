@@ -14,15 +14,15 @@ ENV_FILE=${LOCAL_REGISTRY_ENV_FILE:-}
 
 select_env_file() {
 	if [[ -n "${ENV_FILE:-}" ]]; then
-		if [[ -S "$ENV_FILE" || -f "$ENV_FILE" ]]; then
+		if [[ -r "$ENV_FILE" ]]; then
 			return
 		fi
 		echo "LOCAL_REGISTRY_ENV_FILE set to '$ENV_FILE' but not readable" >&2
 		exit 1
 	fi
-	if [[ -S "$DEFAULT_ENV_FILE" || -f "$DEFAULT_ENV_FILE" ]]; then
+	if [[ -r "$DEFAULT_ENV_FILE" ]]; then
 		ENV_FILE="$DEFAULT_ENV_FILE"
-	elif [[ -S "$FALLBACK_ENV_FILE" || -f "$FALLBACK_ENV_FILE" ]]; then
+	elif [[ -r "$FALLBACK_ENV_FILE" ]]; then
 		ENV_FILE="$FALLBACK_ENV_FILE"
 	fi
 }
@@ -144,10 +144,10 @@ start_verdaccio() {
 	if [[ -n "$pids" ]]; then
 		local pid
 		for pid in $pids; do
-			local cmd
-			cmd=$(ps -p "$pid" -o comm= | tr -d ' ')
-			if [[ "$cmd" != *verdaccio* ]]; then
-				echo "Port $REGISTRY_PORT is in use by $cmd. Stop it or set REGISTRY_URL." >&2
+			local args
+			args=$(ps -p "$pid" -o args= 2>/dev/null || true)
+			if [[ "$args" != *verdaccio* ]]; then
+				echo "Port $REGISTRY_PORT is in use by ${args:-pid $pid}. Stop it or set REGISTRY_URL." >&2
 				exit 1
 			fi
 		done
@@ -272,7 +272,8 @@ await Bun.write(pkgPath, `${JSON.stringify(pkg, null, "\t")}\n`);
 
 create_user_token() {
 	local payload token response
-	payload=$(printf '{"name":"%s","password":"%s","email":"%s"}' "$NPM_USER" "$NPM_PASS" "$NPM_EMAIL")
+	payload=$(jq -n --arg name "$NPM_USER" --arg password "$NPM_PASS" --arg email "$NPM_EMAIL" \
+		'{name:$name,password:$password,email:$email}')
 	response=$(curl -sSf -X PUT -H 'content-type: application/json' --data "$payload" "${REGISTRY_URL}/-/user/org.couchdb.user:${NPM_USER}")
 	token=$(printf '%s' "$response" | bun -e 'const text = await Bun.stdin.text(); try { const data = JSON.parse(text); if (data && typeof data.token === "string") { process.stdout.write(data.token); } } catch (err) { process.exit(1); }')
 	if [[ -z "$token" ]]; then
@@ -308,6 +309,7 @@ main() {
 	require_command npm
 	require_command curl
 	require_command lsof
+	require_command jq
 	setup_state_dir
 	ensure_verdaccio
 	start_verdaccio

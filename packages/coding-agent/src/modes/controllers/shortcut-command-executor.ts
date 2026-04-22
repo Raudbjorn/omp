@@ -24,9 +24,12 @@ export async function executeBashShortcut(
 		ctx.editor.addToHistory(options.historyEntry);
 	}
 
-	await ctx.handleBashCommand(command, excludeFromContext);
-	ctx.isBashMode = false;
-	ctx.updateEditorBorderColor();
+	try {
+		await ctx.handleBashCommand(command, excludeFromContext);
+	} finally {
+		ctx.isBashMode = false;
+		ctx.updateEditorBorderColor();
+	}
 	return true;
 }
 
@@ -45,8 +48,11 @@ export async function executePythonShortcut(
 		ctx.editor.addToHistory(options.historyEntry);
 	}
 
-	await ctx.handlePythonCommand(code, excludeFromContext);
-	ctx.isPythonMode = false;
-	ctx.updateEditorBorderColor();
+	try {
+		await ctx.handlePythonCommand(code, excludeFromContext);
+	} finally {
+		ctx.isPythonMode = false;
+		ctx.updateEditorBorderColor();
+	}
 	return true;
 }

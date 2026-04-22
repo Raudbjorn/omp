@@ -8,7 +8,7 @@ async function readClipboardCommand(command: string[]): Promise<string | null> {
 	try {
 		const child = Bun.spawn(command, {
 			stdout: "pipe",
-			stderr: "pipe",
+			stderr: "ignore",
 		});
 		const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
 		if (exitCode !== 0) {

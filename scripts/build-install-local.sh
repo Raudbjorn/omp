@@ -112,7 +112,7 @@ const packageJson = await Bun.file(file).json() as Record<string, unknown>;
 const version = String(packageJson.version ?? "");
 if (!version) throw new Error("packages/utils/package.json missing version");
 const buildStrippedVersion = version.split("+")[0];
-const baseVersion = buildStrippedVersion.split("-local.")[0];
+const baseVersion = buildStrippedVersion.replace(/-local[-.].*$/, "");
 
 const suffix = Bun.env.LOCAL_SUFFIX;
 packageJson.version = `${baseVersion}+${suffix}`;

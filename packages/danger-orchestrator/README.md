@@ -1,6 +1,6 @@
 # Danger Orchestrator
 
-A GUI client for [Oh-My-Pi](https://github.com/anthropics/oh-my-pi) (OMP), built on top of the Agent Client Protocol (ACP). Designed for a single user (Scott) who runs 6-10 concurrent coding agent sessions and wants a better way to manage them.
+A GUI client for [omp](https://github.com/Raudbjorn/omp) (OMP), built on top of the Agent Client Protocol (ACP). Designed for a single user (Scott) who runs 6-10 concurrent coding agent sessions and wants a better way to manage them.
 
 ## The Problem
 
@@ -152,7 +152,7 @@ Key decisions:
   - Adelle (`$--font-serif`) -- long-form agent response body text only
   - JetBrains Mono (`$--font-mono`) -- all other UI text (panels, badges, buttons, data, metadata)
 - **Per-project accent colors** from the 12-color palette
-- **12 status badge states:** RUNNING, COMPLETE, WAITING, QUEUED, IDLE, SYNCED, PENDING, ACTIVE, ERROR, REVIEW, DRAFT
+- **11 status badge states:** RUNNING, COMPLETE, WAITING, QUEUED, IDLE, SYNCED, PENDING, ACTIVE, ERROR, REVIEW, DRAFT
 
 ## Components
 
