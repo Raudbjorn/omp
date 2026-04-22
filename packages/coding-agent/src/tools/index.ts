@@ -213,7 +213,7 @@ export interface ToolSession {
 	 * ToolSession is constructed. ScriptTool reads this at execution time so
 	 * that the script bridge always reflects the live tool registry.
 	 */
-	getTools?: () => import("@oh-my-pi/pi-agent-core").AgentTool<any>[];
+	getTools?: () => AgentTool<any>[];
 }
 
 type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;

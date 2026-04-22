@@ -312,9 +312,12 @@ describe("ScriptTool execution", () => {
 
 	it("does not expose parent env secrets to subprocess", async () => {
 		Bun.env.OMP_TEST_SECRET_XYZ = "leaked";
-		const r = await run(`import os\nresult = os.environ.get("OMP_TEST_SECRET_XYZ", "isolated")`, 5);
-		delete Bun.env.OMP_TEST_SECRET_XYZ;
-		expect(text(r)).toBe("isolated");
+		try {
+			const r = await run(`import os\nresult = os.environ.get("OMP_TEST_SECRET_XYZ", "isolated")`, 5);
+			expect(text(r)).toBe("isolated");
+		} finally {
+			delete Bun.env.OMP_TEST_SECRET_XYZ;
+		}
 	});
 
 	it("dynamically added tool is visible via tools proxy", async () => {

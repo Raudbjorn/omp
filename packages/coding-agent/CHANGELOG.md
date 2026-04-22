@@ -4,7 +4,13 @@
 
 ### Added
 
-- Added `script` tool for programmatic multi-tool orchestration: write Python that calls registered tools as functions, with subprocess isolation, timeout control, and support for dynamically loaded MCP tools via the `tools` proxy (integrated from [beeemT/oh-my-pi](https://github.com/beeemT/oh-my-pi))
+- Added `script` tool for programmatic multi-tool orchestration: write Python that calls registered tools as functions, with subprocess isolation, timeout control, and support for dynamically loaded MCP tools via the `tools` proxy (from [beeemT/oh-my-pi#feat/programmatic-tool-calling](https://github.com/beeemT/oh-my-pi/tree/feat/programmatic-tool-calling) by [@beeemT](https://github.com/beeemT))
+
+### Changed
+
+- Tightened the contract for `SearchParams.recency` in `web/search/providers/base.ts`: providers MUST interpret recency as a pure time filter and MUST NOT use it as an implicit signal to change topic scope, content domain, or ranking strategy.
+- Inline read tool previews are now optional via `read.toolResultPreview` and default to off
+- Changed `script` tool prompt to document Python syntax and idioms (from [beeemT/oh-my-pi#feat/programmatic-tool-calling](https://github.com/beeemT/oh-my-pi/tree/feat/programmatic-tool-calling) by [@beeemT](https://github.com/beeemT))
 
 ### Fixed
 
@@ -13,10 +19,6 @@
 - Fixed status-line sanitization to strip OSC, DCS, PM, APC, and 8-bit CSI escape sequences instead of leaving payload fragments in the UI
 - Fixed inline read tool previews to avoid rendering duplicate summary rows above the same code cell
 
-### Changed
-
-- Tightened the contract for `SearchParams.recency` in `web/search/providers/base.ts`: providers MUST interpret recency as a pure time filter and MUST NOT use it as an implicit signal to change topic scope, content domain, or ranking strategy.
-- Inline read tool previews are now optional via `read.toolResultPreview` and default to off
 ## [14.1.3] - 2026-04-17
 
 ### Breaking Changes
@@ -1420,7 +1422,6 @@
 - Changed session context to include `serviceTier` field for tracking active service tier across session branches
 - Changed `compact()` function to accept `remoteInstructions` option for custom remote compaction prompts
 - Changed model registry to apply hardcoded policies (gpt-5.4 context window) consistently across all model loading paths
-- Changed tool prompt to document Python syntax and idioms
 
 ### Fixed
 - Fixed OpenAI remote compaction to correctly append incremental responses instead of replacing entire history
