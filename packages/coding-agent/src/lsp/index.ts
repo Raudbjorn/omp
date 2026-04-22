@@ -268,6 +268,33 @@ function isProjectAwareLspServer(serverConfig: ServerConfig): boolean {
 	return !serverConfig.createClient && !serverConfig.isLinter;
 }
 
+/**
+ * Fetch the symbol tree for a file from the first available LSP server.
+ * Returns null when no server covers the file or the request fails.
+ */
+export async function getDocumentSymbols(
+	cwd: string,
+	filePath: string,
+	signal?: AbortSignal,
+): Promise<DocumentSymbol[] | null> {
+	const config = getConfig(cwd);
+	const server = getLspServerForFile(config, filePath);
+	if (!server) return null;
+	const [, serverConfig] = server;
+	try {
+		const client = await getOrCreateClient(serverConfig, cwd);
+		const uri = fileToUri(filePath);
+		return (await sendRequest(
+			client,
+			"textDocument/documentSymbol",
+			{ textDocument: { uri } },
+			signal,
+		)) as DocumentSymbol[];
+	} catch {
+		return null;
+	}
+}
+
 const DIAGNOSTIC_MESSAGE_LIMIT = 50;
 const SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS = 3000;
 const BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS = 400;
