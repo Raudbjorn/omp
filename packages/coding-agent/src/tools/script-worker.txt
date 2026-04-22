@@ -29,12 +29,18 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable
 
-BRIDGE_PORT = int(os.environ.get("OMP_BRIDGE_PORT", "0"))
+_BRIDGE_PORT_RAW = os.environ.get("OMP_BRIDGE_PORT", "")
 SCRIPT_FILE = os.environ.get("OMP_SCRIPT_FILE", "")
 BRIDGE_SECRET = os.environ.get("OMP_BRIDGE_SECRET", "")
 
-if not BRIDGE_PORT or not SCRIPT_FILE or not BRIDGE_SECRET:
+if not _BRIDGE_PORT_RAW or not SCRIPT_FILE or not BRIDGE_SECRET:
     sys.stderr.write("omp-script-worker: missing OMP_BRIDGE_PORT, OMP_SCRIPT_FILE, or OMP_BRIDGE_SECRET\n")
+    raise SystemExit(1)
+
+try:
+    BRIDGE_PORT = int(_BRIDGE_PORT_RAW)
+except (ValueError, TypeError):
+    sys.stderr.write(f"omp-script-worker: invalid OMP_BRIDGE_PORT value: {_BRIDGE_PORT_RAW!r}\n")
     raise SystemExit(1)
 
 BRIDGE_BASE = f"http://127.0.0.1:{BRIDGE_PORT}"
@@ -67,7 +73,8 @@ def _bridge_request(path: str, body: Any | None = None) -> Any:
 
 
 def call_bridge(name: str, args: Any | None = None) -> str:
-    data = _bridge_request(f"/tool/{urllib.parse.quote(name, safe='')}", args or {})
+    payload = args if args is not None else {}
+    data = _bridge_request(f"/tool/{urllib.parse.quote(name, safe='')}", payload)
     if data.get("isError"):
         raise RuntimeError(data.get("content") or f"Tool '{name}' returned an error")
     return str(data.get("content", ""))
@@ -131,5 +138,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as err:
-        sys.stderr.write(str(err))
+        sys.stderr.write(f"{err}\n")
         raise SystemExit(1) from err
