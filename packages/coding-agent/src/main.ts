@@ -660,7 +660,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 
 	// Initialize discovery system with settings for provider persistence
 	logger.time("initializeWithSettings");
-	initializeWithSettings(settings);
+	initializeWithSettings(settings, cwd);
 	modelRegistry.refreshInBackground();
 
 	// Apply model role overrides from CLI args or env vars (ephemeral, not persisted)

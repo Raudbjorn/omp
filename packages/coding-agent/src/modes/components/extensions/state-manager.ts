@@ -3,7 +3,7 @@
  * Handles data loading, tree building, filtering, and toggle persistence.
  */
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import type { ContextFile } from "../../../capability/context-file";
 import type { ExtensionModule } from "../../../capability/extension-module";
 import type { Hook } from "../../../capability/hook";
@@ -18,6 +18,8 @@ import {
 	disableProvider,
 	enableProvider,
 	getAllProvidersInfo,
+	getExtensionRestriction,
+	isExtensionRestricted,
 	isProviderEnabled,
 	loadCapability,
 } from "../../../discovery";
@@ -43,9 +45,15 @@ export interface ExtensionSettingsManager {
 /**
  * Load all extensions from all capabilities.
  */
-export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): Promise<Extension[]> {
+export async function loadAllExtensions(
+	cwd?: string,
+	disabledIds?: string[],
+	projectDisabledIds?: string[],
+	mcpManager?: { getConnection(name: string): { instructions?: string; tools?: { name: string }[] } | undefined },
+): Promise<Extension[]> {
 	const extensions: Extension[] = [];
 	const disabledExtensions = new Set<string>(disabledIds ?? []);
+	const projectDisabledExtensions = new Set<string>(projectDisabledIds ?? []);
 
 	// Helper to convert capability items to extensions
 	function addItems<T extends { name: string; path: string; _source: SourceMeta }>(
@@ -60,16 +68,25 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 		for (const item of items) {
 			const id = makeExtensionId(kind, item.name);
 			const isDisabled = disabledExtensions.has(id);
+			const isProjectDisabled = projectDisabledExtensions.has(id);
 			const isShadowed = (item as { _shadowed?: boolean })._shadowed;
 			const providerEnabled = isProviderEnabled(item._source.provider);
+			const restricted = isExtensionRestricted(id);
+			const restrictedTo = getExtensionRestriction(id);
 
 			let state: ExtensionState;
-			let disabledReason: "shadowed" | "provider-disabled" | "item-disabled" | undefined;
+			let disabledReason: Extension["disabledReason"];
+			let disableScope: Extension["disableScope"];
 
-			// Item-disabled takes precedence over shadowed
-			if (isDisabled) {
+			// Project-disabled takes precedence over global-disabled
+			if (isProjectDisabled) {
+				state = "disabled";
+				disabledReason = "item-disabled-project";
+				disableScope = "project";
+			} else if (isDisabled) {
 				state = "disabled";
 				disabledReason = "item-disabled";
+				disableScope = "global";
 			} else if (isShadowed) {
 				state = "shadowed";
 				disabledReason = "shadowed";
@@ -91,7 +108,12 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 				source: sourceFromMeta(item._source),
 				state,
 				disabledReason,
+				disableScope,
 				shadowedBy: opts?.getShadowedBy?.(item),
+				isGlobalDisabled: isDisabled,
+				isProjectDisabled: isProjectDisabled,
+				isRestricted: restricted,
+				restrictedToProject: restrictedTo,
 				raw: item,
 			});
 		}
@@ -146,15 +168,24 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 		for (const server of mcps.all) {
 			const id = makeExtensionId("mcp", server.name);
 			const isDisabled = disabledExtensions.has(id);
+			const isProjectDisabled = projectDisabledExtensions.has(id);
 			const isShadowed = (server as { _shadowed?: boolean })._shadowed;
 			const providerEnabled = isProviderEnabled(server._source.provider);
+			const restricted = isExtensionRestricted(id);
+			const restrictedTo = getExtensionRestriction(id);
 
 			let state: ExtensionState;
-			let disabledReason: "shadowed" | "provider-disabled" | "item-disabled" | undefined;
+			let disabledReason: Extension["disabledReason"];
+			let disableScope: Extension["disableScope"];
 
-			if (isDisabled) {
+			if (isProjectDisabled) {
+				state = "disabled";
+				disabledReason = "item-disabled-project";
+				disableScope = "project";
+			} else if (isDisabled) {
 				state = "disabled";
 				disabledReason = "item-disabled";
+				disableScope = "global";
 			} else if (isShadowed) {
 				state = "shadowed";
 				disabledReason = "shadowed";
@@ -176,7 +207,16 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 				source: sourceFromMeta(server._source),
 				state,
 				disabledReason,
-				raw: server,
+				disableScope,
+				isGlobalDisabled: isDisabled,
+				isProjectDisabled: isProjectDisabled,
+				isRestricted: restricted,
+				restrictedToProject: restrictedTo,
+				raw: {
+					...server,
+					_instructions: mcpManager?.getConnection(server.name)?.instructions,
+					_toolCount: mcpManager?.getConnection(server.name)?.tools?.length,
+				},
 			});
 		}
 	} catch (error) {
@@ -187,7 +227,10 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 	try {
 		const prompts = await loadCapability<Prompt>("prompts", loadOpts);
 		addItems(prompts.all, "prompt", {
-			getDescription: () => undefined,
+			getDescription: p => {
+				const firstLine = p.content?.split("\n").find(l => l.trim());
+				return firstLine?.slice(0, 80) || undefined;
+			},
 			getTrigger: p => `/prompts:${p.name}`,
 		});
 	} catch (error) {
@@ -198,7 +241,14 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 	try {
 		const commands = await loadCapability<SlashCommand>("slash-commands", loadOpts);
 		addItems(commands.all, "slash-command", {
-			getDescription: () => undefined,
+			getDescription: c => {
+				const { frontmatter } = parseFrontmatter(c.content, { source: c.path, level: "off" });
+				if (typeof frontmatter.description === "string" && frontmatter.description.trim()) {
+					return frontmatter.description.trim();
+				}
+				const firstLine = c.content.split("\n").find(l => l.trim() && !l.startsWith("---"));
+				return firstLine?.slice(0, 80) || undefined;
+			},
 			getTrigger: c => `/${c.name}`,
 		});
 	} catch (error) {
@@ -211,15 +261,24 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 		for (const hook of hooks.all) {
 			const id = makeExtensionId("hook", `${hook.type}:${hook.tool}:${hook.name}`);
 			const isDisabled = disabledExtensions.has(id);
+			const isProjectDisabled = projectDisabledExtensions.has(id);
 			const isShadowed = (hook as { _shadowed?: boolean })._shadowed;
 			const providerEnabled = isProviderEnabled(hook._source.provider);
+			const restricted = isExtensionRestricted(id);
+			const restrictedTo = getExtensionRestriction(id);
 
 			let state: ExtensionState;
-			let disabledReason: "shadowed" | "provider-disabled" | "item-disabled" | undefined;
+			let disabledReason: Extension["disabledReason"];
+			let disableScope: Extension["disableScope"];
 
-			if (isDisabled) {
+			if (isProjectDisabled) {
+				state = "disabled";
+				disabledReason = "item-disabled-project";
+				disableScope = "project";
+			} else if (isDisabled) {
 				state = "disabled";
 				disabledReason = "item-disabled";
+				disableScope = "global";
 			} else if (isShadowed) {
 				state = "shadowed";
 				disabledReason = "shadowed";
@@ -241,6 +300,11 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 				source: sourceFromMeta(hook._source),
 				state,
 				disabledReason,
+				disableScope,
+				isGlobalDisabled: isDisabled,
+				isProjectDisabled: isProjectDisabled,
+				isRestricted: restricted,
+				restrictedToProject: restrictedTo,
 				raw: hook,
 			});
 		}
@@ -256,15 +320,24 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 			const name = path.basename(file.path);
 			const id = makeExtensionId("context-file", `${file.level}:${name}`);
 			const isDisabled = disabledExtensions.has(id);
+			const isProjectDisabled = projectDisabledExtensions.has(id);
 			const isShadowed = (file as { _shadowed?: boolean })._shadowed;
 			const providerEnabled = isProviderEnabled(file._source.provider);
+			const restricted = isExtensionRestricted(id);
+			const restrictedTo = getExtensionRestriction(id);
 
 			let state: ExtensionState;
-			let disabledReason: "shadowed" | "provider-disabled" | "item-disabled" | undefined;
+			let disabledReason: Extension["disabledReason"];
+			let disableScope: Extension["disableScope"];
 
-			if (isDisabled) {
+			if (isProjectDisabled) {
+				state = "disabled";
+				disabledReason = "item-disabled-project";
+				disableScope = "project";
+			} else if (isDisabled) {
 				state = "disabled";
 				disabledReason = "item-disabled";
+				disableScope = "global";
 			} else if (isShadowed) {
 				state = "shadowed";
 				disabledReason = "shadowed";
@@ -286,6 +359,11 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 				source: sourceFromMeta(file._source),
 				state,
 				disabledReason,
+				disableScope,
+				isGlobalDisabled: isDisabled,
+				isProjectDisabled: isProjectDisabled,
+				isRestricted: restricted,
+				restrictedToProject: restrictedTo,
 				raw: file,
 			});
 		}
@@ -512,8 +590,13 @@ export function filterByProvider(extensions: Extension[], providerId: string): E
 /**
  * Create initial dashboard state.
  */
-export async function createInitialState(cwd?: string, disabledIds?: string[]): Promise<DashboardState> {
-	const extensions = await loadAllExtensions(cwd, disabledIds);
+export async function createInitialState(
+	cwd?: string,
+	disabledIds?: string[],
+	projectDisabledIds?: string[],
+	mcpManager?: { getConnection(name: string): { instructions?: string; tools?: { name: string }[] } | undefined },
+): Promise<DashboardState> {
+	const extensions = await loadAllExtensions(cwd, disabledIds, projectDisabledIds, mcpManager);
 	const tabs = buildProviderTabs(extensions);
 	const tabFiltered = extensions; // "all" tab by default
 	const searchFiltered = tabFiltered;
@@ -551,8 +634,10 @@ export async function refreshState(
 	state: DashboardState,
 	cwd?: string,
 	disabledIds?: string[],
+	projectDisabledIds?: string[],
+	mcpManager?: { getConnection(name: string): { instructions?: string; tools?: { name: string }[] } | undefined },
 ): Promise<DashboardState> {
-	const extensions = await loadAllExtensions(cwd, disabledIds);
+	const extensions = await loadAllExtensions(cwd, disabledIds, projectDisabledIds, mcpManager);
 	const tabs = buildProviderTabs(extensions);
 
 	// Get current provider from tabs
