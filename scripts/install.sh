@@ -152,7 +152,7 @@ setup_path() {
     for RC in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
         [ -f "$RC" ] || continue
         grep -qF "$INSTALL_DIR" "$RC" 2>/dev/null && continue
-        printf '\n# ompm\n%s\n' "$LINE" >> "$RC"
+        printf '\n# omp\n%s\n' "$LINE" >> "$RC"
         echo "  Added $INSTALL_DIR to PATH in $RC"
     done
     echo "  Run: . ~/.bashrc  (or open a new terminal)"
@@ -185,7 +185,7 @@ install_natives() {
     fi
     echo "  Upstream release: $LATEST"
 
-    NATIVE_DIR="$OMPM_HOME/packages/natives/native"
+    NATIVE_DIR="$OMP_HOME/packages/natives/native"
     mkdir -p "$NATIVE_DIR"
 
     # x64 ships two CPU-dispatch variants; arm64 and darwin-arm64 ship one file.
@@ -222,20 +222,20 @@ install_via_bun() {
             exit 1
         fi
 
-        OMPM_HOME="${OMPM_HOME:-$HOME/.local/share/ompm}"
-        OMPM_TMP="${OMPM_HOME}.tmp.$$"
+        OMP_HOME="${OMP_HOME:-$HOME/.local/share/omp}"
+        OMP_TMP="${OMP_HOME}.tmp.$$"
 
         # Ensure temp dir is removed if we exit early (failure, Ctrl-C, etc.)
-        _cleanup() { rm -rf "$OMPM_TMP"; }
+        _cleanup() { rm -rf "$OMP_TMP"; }
         trap '_cleanup' EXIT INT TERM
 
         # ── Incremental update path (fast) ───────────────────────────────────────
-        # If a valid git repo already lives at OMPM_HOME, try to update in-place.
+        # If a valid git repo already lives at OMP_HOME, try to update in-place.
         # This avoids a full re-clone on re-install or interrupted dep install.
         NEED_CLONE=1
-        if [ -d "$OMPM_HOME/.git" ]; then
-            echo "Existing install found at $OMPM_HOME, checking for updates..."
-            if (cd "$OMPM_HOME" \
+        if [ -d "$OMP_HOME/.git" ]; then
+            echo "Existing install found at $OMP_HOME, checking for updates..."
+            if (cd "$OMP_HOME" \
                 && git fetch --depth 1 origin "$REF" >/dev/null 2>&1 \
                 && git reset --hard FETCH_HEAD >/dev/null 2>&1); then
                 NEED_CLONE=0
@@ -249,29 +249,29 @@ install_via_bun() {
         if [ "$NEED_CLONE" = "1" ]; then
             # Clone into a temp dir so the existing install (if any) stays intact
             # until the new one is fully ready. Atomic: rm old + mv new.
-            rm -rf "$OMPM_TMP"
+            rm -rf "$OMP_TMP"
             echo "Cloning $REPO@$REF..."
             if git clone --depth 1 --branch "$REF" \
-               "https://github.com/${REPO}.git" "$OMPM_TMP" >/dev/null 2>&1; then
+               "https://github.com/${REPO}.git" "$OMP_TMP" >/dev/null 2>&1; then
                 :
             else
                 # Shallow clone may fail for non-branch refs (commit SHAs, etc.)
-                git clone "https://github.com/${REPO}.git" "$OMPM_TMP"
-                (cd "$OMPM_TMP" && git checkout "$REF")
+                git clone "https://github.com/${REPO}.git" "$OMP_TMP"
+                (cd "$OMP_TMP" && git checkout "$REF")
             fi
 
             if has_git_lfs; then
-                (cd "$OMPM_TMP" && git lfs pull 2>/dev/null || true)
+                (cd "$OMP_TMP" && git lfs pull 2>/dev/null || true)
             fi
 
-            if [ ! -d "$OMPM_TMP/packages/coding-agent" ]; then
+            if [ ! -d "$OMP_TMP/packages/coding-agent" ]; then
                 echo "Clone succeeded but packages/coding-agent not found — wrong repo?"
                 exit 1
             fi
 
-            # Atomically replace. From this point a failure leaves OMPM_HOME intact.
-            rm -rf "$OMPM_HOME"
-            mv "$OMPM_TMP" "$OMPM_HOME"
+            # Atomically replace. From this point a failure leaves OMP_HOME intact.
+            rm -rf "$OMP_HOME"
+            mv "$OMP_TMP" "$OMP_HOME"
             trap - EXIT INT TERM  # tmp is gone; nothing left to clean up
         fi
 
@@ -279,10 +279,10 @@ install_via_bun() {
         # Must run from monorepo root so all workspace siblings are resolved.
         # bun install is idempotent; safe to re-run on retry.
         echo "Installing workspace dependencies..."
-        (cd "$OMPM_HOME" && bun install) || {
+        (cd "$OMP_HOME" && bun install) || {
             echo ""
             echo "bun install failed. To retry:"
-            echo "  cd $OMPM_HOME && bun install"
+            echo "  cd $OMP_HOME && bun install"
             exit 1
         }
 
@@ -291,28 +291,28 @@ install_via_bun() {
 
         # ── Wrapper script ──────────────────────────────────────────────────────────
         # Runs cli.ts via bun so node_modules resolution walks up to
-        # $OMPM_HOME/node_modules and finds all workspace siblings.
+        # $OMP_HOME/node_modules and finds all workspace siblings.
         # Handles bun not in PATH by probing known install locations.
         mkdir -p "$INSTALL_DIR"
-        WRAPPER="$INSTALL_DIR/ompm"
+        WRAPPER="$INSTALL_DIR/omp"
         WRAPPER_TMP="${WRAPPER}.tmp.$$"
         # Write atomically via tmp so a half-written wrapper is never executed
         {
             echo '#!/usr/bin/env sh'
-            echo '# ompm — generated by install.sh; do not edit'
-            printf 'OMPM_HOME="%s"\n' "$OMPM_HOME"
+            echo '# omp — generated by install.sh; do not edit'
+            printf 'OMP_HOME="%s"\n' "$OMP_HOME"
             cat << 'WRAPPER_BODY'
 if command -v bun >/dev/null 2>&1; then
     _BUN=bun
 elif [ -x "$HOME/.bun/bin/bun" ]; then
     _BUN="$HOME/.bun/bin/bun"
 else
-    echo "ompm: bun not found — install bun: curl -fsSL https://bun.sh/install | sh" >&2
+    echo "omp: bun not found — install bun: curl -fsSL https://bun.sh/install | sh" >&2
     exit 1
 fi
 exec "$_BUN" \
-    --preload "$OMPM_HOME/packages/coding-agent/src/ipv4-preload.ts" \
-    "$OMPM_HOME/packages/coding-agent/src/cli.ts" \
+    --preload "$OMP_HOME/packages/coding-agent/src/ipv4-preload.ts" \
+    "$OMP_HOME/packages/coding-agent/src/cli.ts" \
     "$@"
 WRAPPER_BODY
         } > "$WRAPPER_TMP"
@@ -327,9 +327,9 @@ WRAPPER_BODY
     fi
 
     echo ""
-    echo "✓ Installed ompm to $INSTALL_DIR/ompm"
+    echo "✓ Installed omp to $INSTALL_DIR/omp"
     setup_path
-    echo "Run 'ompm' to get started!"
+    echo "Run 'omp' to get started!"
 }
 
 # Install binary from GitHub releases
@@ -377,8 +377,8 @@ install_binary() {
     # Download binary
     BINARY_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY}"
     echo "Downloading ${BINARY}..."
-    curl -fsSL "$BINARY_URL" -o "${INSTALL_DIR}/ompm"
-    chmod +x "${INSTALL_DIR}/ompm"
+    curl -fsSL "$BINARY_URL" -o "${INSTALL_DIR}/omp"
+    chmod +x "${INSTALL_DIR}/omp"
     downloaded_native=0
     if [ "$ARCH" = "x64" ]; then
         for variant in modern baseline; do
@@ -399,13 +399,13 @@ install_binary() {
         downloaded_native=1
     fi
     echo ""
-    echo "✓ Installed ompm to ${INSTALL_DIR}/ompm"
+    echo "✓ Installed omp to ${INSTALL_DIR}/omp"
     echo "✓ Installed ${downloaded_native} native addon file(s) to ${INSTALL_DIR}"
 
     # Check if in PATH
     case ":$PATH:" in
-        *":$INSTALL_DIR:"*) echo "Run 'ompm' to get started!" ;;
-        *) echo "Add ${INSTALL_DIR} to your PATH, then run 'ompm'" ;;
+        *":$INSTALL_DIR:"*) echo "Run 'omp' to get started!" ;;
+        *) echo "Add ${INSTALL_DIR} to your PATH, then run 'omp'" ;;
     esac
 }
 
