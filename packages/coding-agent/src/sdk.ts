@@ -474,7 +474,7 @@ function registerPythonCleanup(): void {
 	postmortem.register("python-cleanup", disposeAllKernelSessions);
 }
 
-function customToolToDefinition(tool: CustomTool): ToolDefinition {
+export function customToolToDefinition(tool: CustomTool): ToolDefinition {
 	const definition: ToolDefinition & { [TOOL_DEFINITION_MARKER]: true } = {
 		name: tool.name,
 		label: tool.label,
@@ -484,6 +484,7 @@ function customToolToDefinition(tool: CustomTool): ToolDefinition {
 		deferrable: tool.deferrable,
 		mcpServerName: tool.mcpServerName,
 		mcpToolName: tool.mcpToolName,
+		mergeCallAndResult: tool.mergeCallAndResult,
 		execute: (toolCallId, params, signal, onUpdate, ctx) =>
 			tool.execute(toolCallId, params, onUpdate, createCustomToolContext(ctx), signal),
 		onSession: tool.onSession ? (event, ctx) => tool.onSession?.(event, createCustomToolContext(ctx)) : undefined,
