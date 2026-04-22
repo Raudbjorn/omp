@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { _resetSettingsForTest, Settings } from "../../src/config/settings";
 import { getThemeByName, type Theme } from "../../src/modes/theme/theme";
 import { renderSearchCall, renderSearchResult, type SearchRenderDetails } from "../../src/web/search/render";
 import type { SearchResponse } from "../../src/web/search/types";
@@ -148,6 +149,41 @@ describe("web search render — compact mode (verbose=false)", () => {
 			expect(summaryLine).toBeDefined();
 			expect(headerLine).not.toBe(summaryLine);
 		});
+	});
+});
+
+describe("web search render — verbose mode (verbose=true)", () => {
+	let theme: Theme | undefined;
+
+	beforeEach(async () => {
+		theme = await getThemeByName("dark");
+		_resetSettingsForTest();
+		await Settings.init({ inMemory: true, overrides: { "web_search.verbose": true } });
+	});
+
+	afterEach(() => {
+		_resetSettingsForTest();
+	});
+
+	it("renderSearchCall renders the bordered status line when verbose=true", () => {
+		const component = renderSearchCall({ query: "FFIV stock price" }, { expanded: false, isPartial: false }, theme!);
+		const text = stripAnsi(component.render(100).join("\n"));
+		expect(text).not.toContain('Web Search("FFIV stock price")');
+		expect(text).toContain("Web Search");
+		expect(text).toContain("FFIV stock price");
+	});
+
+	it("renderSearchResult shows provider, sources, and metadata panels when verbose=true", () => {
+		const response = makeSearchResponse({ durationMs: 3200 });
+		const component = renderSearchResult(makeResult(response), { expanded: false, isPartial: false }, theme!, {
+			query: "FFIV stock price",
+		});
+		const text = stripAnsi(component.render(100).join("\n"));
+		expect(text).toContain("Provider:");
+		expect(text).toContain("Sources:");
+		expect(text).toContain("Answer");
+		expect(text).toContain("Metadata");
+		expect(text).not.toContain("Did 1 search in 3s");
 	});
 });
 
