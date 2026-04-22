@@ -103,7 +103,11 @@ export class ToolBridgeServer {
 						);
 						const textBlocks = result.content.filter(c => c.type === "text");
 						const content = textBlocks.length > 0 ? textBlocks.map(c => c.text).join("\n") : "";
-						return Response.json({ content, isError: false });
+						// Propagate the tool's own isError flag (lives on details for tools like
+						// bash/python) so non-throwing errors surface as RuntimeError in the
+						// Python worker instead of silently succeeding.
+						const toolError = !!(result.details as { isError?: boolean } | undefined)?.isError;
+						return Response.json({ content, isError: toolError });
 					} catch (err) {
 						// Only treat as abort if the error is an actual abort-type error;
 						// a coincident real error during shutdown should still surface.
