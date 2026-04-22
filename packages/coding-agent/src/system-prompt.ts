@@ -8,6 +8,7 @@ import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
+import { isExtensionDisabled } from "./capability";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import type { SkillsSettings } from "./config/settings";
@@ -336,14 +337,20 @@ export async function loadProjectContextFiles(
 	const result = await loadCapability(contextFileCapability.id, { cwd: resolvedCwd });
 
 	// Convert ContextFile items and preserve depth info
-	const files = result.items.map(item => {
-		const contextFile = item as ContextFile;
-		return {
-			path: contextFile.path,
-			content: contextFile.content,
-			depth: contextFile.depth,
-		};
-	});
+	const files = result.items
+		.filter(item => {
+			const cf = item as ContextFile;
+			const filename = cf.path.split("/").pop() || cf.path;
+			return !isExtensionDisabled(`context-file:${cf.level}:${filename}`);
+		})
+		.map(item => {
+			const contextFile = item as ContextFile;
+			return {
+				path: contextFile.path,
+				content: contextFile.content,
+				depth: contextFile.depth,
+			};
+		});
 
 	// Sort by depth (descending): higher depth (farther from cwd) comes first,
 	// so files closer to cwd appear later and are more prominent

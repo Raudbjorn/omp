@@ -26,7 +26,7 @@ export type ExtensionState = "active" | "disabled" | "shadowed";
 /**
  * Reason why an extension is disabled.
  */
-export type DisabledReason = "provider-disabled" | "item-disabled" | "shadowed";
+export type DisabledReason = "provider-disabled" | "item-disabled" | "item-disabled-project" | "shadowed";
 
 /**
  * Unified extension representation for the dashboard.
@@ -57,8 +57,18 @@ export interface Extension {
 	state: ExtensionState;
 	/** Reason for disabled state */
 	disabledReason?: DisabledReason;
+	/** Disable scope: global (config.yml) or project (.omp/settings.json) */
+	disableScope?: "global" | "project";
 	/** If shadowed, what shadows it */
 	shadowedBy?: string;
+	/** Whether this extension is in the global disabledExtensions list */
+	isGlobalDisabled: boolean;
+	/** Whether this extension is in the project projectDisabledExtensions list */
+	isProjectDisabled: boolean;
+	/** Whether this extension is restricted to a specific project */
+	isRestricted: boolean;
+	/** Project path this extension is restricted to (if restricted) */
+	restrictedToProject?: string;
 	/** Raw item data for inspector */
 	raw: unknown;
 }

@@ -26,7 +26,7 @@ import {
 import chalk from "chalk";
 import { AsyncJobManager, isBackgroundJobSupportEnabled } from "./async";
 import { createAutoresearchExtension } from "./autoresearch";
-import { loadCapability } from "./capability";
+import { isExtensionDisabled, loadCapability } from "./capability";
 import { type Rule, ruleCapability } from "./capability/rule";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelString, parseModelPattern, parseModelString, resolveModelRoleValue } from "./config/model-resolver";
@@ -683,7 +683,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const settings = options.settings ?? (await logger.time("settings", Settings.init, { cwd, agentDir }));
 	logger.time("initializeWithSettings");
-	initializeWithSettings(settings);
+	initializeWithSettings(settings, cwd);
 	if (!options.modelRegistry) {
 		modelRegistry.refreshInBackground();
 	}
@@ -839,6 +839,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			options.rules !== undefined
 				? { items: options.rules, warnings: undefined }
 				: await loadCapability<Rule>(ruleCapability.id, { cwd });
+		rulesResult.items = rulesResult.items.filter(rule => !isExtensionDisabled(`rule:${rule.name}`));
 		const rulebookRules: Rule[] = [];
 		const alwaysApplyRules: Rule[] = [];
 		for (const rule of rulesResult.items) {

@@ -39,6 +39,18 @@ const providerMeta = new Map<string, { displayName: string; description: string 
 /** Disabled providers (by ID) */
 const disabledProviders = new Set<string>();
 
+/** Disabled extensions (by ID, e.g. "skill:brainstorming") */
+const disabledExtensions = new Set<string>();
+
+/** Project-scoped disabled extensions (by ID) */
+const projectDisabledExtensions = new Set<string>();
+
+/** Restricted extensions: extensionId → projectPath */
+const restrictedExtensions = new Map<string, string>();
+
+/** Current project path for restriction checks */
+let currentProjectPath: string | null = null;
+
 /** Settings manager for persistence (if set) */
 let settings: Settings | null = null;
 
@@ -248,7 +260,7 @@ export async function loadCapability<T>(capabilityId: string, options: LoadOptio
  * Initialize capability system with settings manager for persistence.
  * Call this once on startup to enable persistent provider state.
  */
-export function initializeWithSettings(activeSettings: Settings): void {
+export function initializeWithSettings(activeSettings: Settings, cwd?: string): void {
 	settings = activeSettings;
 	// Load disabled providers from settings
 	const disabled = settings.get("disabledProviders");
@@ -256,6 +268,14 @@ export function initializeWithSettings(activeSettings: Settings): void {
 	for (const id of disabled) {
 		disabledProviders.add(id);
 	}
+	// Load disabled extensions from settings
+	const globalDisabled = (settings.get("disabledExtensions") as string[]) ?? [];
+	const projectDisabled = (settings.getProject("projectDisabledExtensions") as string[] | undefined) ?? [];
+	setDisabledExtensions(globalDisabled, projectDisabled);
+	// Load restricted extensions from global settings
+	const restrictions = (settings.get("restrictedExtensions") as Record<string, string>) ?? {};
+	const projectPath = cwd ?? process.cwd();
+	setRestrictedExtensions(restrictions, projectPath);
 }
 
 /**
@@ -306,6 +326,54 @@ export function setDisabledProviders(providerIds: string[]): void {
 		disabledProviders.add(id);
 	}
 	persistDisabledProviders();
+}
+
+/**
+ * Check if an extension is disabled (globally, project-scoped, or restricted to another project).
+ */
+export function isExtensionDisabled(extensionId: string): boolean {
+	if (disabledExtensions.has(extensionId)) return true;
+	if (projectDisabledExtensions.has(extensionId)) return true;
+	const restrictedTo = restrictedExtensions.get(extensionId);
+	if (restrictedTo && restrictedTo !== currentProjectPath) return true;
+	return false;
+}
+
+/**
+ * Set disabled extensions from settings.
+ * Called at startup and when dashboard toggles change.
+ */
+export function setDisabledExtensions(globalIds: string[], projectIds: string[]): void {
+	disabledExtensions.clear();
+	for (const id of globalIds) disabledExtensions.add(id);
+	projectDisabledExtensions.clear();
+	for (const id of projectIds) projectDisabledExtensions.add(id);
+}
+
+/**
+ * Set restricted extensions from global settings.
+ * Restricted extensions are active only in their designated project.
+ */
+export function setRestrictedExtensions(restrictions: Record<string, string>, cwd: string): void {
+	restrictedExtensions.clear();
+	for (const [id, projectPath] of Object.entries(restrictions)) {
+		restrictedExtensions.set(id, projectPath);
+	}
+	currentProjectPath = cwd;
+}
+
+/**
+ * Check if an extension is restricted to a specific project.
+ */
+export function isExtensionRestricted(extensionId: string): boolean {
+	return restrictedExtensions.has(extensionId);
+}
+
+/**
+ * Get the project path an extension is restricted to.
+ */
+export function getExtensionRestriction(extensionId: string): string | undefined {
+	return restrictedExtensions.get(extensionId);
 }
 
 // =============================================================================
