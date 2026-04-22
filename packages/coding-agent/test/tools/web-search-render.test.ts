@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { getThemeByName } from "../../src/modes/theme/theme";
+import { getThemeByName, type Theme } from "../../src/modes/theme/theme";
 import { renderSearchCall, renderSearchResult, type SearchRenderDetails } from "../../src/web/search/render";
 import type { SearchResponse } from "../../src/web/search/types";
 
@@ -34,7 +34,7 @@ function stripAnsi(str: string): string {
 }
 
 describe("web search render — compact mode (verbose=false)", () => {
-	let theme: Awaited<ReturnType<typeof getThemeByName>>;
+	let theme: Theme | undefined;
 
 	beforeEach(async () => {
 		theme = await getThemeByName("dark");
@@ -152,7 +152,7 @@ describe("web search render — compact mode (verbose=false)", () => {
 });
 
 describe("web search render — default behavior without Settings", () => {
-	let theme: Awaited<ReturnType<typeof getThemeByName>>;
+	let theme: Theme | undefined;
 
 	beforeEach(async () => {
 		theme = await getThemeByName("dark");
