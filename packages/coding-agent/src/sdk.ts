@@ -34,7 +34,32 @@ import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import "./discovery";
+import * as path from "node:path";
 import { resolveConfigValue } from "./config/resolve-config-value";
+import {
+	deriveBudget,
+	estimateMessageTokens,
+	estimateToolDefinitionTokens,
+	segmentIntoTurns,
+	type TransformMetadata,
+	transformMessages,
+} from "./context/assembler";
+import { dedupCodec, readCodec, warmCodec } from "./context/assembler/codecs";
+import { formatAssemblySummary } from "./context/assembly-summary";
+import { ToolResultBridge } from "./context/bridge";
+import { captureEffectivePromptSnapshot, type EffectivePromptSnapshot } from "./context/effective-prompt-snapshot";
+import { extractPaths } from "./context/extract-paths";
+import {
+	extractAssistantText,
+	extractPathsFromText,
+	extractUserText,
+	formatHydratedContext,
+	IngestPipeline,
+	PassiveHydrator,
+	RecallStore,
+	resolveMemexLicense,
+} from "./context/recall";
+import { ToolResultStore } from "./context/recall/tool-result-store";
 import { dangerPiBundledExtensions } from "./danger-pi/extensions";
 import { initializeWithSettings } from "./discovery";
 import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./eval/py/executor";
@@ -86,6 +111,8 @@ import {
 } from "./mcp/discoverable-tool-metadata";
 import { getMemoryRoot } from "./memories";
 import { resolveMemoryBackend } from "./memory-backend";
+import { compileSystemPrompt } from "./prompts/composer/compile";
+import composerInvariants from "./prompts/composer/invariants.md" with { type: "text" };
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
@@ -258,6 +285,10 @@ export interface CreateAgentSessionResult {
 	lspServers?: LspStartupServerInfo[];
 	/** Shared event bus for tool/extension communication */
 	eventBus: EventBus;
+	/** Assembler tool-result bridge (undefined in legacy context-manager mode). */
+	assemblerBridge?: ToolResultBridge;
+	/** Snapshot of the most recently assembled prompt, or null if none captured yet. */
+	getLastPromptSnapshot?: () => EffectivePromptSnapshot | null;
 }
 
 // Re-exports
@@ -975,6 +1006,41 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		options.agentDisplayName ?? ((options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main");
 	const evalKernelOwnerId = `agent-session:${Snowflake.next()}`;
 
+	// Initialize recall store early so the recall tool can be created during tool setup.
+	// Both the recall tool and ingest pipeline share the same store instance.
+	let recallStore: RecallStore | undefined;
+	let memexLicense: string | undefined;
+	try {
+		memexLicense = await resolveMemexLicense();
+		recallStore = await RecallStore.open({
+			agentDir,
+			sessionId: sessionManager.getSessionId(),
+		});
+		postmortem.register("recall-store-close", () => recallStore?.close());
+		logger.debug("RecallStore initialized for recall tool + ingest pipeline");
+	} catch (err) {
+		// No memex license or LanceDB init failure — recall is optional.
+		logger.debug("Recall infrastructure not available", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+		recallStore = undefined;
+		memexLicense = undefined;
+	}
+
+	// Initialize FTS5 tool result store for keyword search over past tool results.
+	let toolResultStore: ToolResultStore | undefined;
+	try {
+		toolResultStore = ToolResultStore.open(path.join(agentDir, "tool-results.db"));
+		toolResultStore.cleanup(30 * 24 * 60 * 60 * 1000); // 30 days
+		postmortem.register("tool-result-store-close", () => toolResultStore?.close());
+		logger.debug("ToolResultStore initialized");
+	} catch (err) {
+		logger.debug("ToolResultStore not available", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+		toolResultStore = undefined;
+	}
+
 	try {
 		const getActiveModelString = (): string | undefined => {
 			const activeModel = agent?.state.model;
@@ -1050,6 +1116,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			authStorage,
 			modelRegistry,
 			asyncJobManager,
+			recallStore,
+			toolResultStore,
+			memexLicense,
 		};
 
 		// Initialize internal URL router for internal protocols (agent://, artifact://, memory://, skill://, rule://, mcp://, local://)
@@ -1418,8 +1487,97 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				agentsMdSearch: agentsMdSearchPromise,
 			});
 
-			if (options.systemPrompt === undefined) {
-				return defaultPrompt;
+			const applySystemPromptOverride = async (basePrompt: string): Promise<string> => {
+				if (options.systemPrompt === undefined) {
+					return basePrompt;
+				}
+				if (typeof options.systemPrompt === "string") {
+					return await buildSystemPromptInternal({
+						cwd,
+						skills,
+						contextFiles,
+						tools: promptTools,
+						toolNames,
+						rules: rulebookRules,
+						alwaysApplyRules,
+						skillsSettings: settings.getGroup("skills"),
+						customPrompt: options.systemPrompt,
+						appendSystemPrompt: appendPrompt,
+						repeatToolDescriptions,
+						intentField,
+						mcpDiscoveryMode: hasDiscoverableMCPTools,
+						mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(
+							formatDiscoverableMCPToolServerSummary,
+						),
+						eagerTasks,
+						secretsEnabled,
+					});
+				}
+				return options.systemPrompt(basePrompt);
+			};
+
+			// If composer is enabled, compile the system prompt with an LLM. Falls back
+			// to the default static template on failure (or missing API key / model).
+			if (settings.get("composer.enabled")) {
+				try {
+					const toolInfo = toolNames.map(name => ({
+						name,
+						label: promptTools.get(name)?.label ?? name,
+						description: promptTools.get(name)?.description ?? "",
+					}));
+					const activeComposerModel = agent?.state.model ?? model;
+					if (!activeComposerModel) {
+						throw new Error("composer: no active session model available");
+					}
+					if (options.hasUI && !agent) {
+						process.stderr.write(
+							`${chalk.gray(`Building session prompt with ${activeComposerModel.provider}/${activeComposerModel.id}…`)}\n`,
+						);
+					}
+
+					const composerApiKey = await modelRegistry.getApiKey(activeComposerModel, providerSessionId);
+					if (!composerApiKey) {
+						throw new Error(
+							`composer: no session auth available for ${activeComposerModel.provider}/${activeComposerModel.id}`,
+						);
+					}
+
+					const result = await compileSystemPrompt({
+						model: activeComposerModel,
+						apiKey: composerApiKey,
+						inventory: {
+							tools: toolInfo,
+							editMode: String(settings.get("edit.mode") ?? "hashline"),
+							skills: skills.map(s => ({
+								name: s.name,
+								description: (s as { frontmatter?: { description?: string } }).frontmatter?.description ?? "",
+							})),
+							environment: [
+								{ label: "OS", value: `${process.platform} ${process.arch}` },
+								{ label: "CWD", value: cwd },
+							],
+							intentField,
+							cwd,
+						},
+						contextFiles: contextFiles.map(f => `## ${f.path}\n${f.content}`).join("\n\n"),
+						invariants: composerInvariants,
+						tokenBudget: Number(settings.get("composer.tokenBudget") ?? 24000),
+					});
+
+					logger.debug("composer: using compiled system prompt", {
+						model: result.modelId,
+						durationMs: result.durationMs,
+						cacheHit: result.cacheHit,
+						length: result.systemPrompt.length,
+					});
+
+					return await applySystemPromptOverride(result.systemPrompt);
+				} catch (err) {
+					logger.warn("composer: falling back to static template", {
+						error: err instanceof Error ? err.message : String(err),
+						stack: err instanceof Error ? err.stack : undefined,
+					});
+				}
 			}
 			if (typeof options.systemPrompt === "string") {
 				return await buildSystemPromptInternal({
@@ -1558,11 +1716,292 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (!obfuscator?.hasSecrets()) return converted;
 			return obfuscateMessages(obfuscator, converted);
 		};
-		const transformContext = extensionRunner
-			? async (messages: AgentMessage[], _signal?: AbortSignal) => {
-					return await extensionRunner.emitContext(messages);
-				}
+		// Pre-create the tool-result bridge so it's available to transformContext.
+		// Event subscription stays local to sdk.ts — AgentSession wiring lives in a
+		// follow-up commit.
+		const assemblerBridge = new ToolResultBridge();
+
+		// Initialize recall ingest pipeline and passive hydrator.
+		// Reuses the RecallStore + license initialized earlier (before tool creation).
+		let ingestPipeline: IngestPipeline | undefined;
+		let passiveHydrator: PassiveHydrator | undefined;
+		if (recallStore && memexLicense) {
+			ingestPipeline = new IngestPipeline({
+				store: recallStore,
+				toolResultStore,
+				license: memexLicense,
+				sessionId: sessionManager.getSessionId(),
+				projectCwd: cwd,
+			});
+			passiveHydrator = new PassiveHydrator({
+				store: recallStore,
+				toolResultStore,
+				license: memexLicense,
+				projectCwd: cwd,
+				sessionId: sessionManager.getSessionId(),
+			});
+			logger.debug("Recall pipeline initialized (ingest + passive hydration)");
+		}
+
+		// Build per-turn context transformer.
+		// Gated by `contextManager.mode`: "legacy" keeps the extensions-only pipeline,
+		// "shadow"/"assembler" enable transform + passive hydration + effective-prompt
+		// snapshot capture. Extensions transform is composed when available.
+		let lastPromptSnapshot: EffectivePromptSnapshot | null = null;
+		const contextManagerMode = settings.get("contextManager.mode") ?? "legacy";
+		const assemblerActive = contextManagerMode !== "legacy";
+
+		const extensionTransform = extensionRunner
+			? async (messages: AgentMessage[]) => extensionRunner.emitContext(messages)
 			: undefined;
+
+		const transformContext: ((messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>) | undefined =
+			assemblerActive
+				? (() => {
+						const sessionId = sessionManager.getSessionId();
+						const hotWindowTurns = Number(settings.get("assembler.hotWindowTurns") ?? 4);
+						const contextWindowCap = Number(settings.get("assembler.contextWindowCap") ?? 200_000);
+						const safetyMarginPercent = Number(settings.get("assembler.safetyMarginPercent") ?? 5);
+						const messageBudgetPercent = Number(settings.get("assembler.messageBudgetPercent") ?? 50);
+						const hydrationBudgetPercent = Number(settings.get("assembler.hydrationBudgetPercent") ?? 50);
+						const turnBufferPercent = Number(settings.get("assembler.turnBufferPercent") ?? 20);
+
+						const resolveToolResultStub = (message: { toolName?: string; toolCallId?: string }) =>
+							assemblerBridge.getToolResultStubPointer(message.toolName, message.toolCallId);
+
+						// Order matters: dedup → read → warm (catch-all).
+						const codecs = [dedupCodec, readCodec, warmCodec];
+
+						const assemblerTransform = async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
+							// Derive budget from current model context window + measured costs each turn.
+							const currentModel = agent?.state.model;
+							const currentSystemPrompt = agent?.state.systemPrompt ?? "";
+							const currentTools = agent?.state.tools ?? [];
+							const modelWindow = currentModel?.contextWindow ?? 0;
+							const assembledContextWindow =
+								contextWindowCap > 0 ? Math.min(modelWindow, contextWindowCap) : modelWindow;
+
+							// Step 1: Apply message transform (hot window + content replacement).
+							const firstPass = transformMessages(messages, {
+								hotWindowTurns,
+								resolveToolResultStub,
+								codecs,
+							});
+							const transformedMessages = firstPass.messages;
+
+							const budget = currentModel
+								? deriveBudget({
+										contextWindow: assembledContextWindow,
+										modelContextWindow: modelWindow,
+										systemPromptTokens: Math.ceil(currentSystemPrompt.length / 4),
+										toolDefinitionTokens: estimateToolDefinitionTokens(currentTools),
+										currentTurnTokens: 0,
+										safetyMarginPercent,
+										messageBudgetPercent,
+										hydrationBudgetPercent,
+										turnBufferPercent,
+									})
+								: undefined;
+
+							// Step 2: Run passive hydration (embed hot window -> cache check -> search -> MMR).
+							const hydration = passiveHydrator
+								? await passiveHydrator.hydrate(messages)
+								: { text: null, results: [], cacheHit: false, durationMs: 0 };
+
+							logger.debug("assembler:passive-hydration", {
+								resultCount: hydration.results.length,
+								cacheHit: hydration.cacheHit,
+								durationMs: Math.round(hydration.durationMs),
+							});
+
+							// Step 3: Enforce hydration cap at entry level.
+							let cappedResults = hydration.results;
+							let hydratedText = hydration.text;
+							let hydratedTokens = hydratedText
+								? estimateMessageTokens([{ role: "developer", content: hydratedText }])
+								: 0;
+
+							if (budget && hydratedTokens > budget.hydrationBudgetMax && cappedResults.length > 0) {
+								const remaining = [...cappedResults];
+								while (remaining.length > 0) {
+									const candidateText = formatHydratedContext(remaining, sessionId);
+									const candidateTokens = candidateText
+										? estimateMessageTokens([{ role: "developer", content: candidateText }])
+										: 0;
+									if (candidateTokens <= budget.hydrationBudgetMax) break;
+									remaining.pop();
+								}
+
+								if (remaining.length < cappedResults.length) {
+									logger.debug("assembler:hydration-cap-enforced", {
+										originalEntries: cappedResults.length,
+										survivingEntries: remaining.length,
+										hydrationBudgetMax: budget.hydrationBudgetMax,
+									});
+									cappedResults = remaining;
+									hydratedText = remaining.length > 0 ? formatHydratedContext(remaining, sessionId) : null;
+									hydratedTokens = hydratedText
+										? estimateMessageTokens([{ role: "developer", content: hydratedText }])
+										: 0;
+								}
+							}
+
+							// Step 3b: Compute semantic relevance scores for conversation compression.
+							let relevanceScores: Map<number, number> | undefined;
+							if (passiveHydrator && recallStore) {
+								const hotEmbedding = passiveHydrator.lastEmbedding;
+								if (hotEmbedding) {
+									try {
+										const turns = segmentIntoTurns(messages);
+										const hotStart = Math.max(0, turns.length - hotWindowTurns);
+										const candidates: Array<{ turnIdx: number; text: string }> = [];
+										for (let i = 0; i < hotStart; i++) {
+											if (turns[i].hasToolResults) continue;
+											const msg = turns[i].messages[0];
+											if (!msg) continue;
+											const content = (msg as { content?: unknown }).content;
+											let turnText: string;
+											if (msg.role === "user" || msg.role === "developer") {
+												turnText = extractUserText(content as Parameters<typeof extractUserText>[0]);
+											} else if (msg.role === "assistant") {
+												turnText = extractAssistantText(content as Parameters<typeof extractAssistantText>[0]);
+											} else {
+												continue;
+											}
+											if (turnText) candidates.push({ turnIdx: i, text: turnText });
+										}
+
+										if (candidates.length > 0) {
+											const sessionFilter = `session_id = '${sessionId.replace(/'/g, "''")}'`;
+											const searchResults = await recallStore.search(
+												Array.from(hotEmbedding),
+												Math.min(candidates.length * 3, 500),
+												sessionFilter,
+											);
+
+											if (searchResults.length > 0) {
+												const textSimilarity = new Map<string, number>();
+												for (const result of searchResults) {
+													if (!textSimilarity.has(result.text)) {
+														const sim = 1 / (1 + result._distance);
+														textSimilarity.set(result.text, sim);
+													}
+												}
+												relevanceScores = new Map();
+												for (const candidate of candidates) {
+													const sim = textSimilarity.get(candidate.text);
+													if (sim !== undefined) {
+														relevanceScores.set(candidate.turnIdx, sim);
+													}
+												}
+												logger.debug("assembler:relevance-scores", {
+													candidates: candidates.length,
+													searchResults: searchResults.length,
+													scored: relevanceScores.size,
+												});
+											}
+										}
+									} catch (err) {
+										logger.debug("assembler:relevance-scoring-failed", { error: String(err) });
+									}
+								}
+							}
+
+							// Step 4: Compute elastic message budget.
+							let maxMessageTokens: number | undefined;
+							if (budget) {
+								const effectiveBudget = Math.max(budget.messageBudgetMin, budget.maxTokens - hydratedTokens);
+								maxMessageTokens = effectiveBudget;
+							}
+
+							let boundedMessages: AgentMessage[];
+							let finalTransformMetadata: TransformMetadata;
+							if (maxMessageTokens !== undefined) {
+								const boundedPass = transformMessages(messages, {
+									maxTokens: maxMessageTokens,
+									hotWindowTurns,
+									resolveToolResultStub,
+									codecs,
+									relevanceScores,
+								});
+								boundedMessages = boundedPass.messages;
+								finalTransformMetadata = boundedPass.metadata;
+							} else {
+								boundedMessages = transformedMessages;
+								finalTransformMetadata = firstPass.metadata;
+							}
+
+							if (budget) {
+								logger.debug("assembler:budget-derivation", {
+									contextWindow: assembledContextWindow,
+									allocatable: budget.maxTokens,
+									hydrationBudgetMax: budget.hydrationBudgetMax,
+									messageBudgetMin: budget.messageBudgetMin,
+									actualHydratedTokens: hydratedTokens,
+									effectiveMessageBudget: maxMessageTokens,
+									messageTokensAfterTransform: finalTransformMetadata.tokensAfter,
+									hydratedEntries: cappedResults.length,
+								});
+							}
+
+							// Step 6: Inject hydrated context as developer message.
+							const finalMessages: AgentMessage[] = hydratedText
+								? [
+										{
+											role: "developer" as const,
+											content: hydratedText,
+											attribution: "agent" as const,
+											timestamp: Date.now(),
+										} satisfies AgentMessage,
+										...boundedMessages,
+									]
+								: boundedMessages;
+
+							// Step 7: Capture effective-prompt snapshot.
+							const turnId = `turn-${Date.now()}`;
+							lastPromptSnapshot = captureEffectivePromptSnapshot({
+								turnId,
+								model: currentModel,
+								systemPrompt: currentSystemPrompt,
+								tools: currentTools,
+								finalMessages,
+								transformMetadata: finalTransformMetadata,
+								assemblerPacket: null,
+								assemblerBudget: budget ?? null,
+							});
+
+							// Step 8: Inject assembly summary as developer message (observability).
+							const summary = formatAssemblySummary(lastPromptSnapshot);
+							if (summary) {
+								return [
+									{
+										role: "developer" as const,
+										content: summary,
+										attribution: "agent" as const,
+										timestamp: Date.now(),
+									} satisfies AgentMessage,
+									...finalMessages,
+								];
+							}
+
+							return finalMessages;
+						};
+
+						// Compose: extensions first, then assembler.
+						const innerTransform = extensionTransform
+							? async (msgs: AgentMessage[]) => assemblerTransform(await extensionTransform(msgs))
+							: assemblerTransform;
+
+						return async (messages: AgentMessage[], _signal?: AbortSignal) => innerTransform(messages);
+					})()
+				: extensionTransform
+					? async (messages: AgentMessage[], _signal?: AbortSignal) => extensionTransform(messages)
+					: undefined;
+
+		// Silence unused-import warnings for symbols reserved for arc 4d (ingest + path extraction).
+		void ingestPipeline;
+		void extractPaths;
+		void extractPathsFromText;
 		const onPayload = extensionRunner
 			? async (payload: unknown, _model?: Model) => {
 					return await extensionRunner.emitBeforeProviderRequest(payload);
@@ -1867,6 +2306,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			modelFallbackMessage,
 			lspServers,
 			eventBus,
+			assemblerBridge: assemblerActive ? assemblerBridge : undefined,
+			getLastPromptSnapshot: () => lastPromptSnapshot,
 		};
 	} catch (error) {
 		try {
