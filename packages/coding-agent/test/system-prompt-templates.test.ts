@@ -186,6 +186,27 @@ describe("system Handlebars prompt templates", () => {
 		expect(withoutInspectImage).not.toContain("### Image inspection");
 	});
 
+	test("system-prompt carries epistemic-integrity clause against sycophantic reversal", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+		expect(template).toContain("<epistemic-integrity>");
+		expect(template).toContain("optimized for truth-seeking, not agreement");
+		expect(template).toContain("Position reversal requires new information");
+		expect(template).toContain("The user is not the arbiter of facts");
+		expect(template).toContain(
+			"reverse a correct claim because the user restated their disagreement without new evidence",
+		);
+	});
+
+	test("system-prompt carries epistemic-integrity voice stance and anti-repetition meta-line", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+		expect(template).toContain("diplomatically honest rather than dishonestly diplomatic");
+		expect(template).toContain("Epistemic cowardice");
+		expect(template).toContain("fails the user twice");
+		expect(template).toContain("let the specific evidence shape the opening");
+	});
+
 	test("system-prompt renders MCP discovery hint when enabled", async () => {
 		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
 		const template = await Bun.file(templatePath).text();
