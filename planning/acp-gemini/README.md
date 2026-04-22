@@ -83,6 +83,42 @@ Selecting a `gemini-2.5-pro` model inside an omp session streams a
 full turn — including at least one tool call that invokes the fs-proxy
 — to the user, and cleanly shuts down the child on session end.
 
+## Debugging
+
+When something in the ACP stack misbehaves, the fastest path to a
+useful trace is to set both of these together:
+
+```bash
+GEMINI_CLI_ACP_TRACE=1 gemini --debug --experimental-acp
+```
+
+- `GEMINI_CLI_ACP_TRACE=1` — turns on verbose wire logging inside
+  omp's `packages/ai/src/providers/acp` module. Outbound/inbound
+  JSON-RPC frames, stop reasons, and child lifecycle transitions go
+  to stderr at DEBUG level.
+- `gemini --debug` — asks the Gemini CLI itself to emit extra
+  diagnostics (tool-call dispatch, credential resolution, internal
+  state). Pairs with `--experimental-acp` without interfering.
+
+For a concrete reference of what a healthy session looks like on the
+wire — including the exact `initialize` / `session/new` /
+`session/prompt` / `session/update` / shutdown frames — read
+[`wire-trace.md`](./wire-trace.md). Anyone extending this module
+(adding another CLI adapter, mapping a new `session/update` variant,
+debugging a hang) should start there.
+
+Smoke test against a real, authenticated Gemini CLI:
+
+```bash
+cd packages/ai
+GEMINI_SMOKE=1 bun scripts/smoke-gemini-acp.ts "Say hi."
+# or with tracing on:
+GEMINI_SMOKE=1 GEMINI_CLI_ACP_TRACE=1 bun scripts/smoke-gemini-acp.ts
+```
+
+The smoke script is gated by `GEMINI_SMOKE=1` so it never runs in
+unattended CI.
+
 ## Lineage vs the old unified plan
 
 The previous single `planning/` tree tried to cover all four CLIs at
