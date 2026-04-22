@@ -92,41 +92,12 @@ jobs:
           fi
 
       # Re-apply fork identity on the sync branch so upstream can't wipe our
-      # ompm rename or REPO pin. Runs before Summarize/PR creation so the
-      # resulting PR contains a clean, identity-preserving merge.
+      # REPO pin. Runs before Summarize/PR creation so the resulting PR
+      # contains a clean, identity-preserving merge.
       - name: Re-apply fork identity
         if: steps.delta.outputs.ahead != '0'
         run: |
-          # APP_NAME + CONFIG_DIR_NAME — upstream says "omp"/".omp"; fork needs "ompm"/".ompm"
-          sed -i \
-            -e 's/export const APP_NAME: string = "omp";/export const APP_NAME: string = "ompm";/' \
-            -e 's/export const CONFIG_DIR_NAME: string = "\.omp";/export const CONFIG_DIR_NAME: string = ".ompm";/' \
-            packages/utils/src/dirs.ts
-
-          # install.sh REPO pin
           sed -i 's|^REPO="can1357/oh-my-pi"|REPO="Raudbjorn/omp"|' scripts/install.sh
-
-          # bin name in coding-agent package.json
-          python3 - <<'PY'
-          import json, pathlib
-          p = pathlib.Path('packages/coding-agent/package.json')
-          d = json.loads(p.read_text())
-          bins = d.get('bin') or {}
-          if 'omp' in bins and 'ompm' not in bins:
-              bins['ompm'] = bins.pop('omp')
-              d['bin'] = bins
-              p.write_text(json.dumps(d, indent='\t') + '\n')
-          PY
-
-          # User-facing command strings
-          sed -i 's/Install with: omp plugin install/Install with: ompm plugin install/' \
-            packages/coding-agent/src/modes/components/plugin-settings.ts || true
-          sed -i -e 's/Usage: omp ssh/Usage: ompm ssh/g' \
-                 -e 's/Add one with: omp ssh/Add one with: ompm ssh/g' \
-            packages/coding-agent/src/cli/ssh-cli.ts || true
-          sed -i 's/omp agents unpack/ompm agents unpack/g' \
-            packages/coding-agent/src/cli/args.ts || true
-
           git add -A
           if ! git diff --cached --quiet; then
             git commit -m 'chore(sync): re-apply fork identity after upstream merge'

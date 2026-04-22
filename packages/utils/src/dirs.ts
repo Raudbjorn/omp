@@ -1,7 +1,7 @@
 /**
  * Centralized path helpers for omp config directories.
  *
- * Uses PI_CONFIG_DIR (default ".ompm") for the config root and
+ * Uses PI_CONFIG_DIR (default ".omp") for the config root and
  * PI_CODING_AGENT_DIR to override the agent directory.
  *
  * On Linux, if XDG_DATA_HOME / XDG_STATE_HOME / XDG_CACHE_HOME environment
@@ -16,11 +16,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { engines, version } from "../package.json" with { type: "json" };
 
-/** App name — ompm to coexist with upstream omp if both are installed */
-export const APP_NAME: string = "ompm"; 
+/** App name */
+export const APP_NAME: string = "omp";
 
-/** Config directory name (e.g. ".ompm") */
-export const CONFIG_DIR_NAME: string = ".ompm";
+/** Config directory name (e.g. ".omp") */
+export const CONFIG_DIR_NAME: string = ".omp";
 
 /** Version (e.g. "1.0.0") */
 export const VERSION: string = version;

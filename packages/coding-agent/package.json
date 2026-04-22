@@ -28,7 +28,7 @@
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
 	"bin": {
-		"ompm": "src/cli.ts"
+		"omp": "src/cli.ts"
 	},
 	"scripts": {
 		"build": "bun --cwd=../stats scripts/generate-client-bundle.ts --generate && bun --cwd=../natives run embed:native && bun build --compile --define PI_COMPILED=true --external mupdf --root ../.. ./src/cli.ts --outfile dist/omp && bun --cwd=../natives run embed:native --reset && bun --cwd=../stats scripts/generate-client-bundle.ts --reset",
