@@ -51,3 +51,24 @@ describe("mergeCallAndResult propagation", () => {
 		expect((wrapper as { mergeCallAndResult?: boolean }).mergeCallAndResult).toBe(true);
 	});
 });
+
+describe("renderResult args forwarding", () => {
+	it("customToolToDefinition forwards the 4th args parameter to the underlying tool", () => {
+		let capturedArgs: unknown;
+		const tool = makeCustomTool({
+			renderResult(_result, _options, _theme, args) {
+				capturedArgs = args;
+				return { render: () => [] } as never;
+			},
+		});
+		const definition = customToolToDefinition(tool);
+
+		const fakeResult = { content: [] } as never;
+		const fakeOptions = { expanded: false, isPartial: false } as never;
+		const fakeTheme = {} as never;
+		const fakeArgs = { query: "hello" };
+
+		definition.renderResult?.(fakeResult, fakeOptions, fakeTheme, fakeArgs);
+		expect(capturedArgs).toEqual(fakeArgs);
+	});
+});
