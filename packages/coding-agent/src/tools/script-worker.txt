@@ -45,6 +45,11 @@ except (ValueError, TypeError):
 
 BRIDGE_BASE = f"http://127.0.0.1:{BRIDGE_PORT}"
 
+# Generous per-call ceiling so the worker fails fast if the bridge dies, without
+# interfering with long-running individual tool calls. The parent's overall
+# script-tool timeout is the authoritative budget.
+BRIDGE_REQUEST_TIMEOUT_SECONDS = 600
+
 
 def _bridge_request(path: str, body: Any | None = None) -> Any:
     headers = {"X-Bridge-Token": BRIDGE_SECRET}
@@ -57,7 +62,7 @@ def _bridge_request(path: str, body: Any | None = None) -> Any:
 
     request = urllib.request.Request(f"{BRIDGE_BASE}{path}", data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=BRIDGE_REQUEST_TIMEOUT_SECONDS) as response:
             payload = response.read().decode("utf-8")
             return json.loads(payload)
     except urllib.error.HTTPError as err:
