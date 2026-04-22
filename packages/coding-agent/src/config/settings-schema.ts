@@ -1797,6 +1797,15 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: { tab: "tools", label: "Web Search", description: "Enable the web_search tool for web searching" },
 	},
+	"web_search.verbose": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			label: "Web Search Verbose",
+			description: "Show detailed search panels (sources, metadata, tokens). When disabled, uses compact output.",
+		},
+	},
 
 	"browser.enabled": {
 		type: "boolean",
