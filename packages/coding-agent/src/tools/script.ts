@@ -23,6 +23,7 @@ import { filterEnv, resolvePythonRuntime } from "../ipy/runtime";
 import scriptDescription from "../prompts/tools/script.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, TailBuffer } from "../session/streaming-output";
 import type { ToolSession } from "./index";
+import { replaceTabs } from "./render-utils";
 import { ToolBridgeServer } from "./script-bridge";
 import workerSource from "./script-worker.txt" with { type: "text" };
 import { ToolAbortError } from "./tool-errors";
@@ -146,12 +147,22 @@ export class ScriptTool implements AgentTool<typeof scriptSchema, ScriptToolDeta
 		onUpdate?: AgentToolUpdateCallback<ScriptToolDetails>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<ScriptToolDetails>> {
+		if (signal?.aborted) {
+			throw new ToolAbortError();
+		}
+		this.session.assertPythonExecutionAllowed?.();
+
 		const timeoutMs = (params.timeout ?? 30) * 1000;
 
-		// Combine the parent abort signal with a per-execution timeout
+		// Compose the parent abort signal, per-execution timeout, and a session-level
+		// abort controller so `session.trackPythonExecution` can externally cancel the
+		// subprocess when the session disposes.
 		const timeoutController = new AbortController();
 		const timeoutHandle = setTimeout(() => timeoutController.abort(), timeoutMs);
-		const effectiveSignal = signal ? AbortSignal.any([signal, timeoutController.signal]) : timeoutController.signal;
+		const sessionAbortController = new AbortController();
+		const effectiveSignal = signal
+			? AbortSignal.any([signal, timeoutController.signal, sessionAbortController.signal])
+			: AbortSignal.any([timeoutController.signal, sessionAbortController.signal]);
 
 		// Only expose tools that make sense inside a script
 		const getFilteredTools = () => {
@@ -159,154 +170,160 @@ export class ScriptTool implements AgentTool<typeof scriptSchema, ScriptToolDeta
 			return all.filter(t => !EXCLUDED_TOOLS.has(t.name));
 		};
 
-		const bridge = new ToolBridgeServer();
-		const bridgeSecret = crypto.randomUUID();
-		let tmpFile: string | null = null;
+		const execution = (async (): Promise<AgentToolResult<ScriptToolDetails>> => {
+			const bridge = new ToolBridgeServer();
+			const bridgeSecret = crypto.randomUUID();
+			let tmpFile: string | null = null;
+			let abortListenerAttached = false;
+			let onAbort: (() => void) | undefined;
 
-		try {
-			const bridgePort = bridge.start(getFilteredTools, effectiveSignal, bridgeSecret, context);
-
-			// Write the script code to an isolated temp file
-			tmpFile = path.join(os.tmpdir(), `omp-script-${crypto.randomUUID()}.py`);
-			await Bun.write(tmpFile, params.code);
-			let pythonRuntime: { pythonPath: string; env: Record<string, string | undefined> };
 			try {
-				pythonRuntime = resolvePythonRuntime(this.session.cwd, process.env);
+				const bridgePort = bridge.start(getFilteredTools, effectiveSignal, bridgeSecret, context);
+
+				// Write the script code to an isolated temp file
+				tmpFile = path.join(os.tmpdir(), `omp-script-${crypto.randomUUID()}.py`);
+				await Bun.write(tmpFile, params.code);
+				let pythonRuntime: { pythonPath: string; env: Record<string, string | undefined> };
+				try {
+					pythonRuntime = resolvePythonRuntime(this.session.cwd, process.env);
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					return {
+						content: [{ type: "text", text: replaceTabs(`Script execution failed: ${message}`) }],
+						details: { exitCode: undefined },
+					};
+				}
+
+				await ensureWorkerFile();
+				const child = Bun.spawn([pythonRuntime.pythonPath, WORKER_FILE_PATH], {
+					cwd: this.session.cwd,
+					env: buildSafeEnv(bridgePort, tmpFile, bridgeSecret, pythonRuntime.env),
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+
+				// Kill the child if the effective signal fires (timeout, parent abort, session disposal)
+				onAbort = () => {
+					try {
+						child.kill();
+					} catch {
+						// Already exited — ignore
+					}
+				};
+				effectiveSignal.addEventListener("abort", onAbort, { once: true });
+				abortListenerAttached = true;
+
+				// Stream stdout concurrently with process execution, feeding live previews
+				// through onUpdate (same tail-buffered pattern as bash).
+				const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES);
+				const fullStdoutBuffer = new TailBuffer(DEFAULT_MAX_BYTES * 4);
+				const stdoutDecoder = new TextDecoder();
+
+				const readStdoutStream = async () => {
+					const reader = (child.stdout as ReadableStream<Uint8Array>).getReader();
+					try {
+						while (true) {
+							const { done, value } = await reader.read();
+							if (done) break;
+							const chunk = stdoutDecoder.decode(value, { stream: true });
+							fullStdoutBuffer.append(chunk);
+							tailBuffer.append(chunk);
+							onUpdate?.({
+								content: [{ type: "text", text: replaceTabs(tailBuffer.text()) }],
+								details: { exitCode: undefined },
+							});
+						}
+						const tail = stdoutDecoder.decode();
+						if (tail) {
+							fullStdoutBuffer.append(tail);
+							tailBuffer.append(tail);
+						}
+					} catch {
+						// Stream closed or aborted — ignore
+					} finally {
+						reader.releaseLock();
+					}
+				};
+
+				// Drain stderr concurrently — not doing so allows the OS pipe buffer (~64KB)
+				// to fill and deadlock child.exited if the script writes large errors.
+				const stderrBuffer = new TailBuffer(DEFAULT_MAX_BYTES);
+				const stderrDecoder = new TextDecoder();
+
+				const readStderrStream = async () => {
+					const reader = (child.stderr as ReadableStream<Uint8Array>).getReader();
+					try {
+						while (true) {
+							const { done, value } = await reader.read();
+							if (done) break;
+							stderrBuffer.append(stderrDecoder.decode(value, { stream: true }));
+						}
+						const tail = stderrDecoder.decode();
+						if (tail) stderrBuffer.append(tail);
+					} catch {
+						// Stream closed or aborted — ignore
+					} finally {
+						reader.releaseLock();
+					}
+				};
+
+				const [exitCode] = await Promise.all([child.exited, readStdoutStream(), readStderrStream()]);
+				const stdout = fullStdoutBuffer.text();
+				const stderr = stderrBuffer.text();
+
+				if (signal?.aborted) {
+					throw new ToolAbortError();
+				}
+
+				if (timeoutController.signal.aborted) {
+					return {
+						content: [{ type: "text", text: replaceTabs(`Script timed out after ${params.timeout ?? 30}s`) }],
+						details: { exitCode: undefined },
+					};
+				}
+
+				logger.debug("Script execution complete", { exitCode, stdoutLen: stdout.length });
+
+				if (exitCode !== 0) {
+					const errorText = stderr.trim() || `Script exited with code ${exitCode}`;
+					return {
+						content: [{ type: "text", text: replaceTabs(errorText) }],
+						details: { exitCode, stderr: stderr.trim() || undefined },
+					};
+				}
+
+				return {
+					content: [{ type: "text", text: replaceTabs(stdout.trim() || "(no output)") }],
+					details: {
+						exitCode: 0,
+						stderr: stderr.trim() || undefined,
+					},
+				};
 			} catch (err) {
+				if (err instanceof ToolAbortError) throw err;
+				if (signal?.aborted) throw new ToolAbortError();
 				const message = err instanceof Error ? err.message : String(err);
+				logger.error("Script tool execution failed", { error: message });
 				return {
-					content: [{ type: "text", text: `Script execution failed: ${message}` }],
+					content: [{ type: "text", text: replaceTabs(`Script execution failed: ${message}`) }],
 					details: { exitCode: undefined },
 				};
-			}
-
-			await ensureWorkerFile();
-			const child = Bun.spawn([pythonRuntime.pythonPath, WORKER_FILE_PATH], {
-				cwd: this.session.cwd,
-				env: buildSafeEnv(bridgePort, tmpFile, bridgeSecret, pythonRuntime.env),
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-
-			// Kill the child if the effective signal fires (timeout or parent abort)
-			const onAbort = () => {
-				try {
-					child.kill();
-				} catch {
-					// Already exited — ignore
+			} finally {
+				if (abortListenerAttached && onAbort) {
+					effectiveSignal.removeEventListener("abort", onAbort);
 				}
-			};
-			effectiveSignal.addEventListener("abort", onAbort, { once: true });
-
-			// Stream stdout concurrently with process execution, feeding live previews
-			// through onUpdate (same tail-buffered pattern as bash).
-			const stdoutParts: string[] = [];
-			const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES);
-			const stdoutDecoder = new TextDecoder();
-
-			const readStdoutStream = async () => {
-				const reader = (child.stdout as ReadableStream<Uint8Array>).getReader();
-				try {
-					while (true) {
-						const { done, value } = await reader.read();
-						if (done) break;
-						const chunk = stdoutDecoder.decode(value, { stream: true });
-						stdoutParts.push(chunk);
-						tailBuffer.append(chunk);
-						onUpdate?.({
-							content: [{ type: "text", text: tailBuffer.text() }],
-							details: { exitCode: undefined },
-						});
+				clearTimeout(timeoutHandle);
+				bridge.stop();
+				if (tmpFile) {
+					try {
+						await fs.unlink(tmpFile);
+					} catch {
+						// Ignore cleanup failures
 					}
-					const tail = stdoutDecoder.decode();
-					if (tail) {
-						stdoutParts.push(tail);
-						tailBuffer.append(tail);
-					}
-				} catch {
-					// Stream closed or aborted — ignore
-				} finally {
-					reader.releaseLock();
-				}
-			};
-
-			// Drain stderr concurrently — not doing so allows the OS pipe buffer (~64KB)
-			// to fill and deadlock child.exited if the script writes large errors.
-			const stderrParts: string[] = [];
-			const stderrDecoder = new TextDecoder();
-
-			const readStderrStream = async () => {
-				const reader = (child.stderr as ReadableStream<Uint8Array>).getReader();
-				try {
-					while (true) {
-						const { done, value } = await reader.read();
-						if (done) break;
-						stderrParts.push(stderrDecoder.decode(value, { stream: true }));
-					}
-					const tail = stderrDecoder.decode();
-					if (tail) stderrParts.push(tail);
-				} catch {
-					// Stream closed or aborted — ignore
-				} finally {
-					reader.releaseLock();
-				}
-			};
-
-			const [exitCode] = await Promise.all([child.exited, readStdoutStream(), readStderrStream()]);
-			const stdout = stdoutParts.join("");
-			const stderr = stderrParts.join("");
-
-			effectiveSignal.removeEventListener("abort", onAbort);
-			clearTimeout(timeoutHandle);
-
-			if (signal?.aborted) {
-				throw new ToolAbortError();
-			}
-
-			if (timeoutController.signal.aborted) {
-				return {
-					content: [{ type: "text", text: `Script timed out after ${params.timeout ?? 30}s` }],
-					details: { exitCode: undefined },
-				};
-			}
-
-			logger.debug("Script execution complete", { exitCode, stdoutLen: stdout.length });
-
-			if (exitCode !== 0) {
-				const errorText = stderr.trim() || `Script exited with code ${exitCode}`;
-				return {
-					content: [{ type: "text", text: errorText }],
-					details: { exitCode, stderr: stderr.trim() || undefined },
-				};
-			}
-
-			return {
-				content: [{ type: "text", text: stdout.trim() || "(no output)" }],
-				details: {
-					exitCode: 0,
-					stderr: stderr.trim() || undefined,
-				},
-			};
-		} catch (err) {
-			clearTimeout(timeoutHandle);
-			if (err instanceof ToolAbortError) throw err;
-			if (signal?.aborted) throw new ToolAbortError();
-			const message = err instanceof Error ? err.message : String(err);
-			logger.error("Script tool execution failed", { error: message });
-			return {
-				content: [{ type: "text", text: `Script execution failed: ${message}` }],
-				details: { exitCode: undefined },
-			};
-		} finally {
-			clearTimeout(timeoutHandle);
-			bridge.stop();
-			if (tmpFile) {
-				try {
-					await fs.unlink(tmpFile);
-				} catch {
-					// Ignore cleanup failures
 				}
 			}
-		}
+		})();
+
+		return await (this.session.trackPythonExecution?.(execution, sessionAbortController) ?? execution);
 	}
 }
