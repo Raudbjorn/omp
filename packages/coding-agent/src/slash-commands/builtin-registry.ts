@@ -1177,10 +1177,6 @@ export function isBatchableBuiltinSlashCommand(name: string): boolean {
 	return Boolean(command?.allowBatch);
 }
 
-export function isBuiltinSlashCommandName(name: string): boolean {
-	return BUILTIN_SLASH_COMMAND_LOOKUP.has(name);
-}
-
 /**
  * Execute a builtin slash command when it matches known command syntax.
  *
