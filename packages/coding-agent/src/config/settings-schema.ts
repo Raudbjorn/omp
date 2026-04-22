@@ -1384,6 +1384,119 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// ────────────────────────────────────────────────────────────────────────
+	// Context manager (assembler pipeline)
+	// ────────────────────────────────────────────────────────────────────────
+	"contextManager.mode": {
+		type: "enum",
+		values: ["legacy", "shadow", "assembler"] as const,
+		default: "assembler",
+		ui: {
+			tab: "context",
+			label: "Context manager",
+			description:
+				"Active context management strategy (legacy = current, shadow = observe-only assembler, assembler = assembler-managed)",
+			submenu: true,
+		},
+	},
+	"assembler.safetyMarginPercent": {
+		type: "number",
+		default: 5,
+		ui: {
+			tab: "context",
+			label: "Safety margin %",
+			description: "Percentage of context window held as safety reserve (0-100)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.messageBudgetPercent": {
+		type: "number",
+		default: 50,
+		ui: {
+			tab: "context",
+			label: "Message budget %",
+			description: "Guaranteed minimum percentage of allocatable budget for messages (0-100)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.hydrationBudgetPercent": {
+		type: "number",
+		default: 50,
+		ui: {
+			tab: "context",
+			label: "Hydration budget %",
+			description: "Hard cap on hydration as percentage of allocatable budget (0-100)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.hotWindowTurns": {
+		type: "number",
+		default: 4,
+		ui: {
+			tab: "context",
+			label: "Hot window turns",
+			description: "Number of recent turns always kept in full (0-20)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.turnBufferPercent": {
+		type: "number",
+		default: 20,
+		ui: {
+			tab: "context",
+			label: "Turn buffer %",
+			description: "Percentage of context window reserved for current turn (tool calls, results, new messages)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.contextWindowCap": {
+		type: "number",
+		default: 200_000,
+		ui: {
+			tab: "context",
+			label: "Context window cap",
+			description: "Hard upper limit on assembled context tokens regardless of model window (0 = no cap)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+
+	// ────────────────────────────────────────────────────────────────────────
+	// Composer (dynamic system prompt)
+	// ────────────────────────────────────────────────────────────────────────
+	"composer.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			label: "Enable Composer",
+			description: "Compile the system prompt with an LLM at session start instead of using the static template",
+		},
+	},
+	"composer.model": {
+		type: "string",
+		default: "sonnet",
+		ui: {
+			tab: "context",
+			label: "Composer model",
+			description: "Model to use for system prompt compilation (e.g. sonnet, haiku, gpt-4o)",
+		},
+	},
+	"composer.tokenBudget": {
+		type: "number",
+		default: 24000,
+		ui: {
+			tab: "context",
+			label: "Composer token budget",
+			description: "Target size for the compiled system prompt in tokens",
+		},
+	},
+
+	// ────────────────────────────────────────────────────────────────────────
 	// Editing
 	// ────────────────────────────────────────────────────────────────────────
 
@@ -2340,6 +2453,55 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	// Embedding provider (used by recall)
+	"providers.embeddings": {
+		type: "enum",
+		values: ["disabled", "memex", "openai-compatible"] as const,
+		default: "disabled",
+		ui: {
+			tab: "providers",
+			label: "Embedding Provider",
+			description: "Provider for recall embeddings",
+			submenu: true,
+		},
+	},
+	"providers.embeddingUrl": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "providers",
+			label: "Embedding URL",
+			description: "OpenAI-compatible embedding endpoint URL",
+		},
+	},
+	"providers.embeddingModel": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "providers",
+			label: "Embedding Model",
+			description: "Model name for OpenAI-compatible embeddings",
+		},
+	},
+	"providers.embeddingDimension": {
+		type: "number",
+		default: 2560,
+		ui: {
+			tab: "providers",
+			label: "Embedding Dimension",
+			description: "Embedding vector dimension for recall storage",
+		},
+	},
+	"providers.embeddingApiKeyEnvVar": {
+		type: "string",
+		default: "EMBEDDINGS_API_KEY",
+		ui: {
+			tab: "providers",
+			label: "Embedding API Key Env Var",
+			description: "Environment variable containing the embedding API key",
+		},
+	},
+
 	// Exa
 	"exa.enabled": {
 		type: "boolean",
@@ -2507,6 +2669,9 @@ export type StatusLineSeparatorStyle = SettingValue<"statusLine.separator">;
 
 /** Tree selector filter mode - derived from schema */
 export type TreeFilterMode = SettingValue<"treeFilterMode">;
+
+/** Context manager mode - derived from schema */
+export type ContextManagerMode = SettingValue<"contextManager.mode">;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Typed Group Definitions
