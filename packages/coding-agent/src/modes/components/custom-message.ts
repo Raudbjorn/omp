@@ -4,6 +4,7 @@ import { Box, Container, Markdown, Spacer, Text } from "@oh-my-pi/pi-tui";
 import type { MessageRenderer } from "../../extensibility/extensions/types";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import type { CustomMessage } from "../../session/messages";
+import { getCustomMessageLabel } from "./message-labels";
 
 /**
  * Component that renders a custom message entry from extensions.
@@ -67,7 +68,8 @@ export class CustomMessageComponent extends Container {
 		this.#box.clear();
 
 		// Default rendering: label + content
-		const label = theme.fg("customMessageLabel", theme.bold(`[${this.message.customType}]`));
+		const labelText = getCustomMessageLabel(this.message) ?? this.message.customType;
+		const label = theme.fg("customMessageLabel", theme.bold(`[${labelText}]`));
 		this.#box.addChild(new Text(label, 0, 0));
 		this.#box.addChild(new Spacer(1));
 
