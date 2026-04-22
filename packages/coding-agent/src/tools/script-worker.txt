@@ -64,7 +64,10 @@ def _bridge_request(path: str, body: Any | None = None) -> Any:
     try:
         with urllib.request.urlopen(request, timeout=BRIDGE_REQUEST_TIMEOUT_SECONDS) as response:
             payload = response.read().decode("utf-8")
-            return json.loads(payload)
+            try:
+                return json.loads(payload)
+            except json.JSONDecodeError as decode_err:
+                raise RuntimeError(f"Tool bridge returned malformed JSON: {payload[:200]}") from decode_err
     except urllib.error.HTTPError as err:
         payload = err.read().decode("utf-8", errors="replace")
         try:
