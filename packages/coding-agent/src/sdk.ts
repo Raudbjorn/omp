@@ -2047,6 +2047,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			ttsrManager,
 			obfuscator,
 			asyncJobManager,
+			assemblerBridge: assemblerActive ? assemblerBridge : undefined,
+			getLastPromptSnapshotFn: () => lastPromptSnapshot,
 		});
 		hasSession = true;
 
