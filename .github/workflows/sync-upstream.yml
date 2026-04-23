@@ -151,7 +151,7 @@ jobs:
       # Discord notifications — all three states are no-ops if the webhook
       # secret is unset, so the workflow stays useful without it.
       - name: Discord notification — PR opened (clean merge)
-        if: steps.delta.outputs.ahead != '0' && steps.merge.outputs.conflicts != 'true' && env.DISCORD_WEBHOOK_URL != ''
+        if: steps.delta.outputs.ahead != '0' && steps.merge.outputs.conflicts != 'true' && secrets.DISCORD_WEBHOOK_URL != ''
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           AHEAD: ${{ steps.delta.outputs.ahead }}
@@ -163,7 +163,7 @@ jobs:
               '{embeds:[{title:"Upstream sync PR ready",color:5763719,description:"Clean merge.",fields:[{name:"Commits pulled",value:$ahead,inline:true},{name:"PR",value:$url,inline:false}],timestamp:(now|todateiso8601)}]}')"
 
       - name: Discord notification — PR opened (with conflicts)
-        if: steps.delta.outputs.ahead != '0' && steps.merge.outputs.conflicts == 'true' && env.DISCORD_WEBHOOK_URL != ''
+        if: steps.delta.outputs.ahead != '0' && steps.merge.outputs.conflicts == 'true' && secrets.DISCORD_WEBHOOK_URL != ''
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           AHEAD: ${{ steps.delta.outputs.ahead }}
@@ -176,7 +176,7 @@ jobs:
               '{embeds:[{title:"Upstream sync PR — conflicts need resolution",color:15548997,description:"Manual merge required.",fields:[{name:"Commits pulled",value:$ahead,inline:true},{name:"PR",value:$url,inline:false},{name:"Conflicted files",value:("```\n"+$files+"\n```"),inline:false}],timestamp:(now|todateiso8601)}]}')"
 
       - name: Discord notification — already up to date
-        if: steps.delta.outputs.ahead == '0' && env.DISCORD_WEBHOOK_URL != ''
+        if: steps.delta.outputs.ahead == '0' && secrets.DISCORD_WEBHOOK_URL != ''
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
