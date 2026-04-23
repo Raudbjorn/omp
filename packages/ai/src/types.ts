@@ -137,6 +137,8 @@ export type KnownProvider =
 	| "zenmux"
 	| "upb"
 	| "lm-studio"
+	| "ipex-llm"
+	| "openvino"
 	| "devin"
 	| "warp"
 	| "deepseek";

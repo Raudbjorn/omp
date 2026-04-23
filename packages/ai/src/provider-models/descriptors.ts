@@ -16,6 +16,7 @@ import {
 	githubCopilotModelManagerOptions,
 	groqModelManagerOptions,
 	huggingfaceModelManagerOptions,
+	ipexLlmModelManagerOptions,
 	kiloModelManagerOptions,
 	kimiCodeModelManagerOptions,
 	litellmModelManagerOptions,
@@ -29,6 +30,7 @@ import {
 	opencodeGoModelManagerOptions,
 	opencodeZenModelManagerOptions,
 	openrouterModelManagerOptions,
+	openvinoModelManagerOptions,
 	qianfanModelManagerOptions,
 	qwenPortalModelManagerOptions,
 	syntheticModelManagerOptions,
@@ -229,6 +231,12 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 		catalog("UPB AI Gateway", ["UPB_API_KEY"]),
 	),
 	descriptor("lm-studio", "llama-3-8b", config => lmStudioModelManagerOptions(config), { allowUnauthenticated: true }),
+	descriptor("ipex-llm", "qwen2.5-7b-instruct", config => ipexLlmModelManagerOptions(config), {
+		allowUnauthenticated: true,
+	}),
+	descriptor("openvino", "qwen2.5-7b-instruct", config => openvinoModelManagerOptions(config), {
+		allowUnauthenticated: true,
+	}),
 	catalogDescriptor(
 		"vllm",
 		"gpt-oss-20b",
