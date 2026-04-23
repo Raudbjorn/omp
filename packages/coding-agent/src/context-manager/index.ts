@@ -22,18 +22,23 @@ export class ContextManagerConfigError extends Error {
 	}
 }
 
+const SUPPORTED_MODES: readonly ContextManagerMode[] = ["legacy", "shadow", "assembler"];
+
 /**
  * Validate context-manager configuration at startup.
  *
- * Fail-closed semantics: only assembler mode is accepted.
+ * Accepts any mode declared in the settings schema: `legacy` (compaction-only,
+ * assembler off), `shadow` (assembler observes without mutating), `assembler`
+ * (assembler-managed). Rejects only genuinely invalid values that somehow made
+ * it past the typed settings getter.
  *
- * @throws {ContextManagerConfigError} on invalid or unsupported mode
+ * @throws {ContextManagerConfigError} on invalid mode
  */
 export function validateContextManagerConfig(settings: Settings): void {
 	const mode = getContextManagerMode(settings);
-	if (mode !== "assembler") {
+	if (!SUPPORTED_MODES.includes(mode)) {
 		throw new ContextManagerConfigError(
-			`Context manager mode '${mode as string}' is no longer supported. Use 'assembler' mode.`,
+			`Context manager mode '${mode as string}' is not supported. Expected one of: ${SUPPORTED_MODES.join(", ")}.`,
 		);
 	}
 	logger.debug("Context manager validated", { mode });
@@ -69,8 +74,8 @@ export function getContextManagerState(settings: Settings): ContextManagerState 
 	const mode = getContextManagerMode(settings);
 	return {
 		mode,
-		legacyActive: false,
+		legacyActive: mode === "legacy",
 		assemblerActive: mode === "assembler",
-		shadowObserving: false,
+		shadowObserving: mode === "shadow",
 	};
 }
