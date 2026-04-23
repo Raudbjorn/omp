@@ -14,7 +14,7 @@ import {
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
 import type { Component, SlashCommand } from "@oh-my-pi/pi-tui";
-import { Container, Loader, Markdown, ProcessTerminal, Spacer, Text, TUI, visibleWidth } from "@oh-my-pi/pi-tui";
+import { Container, Loader, Markdown, Spacer, Text, TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { APP_NAME, hsvToRgb, isEnoent, logger, postmortem, prompt } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { reset as resetCapabilities } from "../capability";
@@ -48,6 +48,8 @@ import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { getSessionAccentAnsi, getSessionAccentHexForTitle } from "../utils/session-color";
 import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle } from "../utils/title-generator";
+import { setWebTerminalServerCallbacks } from "../web-terminal/server";
+import { createWebTerminalBridge, MirroredTerminal, setActiveWebTerminalBridge } from "../web-terminal/terminal-bridge";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import { CustomEditor } from "./components/custom-editor";
@@ -229,7 +231,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 		}
 
-		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
+		const terminal = new MirroredTerminal();
+		this.ui = new TUI(terminal, settings.get("showHardwareCursor"));
+		setActiveWebTerminalBridge(createWebTerminalBridge(this.ui, terminal));
 		this.ui.setClearOnShrink(settings.get("clearOnShrink"));
 		setMermaidRenderCallback(() => this.ui.requestRender());
 		this.chatContainer = new Container();
@@ -425,6 +429,32 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncEditorMaxHeight();
 		this.isInitialized = true;
 		this.ui.requestRender(true);
+
+		setWebTerminalServerCallbacks({
+			onClientConnected: info => {
+				const remote =
+					info.remoteAddress && info.remotePort !== undefined
+						? `${info.remoteAddress}:${info.remotePort}`
+						: "unknown";
+				const local = `${info.localAddress}:${info.localPort}`;
+				this.showStatus(`Web terminal client connected from ${remote} to ${local}`);
+			},
+			onClientDisconnected: info => {
+				const remote =
+					info.remoteAddress && info.remotePort !== undefined
+						? `${info.remoteAddress}:${info.remotePort}`
+						: "unknown";
+				const local = `${info.localAddress}:${info.localPort}`;
+				this.showStatus(`Web terminal client disconnected from ${remote} to ${local}`);
+			},
+			onListenerStopped: info => {
+				const local = `${info.localAddress}:${info.localPort}`;
+				this.showStatus(`Web terminal listener stopped on ${local} (${info.reason})`);
+			},
+			onServerStopped: info => {
+				this.showStatus(`Web terminal stopped (${info.reason}).`);
+			},
+		});
 
 		// Initialize hooks with TUI-based UI context
 		await this.initHooksAndCustomTools();
@@ -1144,6 +1174,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#themeChangeUnsubscribe();
 			this.#themeChangeUnsubscribe = undefined;
 		}
+		if (this.ui.terminal instanceof MirroredTerminal) {
+			setActiveWebTerminalBridge(null);
+		}
+		setWebTerminalServerCallbacks(null);
 		if (this.isInitialized) {
 			this.ui.stop();
 			this.isInitialized = false;
@@ -1576,6 +1610,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void> {
 		return this.#commandController.handlePythonCommand(code, excludeFromContext);
+	}
+
+	handleWebTerminalCommand(): Promise<void> {
+		return this.#commandController.handleWebTerminalCommand();
 	}
 
 	async handleMCPCommand(text: string): Promise<void> {

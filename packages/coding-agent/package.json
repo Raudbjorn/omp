@@ -54,7 +54,9 @@
 		"@oh-my-pi/pi-tui": "catalog:",
 		"@oh-my-pi/pi-utils": "catalog:",
 		"@sinclair/typebox": "catalog:",
+		"@xterm/addon-unicode11": "catalog:",
 		"@xterm/headless": "catalog:",
+		"@xterm/xterm": "catalog:",
 		"ajv": "catalog:",
 		"chalk": "catalog:",
 		"diff": "catalog:",
@@ -64,6 +66,7 @@
 		"lru-cache": "catalog:",
 		"markit-ai": "catalog:",
 		"puppeteer": "catalog:",
+		"qrcode-terminal": "catalog:",
 		"turndown": "catalog:",
 		"turndown-plugin-gfm": "catalog:",
 		"zod": "catalog:"

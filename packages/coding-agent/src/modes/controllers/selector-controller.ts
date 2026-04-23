@@ -33,6 +33,12 @@ import { type SessionInfo, SessionManager } from "../../session/session-manager"
 import { FileSessionStorage } from "../../session/session-storage";
 import { isSearchProviderPreference, setPreferredImageProvider, setPreferredSearchProvider } from "../../tools";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
+import {
+	getWebTerminalBindingOptions,
+	reconcileWebTerminalBindings,
+	resolveWebTerminalBindingsWithFallback,
+} from "../../web-terminal/interfaces";
+import { getWebTerminalServer, stopWebTerminalServer } from "../../web-terminal/server";
 import { AgentDashboard } from "../components/agent-dashboard";
 import { AssistantMessageComponent } from "../components/assistant-message";
 import { ExtensionDashboard } from "../components/extensions";
@@ -316,6 +322,39 @@ export class SelectorController {
 				setColorBlindMode(value === "true" || value === true).then(() => {
 					this.ctx.ui.invalidate();
 				});
+				break;
+			}
+			case "webTerminal.enabled": {
+				if (!value) {
+					stopWebTerminalServer("Web terminal disabled");
+					break;
+				}
+				const server = getWebTerminalServer();
+				if (!server) break;
+				const active = resolveActiveWebTerminalBindings();
+				if (active.length === 0) {
+					stopWebTerminalServer("Web terminal bindings unavailable");
+					break;
+				}
+				server.applyBindings(active);
+				break;
+			}
+			case "webTerminal.bindings": {
+				const server = getWebTerminalServer();
+				if (!server) break;
+				if (!settings.get("webTerminal.enabled")) {
+					stopWebTerminalServer("Web terminal disabled");
+					break;
+				}
+				const active = resolveActiveWebTerminalBindings();
+				if (active.length === 0) {
+					stopWebTerminalServer("Web terminal bindings unavailable");
+					break;
+				}
+				server.applyBindings(active);
+				if (server.urls.length === 0) {
+					stopWebTerminalServer("Web terminal bindings unavailable");
+				}
 				break;
 			}
 			case "temperature": {
@@ -1029,4 +1068,13 @@ export class SelectorController {
 			return { component: selector, focus: selector };
 		});
 	}
+}
+
+function resolveActiveWebTerminalBindings(): ReturnType<typeof reconcileWebTerminalBindings>["active"] {
+	const bindingOptions = getWebTerminalBindingOptions();
+	const configured = settings.get("webTerminal.bindings");
+	if (configured.length === 0) {
+		return resolveWebTerminalBindingsWithFallback(configured, bindingOptions).active;
+	}
+	return reconcileWebTerminalBindings(configured, bindingOptions).active;
 }

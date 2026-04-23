@@ -581,6 +581,10 @@ export class TUI extends Container {
 		});
 	}
 
+	requestFullRender(_clear = false): void {
+		this.requestRender(true);
+	}
+
 	#handleInput(data: string): void {
 		if (this.#inputListeners.size > 0) {
 			let current = data;
