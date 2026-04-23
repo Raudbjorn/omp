@@ -73,12 +73,12 @@ describe("web search render — compact mode (verbose=false)", () => {
 			expect(text).toContain("Did 1 search in 3s");
 		});
 
-		it("uses ⎿ continuation character", () => {
+		it("uses theme.tree.last for the continuation marker (theme-aware, ASCII-safe)", () => {
 			const response = makeSearchResponse();
 			const component = renderSearchResult(makeResult(response), { expanded: false, isPartial: false }, theme!);
 			const lines = component.render(100);
 			const text = stripAnsi(lines.join("\n"));
-			expect(text).toContain("⎿");
+			expect(text).toContain(theme!.tree.last);
 		});
 
 		it("pluralizes 'searches' when count > 1", () => {
