@@ -18,7 +18,7 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { BunFile } from "bun";
-import type { WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
+import { getDocumentSymbols, type WritethroughCallback, type WritethroughDeferredHandle } from "../../lsp";
 import type { ToolSession } from "../../tools";
 import { assertEditableFileContent } from "../../tools/auto-generated-guard";
 import {
@@ -571,6 +571,176 @@ export function validateLineRef(ref: { line: number; hash: string }, fileLines: 
 	const actualHash = computeLineHash(ref.line, fileLines[ref.line - 1]);
 	if (actualHash !== ref.hash) {
 		throw new HashlineMismatchError([{ line: ref.line, expected: ref.hash, actual: actualHash }], fileLines);
+	}
+}
+
+// ─── Pre-flight tag verification ───────────────────────────────────────────
+
+export interface VerifyTagsResult {
+	valid: boolean;
+	/** Present when valid is false. Contains remaps for the full edit range. */
+	error?: HashlineMismatchError;
+}
+
+/**
+ * Validate that every tag referenced by `edits` still matches the current
+ * file content. Returns `{ valid: true }` when all tags are fresh, or
+ * `{ valid: false, error }` with a `HashlineMismatchError` whose `remaps`
+ * cover the full `pos..end` range of every failing edit — enough for the
+ * caller to rebuild the edit without re-reading the file.
+ *
+ * This is the same validation that `applyHashlineEdits` runs internally,
+ * extracted so callers can check before attempting mutation.
+ */
+export function verifyTags(text: string, edits: HashlineEdit[]): VerifyTagsResult {
+	const fileLines = text.split("\n");
+	const mismatches: HashMismatch[] = [];
+
+	const validateRef = (ref: Anchor): void => {
+		if (ref.line < 1 || ref.line > fileLines.length) return;
+		const actualHash = computeLineHash(ref.line, fileLines[ref.line - 1]);
+		if (actualHash === ref.hash) return;
+		mismatches.push({ line: ref.line, expected: ref.hash, actual: actualHash });
+	};
+
+	for (const edit of edits) {
+		switch (edit.op) {
+			case "replace_range":
+				validateRef(edit.pos);
+				validateRef(edit.end);
+				break;
+			case "replace_line":
+			case "append_at":
+			case "prepend_at":
+				validateRef(edit.pos);
+				break;
+			// append_file and prepend_file have no anchor
+		}
+	}
+
+	if (mismatches.length === 0) return { valid: true };
+
+	// Enriched remaps: include every line in each edit's pos..end range so the
+	// caller can rebuild without re-reading. Mismatched lines keep old→new mapping;
+	// untouched lines get identity (still-valid) entries.
+	const enrichedRemaps = new Map<string, string>();
+	for (const m of mismatches) {
+		const actual = computeLineHash(m.line, fileLines[m.line - 1]);
+		enrichedRemaps.set(`${m.line}#${m.expected}`, `${m.line}#${actual}`);
+	}
+	for (const edit of edits) {
+		let startLine: number | undefined;
+		let endLine: number | undefined;
+		switch (edit.op) {
+			case "replace_range":
+				startLine = edit.pos.line;
+				endLine = edit.end.line;
+				break;
+			case "replace_line":
+			case "append_at":
+			case "prepend_at":
+				startLine = edit.pos.line;
+				endLine = edit.pos.line;
+				break;
+		}
+		if (startLine === undefined || endLine === undefined) continue;
+		for (let i = startLine; i <= endLine && i <= fileLines.length; i++) {
+			const hash = computeLineHash(i, fileLines[i - 1]);
+			const key = `${i}#${hash}`;
+			if (!enrichedRemaps.has(key)) {
+				enrichedRemaps.set(key, key);
+			}
+		}
+	}
+
+	const error = new HashlineMismatchError(mismatches, fileLines);
+	(error as { remaps: ReadonlyMap<string, string> }).remaps = enrichedRemaps;
+	return { valid: false, error };
+}
+
+// ─── AST boundary detection ────────────────────────────────────────────────
+
+/** Symbol shape returned by `textDocument/documentSymbol`. */
+export type DocSymbol = {
+	name?: string;
+	kind?: number;
+	range: { start: { line: number }; end: { line: number } };
+	children?: DocSymbol[];
+};
+
+/**
+ * Thrown when a replace operation targets a structural boundary line —
+ * a line that is simultaneously the end of one AST construct and the
+ * start of its sibling (e.g. `} else {`, `} catch (err) {`, `},`).
+ *
+ * Fix: expand the range to include the full construct on one side,
+ * or target only body-owned lines inside the construct.
+ */
+export class SharedBoundaryError extends Error {
+	readonly editIndex: number;
+	readonly line: number;
+	readonly role: "start" | "end";
+	readonly construct: string;
+
+	constructor(editIndex: number, line: number, role: "start" | "end", construct: string) {
+		const boundary = role === "end" ? "closing" : "opening";
+		super(
+			`edit[${editIndex}] targets a shared boundary (line ${line + 1}): ` +
+				`the ${boundary} line of ${construct} is also the boundary of its sibling. ` +
+				`Include the full ${construct} in the range, or target only body-owned lines inside it.`,
+		);
+		this.name = "SharedBoundaryError";
+		this.editIndex = editIndex;
+		this.line = line;
+		this.role = role;
+		this.construct = construct;
+	}
+}
+
+/**
+ * A line L is a shared boundary when it is simultaneously the end of one
+ * symbol's range and the start of a *different* symbol's range — e.g.
+ * `} else {`, `} catch (err) {`, `},`. Replacing such a line is ambiguous
+ * and typically produces duplicate or missing lines.
+ *
+ * Only checks `replace_range` ops (two anchors delimit a range that can
+ * straddle a boundary). Throws `SharedBoundaryError` on the first violation.
+ * Pass `null` for `symbols` to skip the check.
+ *
+ * LSP line numbers are 0-indexed; hashline anchors are 1-indexed.
+ */
+export function checkBoundariesForEdits(edits: HashlineEdit[], symbols: DocSymbol[] | null): void {
+	if (!symbols?.length) return;
+
+	const rangeOps = edits.flatMap((edit, i) =>
+		edit.op === "replace_range"
+			? [{ editIndex: i, posLine: edit.pos.line - 1, endLine: edit.end.line - 1 }]
+			: [],
+	);
+	if (rangeOps.length === 0) return;
+
+	const flat: DocSymbol[] = [];
+	const flatten = (nodes: DocSymbol[]): void => {
+		for (const n of nodes) {
+			flat.push(n);
+			if (n.children) flatten(n.children);
+		}
+	};
+	flatten(symbols);
+
+	for (const { editIndex, posLine, endLine } of rangeOps) {
+		for (const [line, role] of [[posLine, "start"] as const, [endLine, "end"] as const]) {
+			const endsHere = flat.filter(n => n.range.end.line === line);
+			const startsHere = flat.filter(n => n.range.start.line === line);
+			// Shared boundary requires two DIFFERENT symbols overlapping at this line.
+			// A single-line symbol (start.line === end.line) alone is not a boundary.
+			const shared = endsHere.some(e => startsHere.some(s => s !== e));
+			if (shared) {
+				const owner = endsHere.find(e => startsHere.every(s => s !== e)) ?? endsHere[0];
+				const construct = owner.name ? `"${owner.name}"` : "the enclosing block";
+				throw new SharedBoundaryError(editIndex, line, role, construct);
+			}
+		}
 	}
 }
 
@@ -1294,6 +1464,18 @@ export async function executeHashlineSingle(
 	const originalEnding = detectLineEnding(text);
 	const originalNormalized = normalizeToLF(text);
 	let normalizedText = originalNormalized;
+
+	// Pre-flight: verify tags are still fresh before mutation. On mismatch, raise
+	// HashlineMismatchError with enriched remaps so the caller can rebuild the
+	// edit without re-reading the file.
+	const tagCheck = verifyTags(normalizedText, anchorEdits);
+	if (!tagCheck.valid && tagCheck.error) throw tagCheck.error;
+
+	// Pre-flight: reject replace_range edits that straddle a shared AST
+	// boundary (e.g. `} else {`). LSP is best-effort — null symbols skip the
+	// check without failing.
+	const symbols = await getDocumentSymbols(session.cwd, absolutePath, signal);
+	checkBoundariesForEdits(anchorEdits, symbols);
 
 	const anchorResult = applyHashlineEdits(normalizedText, anchorEdits);
 	normalizedText = anchorResult.lines;

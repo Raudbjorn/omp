@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { isExtensionDisabled } from "../capability";
 import { skillCapability } from "../capability/skill";
 import type { SourceMeta } from "../capability/types";
 import type { SkillsSettings } from "../config/settings";
@@ -124,12 +125,9 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		return ignoredSkills.some(pattern => new Bun.Glob(pattern).match(name));
 	}
 
-	const disabledSkillNames = new Set(
-		(disabledExtensions ?? []).filter(id => id.startsWith("skill:")).map(id => id.slice(6)),
-	);
 	// Filter skills by source and patterns first
 	const filteredSkills = result.items.filter(capSkill => {
-		if (disabledSkillNames.has(capSkill.name)) return false;
+		if (isExtensionDisabled(`skill:${capSkill.name}`)) return false;
 		if (!isSourceEnabled(capSkill._source)) return false;
 		if (matchesIgnorePatterns(capSkill.name)) return false;
 		if (!matchesIncludePatterns(capSkill.name)) return false;
@@ -195,7 +193,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	const allCustomSkills: Array<{ skill: Skill; path: string }> = [];
 	for (const { expandedDir, scanResult } of customDirectoryResults) {
 		for (const capSkill of scanResult.items) {
-			if (disabledSkillNames.has(capSkill.name)) continue;
+			if (isExtensionDisabled(`skill:${capSkill.name}`)) continue;
 			if (matchesIgnorePatterns(capSkill.name)) continue;
 			if (!matchesIncludePatterns(capSkill.name)) continue;
 			allCustomSkills.push({

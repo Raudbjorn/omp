@@ -1,6 +1,7 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { isExtensionDisabled } from "../capability";
 import { isPromptChainSlashCommand, type SlashCommand, slashCommandCapability } from "../capability/slash-command";
 import {
 	appendInlineArgsFallback,
@@ -194,7 +195,9 @@ function materializeCapabilityCommand(command: SlashCommand): FileSlashCommand {
 export async function loadSlashCommandSet(options: LoadSlashCommandsOptions = {}): Promise<LoadSlashCommandSetResult> {
 	const result = await loadCapability<SlashCommand>(slashCommandCapability.id, { cwd: options.cwd });
 
-	const commands: FileSlashCommand[] = result.items.map(materializeCapabilityCommand);
+	const commands: FileSlashCommand[] = result.items
+		.filter(item => !isExtensionDisabled(`slash-command:${item.name}`))
+		.map(materializeCapabilityCommand);
 	const seenNames = new Set(commands.map(command => command.name));
 	for (const command of EMBEDDED_SLASH_COMMANDS) {
 		const name = command.name.replace(/\.md$/, "");

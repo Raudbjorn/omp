@@ -8,6 +8,7 @@ export interface DownloadProgress {
 }
 
 export interface EnsureOptions {
+	backend?: string;
 	modelName?: string;
 	onProgress?: (progress: DownloadProgress) => void;
 }
@@ -45,22 +46,45 @@ async function ensurePythonWhisper(options?: EnsureOptions): Promise<void> {
 		throw new Error("Python not found. Install Python 3.8+ from https://python.org");
 	}
 
-	// Check if whisper module is already importable
-	const check = Bun.spawnSync([pythonCmd, "-c", "import whisper"], {
+	const isFaster = options?.backend === "faster-whisper";
+	const importCheck = isFaster
+		? "from faster_whisper import WhisperModel; import ctranslate2, tokenizers, huggingface_hub, numpy"
+		: "import whisper";
+
+	const check = Bun.spawnSync([pythonCmd, "-c", importCheck], {
 		stdout: "pipe",
 		stderr: "pipe",
 	});
 	if (check.exitCode === 0) return;
 
-	options?.onProgress?.({ stage: "Installing openai-whisper (this may take a few minutes)..." });
-	logger.debug("Installing openai-whisper via pip");
+	const pkgName = isFaster ? "faster-whisper" : "openai-whisper";
+	options?.onProgress?.({ stage: `Installing ${pkgName} (this may take a few minutes)...` });
+	logger.debug(`Installing ${pkgName} via pip`);
 
-	const install = await $`${pythonCmd} -m pip install -q openai-whisper`.quiet().nothrow();
-	if (install.exitCode !== 0) {
-		const stderr = install.stderr.toString().trim();
-		throw new Error(`Failed to install openai-whisper: ${stderr.split("\n").pop()}`);
+	if (isFaster) {
+		// Install faster-whisper without av/numba — we load WAV via Python's wave module,
+		// and av requires FFmpeg dev libs that are unavailable on many aarch64 systems.
+		const nodeps = await $`${pythonCmd} -m pip install -q --no-deps faster-whisper`.quiet().nothrow();
+		if (nodeps.exitCode !== 0) {
+			const stderr = nodeps.stderr.toString().trim();
+			throw new Error(`Failed to install faster-whisper: ${stderr.split("\n").pop()}`);
+		}
+		// Install only the runtime deps we actually use (no av, no numba)
+		const deps = await $`${pythonCmd} -m pip install -q ctranslate2 tokenizers huggingface_hub numpy`
+			.quiet()
+			.nothrow();
+		if (deps.exitCode !== 0) {
+			const stderr = deps.stderr.toString().trim();
+			throw new Error(`Failed to install faster-whisper dependencies: ${stderr.split("\n").pop()}`);
+		}
+	} else {
+		const install = await $`${pythonCmd} -m pip install -q openai-whisper`.quiet().nothrow();
+		if (install.exitCode !== 0) {
+			const stderr = install.stderr.toString().trim();
+			throw new Error(`Failed to install openai-whisper: ${stderr.split("\n").pop()}`);
+		}
 	}
-	logger.debug("openai-whisper installed successfully");
+	logger.debug(`${pkgName} installed successfully`);
 }
 
 // ── Public API ─────────────────────────────────────────────────────

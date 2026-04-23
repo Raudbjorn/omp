@@ -1,6 +1,7 @@
 import { $env } from "@oh-my-pi/pi-utils";
 
 const DEFAULT_OPENAI_STREAM_IDLE_TIMEOUT_MS = 120_000;
+const DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = 360_000;
 const DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS = 100_000;
 
 function normalizeIdleTimeoutMs(value: string | undefined, fallback: number): number | undefined {
@@ -18,6 +19,21 @@ function normalizeIdleTimeoutMs(value: string | undefined, fallback: number): nu
  */
 export function getOpenAIStreamIdleTimeoutMs(): number | undefined {
 	return normalizeIdleTimeoutMs($env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS, DEFAULT_OPENAI_STREAM_IDLE_TIMEOUT_MS);
+}
+
+/**
+ * Returns the idle timeout used for Anthropic streaming between SSE events.
+ * Anthropic's SDK has no built-in inter-event watchdog; a silently-dropped TCP
+ * connection can cause the for-await loop to hang indefinitely without this guard.
+ *
+ * Opus with extended thinking on large contexts (160K+) has a natural pause between
+ * the last thinking token and the first output token while the server processes the
+ * thinking block, so the default is high enough to accommodate that.
+ *
+ * Set `PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS=0` to disable the watchdog.
+ */
+export function getAnthropicStreamIdleTimeoutMs(): number | undefined {
+	return normalizeIdleTimeoutMs($env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS, DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS);
 }
 
 /**

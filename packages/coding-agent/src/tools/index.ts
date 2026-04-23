@@ -4,7 +4,9 @@ import { $env, $flag, isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
+import type { RecallStore } from "../context/recall/store";
 import { EditTool } from "../edit";
+import { RecallTool } from "./recall";
 import type { Skill } from "../extensibility/skills";
 import type { InternalUrlRouter } from "../internal-urls";
 import { getPreludeDocs, resetPreludeDocsCache, warmPythonEnvironment } from "../ipy/executor";
@@ -214,6 +216,12 @@ export interface ToolSession {
 	 * that the script bridge always reflects the live tool registry.
 	 */
 	getTools?: () => AgentTool<any>[];
+	/** RecallStore for session history vector search (available when recall infrastructure is initialized). */
+	recallStore?: RecallStore;
+	/** FTS5 tool result store for keyword search over past tool results. */
+	toolResultStore?: import("../context/recall/tool-result-store").ToolResultStore;
+	/** Memex license key for embedding queries (available when recall infrastructure is initialized). */
+	memexLicense?: string;
 }
 
 type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
@@ -243,6 +251,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	lsp: LspTool.createIf,
 	notebook: s => new NotebookTool(s),
 	read: s => new ReadTool(s),
+	recall: RecallTool.createIf,
 	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
 	checkpoint: CheckpointTool.createIf,

@@ -747,6 +747,14 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		},
 	},
 	{
+		name: "restart",
+		description: "Fully restart the session (process re-exec with --resume)",
+		handle: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.restart();
+		},
+	},
+	{
 		name: "exit",
 		description: "Exit the application",
 		handle: shutdownHandler,
