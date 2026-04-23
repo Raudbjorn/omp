@@ -25,29 +25,28 @@ describe("context-manager", () => {
 	});
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// Only assembler mode is accepted
+	// Validation accepts all schema-declared modes
+	//
+	// The schema declares three modes (legacy/shadow/assembler) and sdk.ts's
+	// transformContext branches on all three. The validator must accept them
+	// all — rejecting legacy/shadow here would prevent users from selecting
+	// modes the rest of the system explicitly supports.
 	// ─────────────────────────────────────────────────────────────────────────
 
-	describe("assembler-only validation", () => {
+	describe("mode validation", () => {
 		it("accepts assembler mode", () => {
-			const settings = Settings.isolated({
-				"contextManager.mode": "assembler",
-			});
+			const settings = Settings.isolated({ "contextManager.mode": "assembler" });
 			expect(() => validateContextManagerConfig(settings)).not.toThrow();
 		});
 
-		it("rejects legacy mode", () => {
-			const settings = Settings.isolated({
-				"contextManager.mode": "legacy",
-			});
-			expect(() => validateContextManagerConfig(settings)).toThrow(/no longer supported/);
+		it("accepts legacy mode", () => {
+			const settings = Settings.isolated({ "contextManager.mode": "legacy" });
+			expect(() => validateContextManagerConfig(settings)).not.toThrow();
 		});
 
-		it("rejects shadow mode", () => {
-			const settings = Settings.isolated({
-				"contextManager.mode": "shadow",
-			});
-			expect(() => validateContextManagerConfig(settings)).toThrow(/no longer supported/);
+		it("accepts shadow mode", () => {
+			const settings = Settings.isolated({ "contextManager.mode": "shadow" });
+			expect(() => validateContextManagerConfig(settings)).not.toThrow();
 		});
 	});
 
@@ -82,13 +81,23 @@ describe("context-manager", () => {
 			});
 		});
 
-		it("returns legacyActive=false even for legacy mode setting", () => {
+		it("returns correct state for legacy mode", () => {
 			const state = getContextManagerState(Settings.isolated({ "contextManager.mode": "legacy" }));
 			expect(state).toEqual({
 				mode: "legacy",
-				legacyActive: false,
+				legacyActive: true,
 				assemblerActive: false,
 				shadowObserving: false,
+			});
+		});
+
+		it("returns correct state for shadow mode", () => {
+			const state = getContextManagerState(Settings.isolated({ "contextManager.mode": "shadow" }));
+			expect(state).toEqual({
+				mode: "shadow",
+				legacyActive: false,
+				assemblerActive: false,
+				shadowObserving: true,
 			});
 		});
 	});

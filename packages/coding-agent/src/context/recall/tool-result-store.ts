@@ -67,6 +67,26 @@ interface FtsMatchRow {
  * Follows the `HistoryStorage` pattern: WAL mode, prepared statements,
  * async insert via `setImmediate`.
  */
+
+/**
+ * Decode the `paths` column. New rows store a JSON array; legacy rows from the
+ * initial ohl import used space-joined strings (now fixed — see indexSync). This
+ * helper handles both formats so the store survives a format upgrade on an
+ * existing database.
+ */
+function decodeStoredPaths(raw: string | null | undefined): string[] {
+	if (!raw) return [];
+	if (raw.startsWith("[")) {
+		try {
+			const parsed = JSON.parse(raw);
+			if (Array.isArray(parsed)) return parsed.filter((p): p is string => typeof p === "string");
+		} catch {
+			// Fall through to space-split legacy decode
+		}
+	}
+	return raw.split(" ").filter(Boolean);
+}
+
 export class ToolResultStore {
 	#db: Database;
 
@@ -191,7 +211,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS results_trigram USING fts5(
 		const content = entry.content;
 		if (!content.trim()) return;
 
-		const paths = entry.paths.join(" ");
+		// JSON-encode paths so filenames containing spaces round-trip correctly.
+		// The `paths` column is storage-only (not FTS-indexed), so no tokenization
+		// concerns. Matches RecallStore's encoding convention.
+		const paths = JSON.stringify(entry.paths);
 		const toolName = entry.toolName ?? "";
 
 		const transaction = this.#db.transaction(() => {
@@ -277,7 +300,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS results_trigram USING fts5(
 				turnNumber: meta.turn_number,
 				sessionId: meta.session_id,
 				projectCwd: meta.project_cwd,
-				paths: meta.paths ? meta.paths.split(" ").filter(Boolean) : [],
+				paths: decodeStoredPaths(meta.paths),
 				rowKey: meta.row_key,
 				rank: match.rank,
 			});
@@ -311,9 +334,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS results_trigram USING fts5(
 	/**
 	 * Build an FTS5 porter query from free-text input.
 	 * Wraps each token in quotes with prefix matching.
+	 *
+	 * Operator safety: FTS5 operators like `-` (NOT) and `AND`/`OR`/`NEAR`
+	 * only have meaning OUTSIDE double-quoted phrases. Wrapping every token
+	 * in quotes neutralizes them - `"error-code"` is a phrase containing the
+	 * literal tokens `error` and `code`, not a NOT of `code`. Double-quotes
+	 * inside a token are escaped by doubling (per FTS5 phrase-escape rules).
+	 *
+	 * Control characters (0x00-0x1F + DEL 0x7F) are stripped defensively:
+	 * they can break SQLite's query parser even inside quoted phrases.
 	 */
 	#buildFtsQuery(query: string): string | null {
-		const tokens = query
+		const sanitized = query.replace(/[\x00-\x1F\x7f]/g, " ");
+		const tokens = sanitized
 			.trim()
 			.split(/\s+/)
 			.map(t => t.trim())
