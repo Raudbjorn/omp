@@ -235,9 +235,9 @@ export default function planModeExtension(pi: ExtensionAPI) {
 			const lines: string[] = [];
 			for (const item of todoItems) {
 				if (item.completed) {
-					lines.push(ctx.ui.theme.fg("success", "☑ ") + ctx.ui.theme.fg("dim", item.text));
+					lines.push(ctx.ui.theme.fg("success", "▣ ") + ctx.ui.theme.fg("dim", item.text));
 				} else {
-					lines.push(ctx.ui.theme.fg("muted", "☐ ") + item.text);
+					lines.push(ctx.ui.theme.fg("muted", "□ ") + item.text);
 				}
 			}
 			ctx.ui.setWidget("plan-todos", lines);
@@ -449,7 +449,7 @@ Execute each step in order.`,
 
 		// Show todo list in chat (no IDs shown to user, just numbered)
 		if (hasTodos) {
-			const todoListText = todoItems.map((t, i) => `${i + 1}. ☐ ${t.text}`).join("\n");
+			const todoListText = todoItems.map((t, i) => `${i + 1}. □ ${t.text}`).join("\n");
 			pi.sendMessage(
 				{
 					customType: "plan-todo-list",
