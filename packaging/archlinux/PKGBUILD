@@ -17,8 +17,11 @@
 #      and install them as .node files alongside the compiled binary.
 #   2. Compile omp with `bun build --compile` WITHOUT embedding the native
 #      addon and WITHOUT setting PI_COMPILED=true. At runtime the loader
-#      resolves `.node` from `path.dirname(process.execPath)` — i.e.
-#      /usr/bin/ — so no extraction-to-$HOME dance is needed.
+#      resolves `.node` from `path.dirname(process.execPath)`. On Linux,
+#      process.execPath is derived from /proc/self/exe and resolves
+#      symlinks, so the /usr/bin/omp -> /usr/lib/omp/omp entry point
+#      yields execDir=/usr/lib/omp — where the addons live, FHS-compliantly.
+#      No extraction-to-$HOME dance is needed.
 #
 # This avoids the workspace-wide `bun run build` + embed:native + runtime
 # extraction path, which was observed to leave the event loop unreachable
@@ -29,6 +32,13 @@ _release_tag='v14.1.4-acp.3'
 pkgver=14.1.4.acp.3
 pkgrel=1
 pkgdesc='Coding agent CLI with read, bash, edit, write tools and session management (Raudbjorn fork of oh-my-pi)'
+# x86_64-only: the packaged pi-natives addons are built twice (baseline
+# x86-64-v2 and modern x86-64-v3) to cover Steam-hardware-survey-class CPU
+# contracts. Enabling aarch64 would require a separate cargo target, a
+# single-variant loader path in packages/natives/native/index.js, and
+# testing on ARM hardware the maintainer does not have. Contributors with
+# aarch64 hardware are welcome to extend this; drop a CARCH branch into
+# build() + package() and add aarch64 here.
 arch=('x86_64')
 url='https://github.com/Raudbjorn/omp'
 license=('MIT')
@@ -213,14 +223,27 @@ build() {
 check() {
 	cd "${srcdir}/${pkgname}/packages/coding-agent/dist"
 
-	# Sanity: the compiled binary answers --version.
-	./omp --version >/dev/null
+	# Mirror the install-time layout so the native loader finds its addons
+	# during check(): the runtime loader uses path.dirname(process.execPath),
+	# which here points at dist/ — but the cargo-built .node files live two
+	# directories up at packages/natives/native/. Without these, the loader
+	# would silently fall back to an un-addon'd code path and the
+	# hang-on-exit regression this check is supposed to catch wouldn't
+	# trigger.
+	local _variant
+	for _variant in baseline modern; do
+		local _addon="${srcdir}/${pkgname}/packages/natives/native/pi_natives.linux-x64-${_variant}.node"
+		if [[ -f "${_addon}" ]]; then
+			install -m755 "${_addon}" "./pi_natives.linux-x64-${_variant}.node"
+		fi
+	done
 
 	# Regression guard: previously, the workspace-wide build + embed:native
 	# + runtime-extraction path produced a binary that hung on exit after
 	# --version. Run with a timeout so a regression here fails the build
-	# instead of hanging makepkg.
-	msg2 "Verifying clean exit on --version..."
+	# instead of hanging makepkg — and run every invocation under the same
+	# timeout, so an unguarded sanity call can't wedge makepkg on its own.
+	msg2 "Verifying --version exits cleanly..."
 	if ! timeout --signal=KILL 10 ./omp --version >/dev/null; then
 		error "omp --version hung (>10s) — the hang-on-exit regression is back"
 		return 1
@@ -231,21 +254,25 @@ check() {
 package() {
 	cd "${srcdir}/${pkgname}"
 
-	install -Dm755 packages/coding-agent/dist/omp "${pkgdir}/usr/bin/omp"
+	# FHS-compliant layout: keep the binary and its N-API addons together
+	# in /usr/lib/omp/ (where shared objects belong) and expose the entry
+	# point via a single /usr/bin/omp symlink. On Linux, process.execPath
+	# is derived from /proc/self/exe and resolves symlinks, so the
+	# runtime loader's path.dirname(process.execPath) lookup still lands
+	# in /usr/lib/omp/ — no per-addon symlink dance required.
+	install -Dm755 packages/coding-agent/dist/omp "${pkgdir}/usr/lib/${pkgname}/omp"
 
-	# Install the N-API native addons directly alongside the binary, which
-	# is where the runtime loader looks them up
-	# (path.dirname(process.execPath)). This matches the upstream layout
-	# and avoids the /usr/lib/omp/ + /usr/bin/ symlink dance of the
-	# previous PKGBUILD.
 	local _variant
 	for _variant in baseline modern; do
 		local _addon="packages/natives/native/pi_natives.linux-x64-${_variant}.node"
 		if [[ -f "${_addon}" ]]; then
 			install -Dm755 "${_addon}" \
-				"${pkgdir}/usr/bin/pi_natives.linux-x64-${_variant}.node"
+				"${pkgdir}/usr/lib/${pkgname}/pi_natives.linux-x64-${_variant}.node"
 		fi
 	done
+
+	install -dm755 "${pkgdir}/usr/bin"
+	ln -s "../lib/${pkgname}/omp" "${pkgdir}/usr/bin/omp"
 
 	install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 	install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
