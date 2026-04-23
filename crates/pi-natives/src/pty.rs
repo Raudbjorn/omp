@@ -258,19 +258,31 @@ fn run_pty_sync(
 			"sh".to_string()
 		}
 	});
-	let shell_lower = shell.to_lowercase();
-	let mut cmd = CommandBuilder::new(shell);
-	if shell_lower.contains("powershell") || shell_lower.contains("pwsh") {
-		cmd.arg("-NoLogo");
-		cmd.arg("-NoProfile");
-		cmd.arg("-Command");
-		cmd.arg(&config.command);
-	} else if shell_lower.contains("cmd") {
-		cmd.arg("/c");
-		cmd.arg(&config.command);
-	} else {
-		cmd.arg("-lc");
-		cmd.arg(&config.command);
+	let shell_name = std::path::Path::new(&shell)
+		.file_stem()
+		.and_then(|s| s.to_str())
+		.map(|s| s.to_lowercase())
+		.unwrap_or_else(|| shell.to_lowercase());
+	let mut cmd = CommandBuilder::new(&shell);
+	match shell_name.as_str() {
+		"powershell" | "pwsh" => {
+			cmd.arg("-NoLogo");
+			cmd.arg("-NoProfile");
+			cmd.arg("-Command");
+			cmd.arg(&config.command);
+		}
+		"cmd" => {
+			cmd.arg("/c");
+			cmd.arg(&config.command);
+		}
+		"fish" | "nu" => {
+			cmd.arg("-c");
+			cmd.arg(&config.command);
+		}
+		_ => {
+			cmd.arg("-lc");
+			cmd.arg(&config.command);
+		}
 	}
 	if let Some(cwd) = config.cwd.as_ref() {
 		cmd.cwd(cwd);
