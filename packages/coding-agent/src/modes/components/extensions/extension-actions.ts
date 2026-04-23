@@ -292,6 +292,9 @@ export async function renameExtension(ext: Extension, newName: string): Promise<
 			const skillDir = path.dirname(ext.path);
 			const parentDir = path.dirname(skillDir);
 			const newDir = path.join(parentDir, newName);
+			if (await pathExists(newDir)) {
+				return { ok: false, error: `Target "${newName}" already exists` };
+			}
 			await fs.rename(skillDir, newDir);
 
 			// Update frontmatter name field so discovery picks up the new name
@@ -315,6 +318,9 @@ export async function renameExtension(ext: Extension, newName: string): Promise<
 		const dir = path.dirname(ext.path);
 		const extname = path.extname(ext.path);
 		const newPath = newName.endsWith(extname) ? path.join(dir, newName) : path.join(dir, newName + extname);
+		if (await pathExists(newPath)) {
+			return { ok: false, error: `Target "${path.basename(newPath)}" already exists` };
+		}
 
 		await fs.rename(ext.path, newPath);
 		invalidate(ext.path);
@@ -350,10 +356,23 @@ async function renameMcpEntry(ext: Extension, newName: string): Promise<ActionRe
 
 /** Replace the `name:` field in YAML frontmatter (between --- delimiters). */
 function updateFrontmatterName(content: string, newName: string): string {
-	const match = content.match(/^---\n([\s\S]*?)\n---/);
-	if (!match) return content;
+	const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+	if (!match || match.index === undefined) return content;
 	const frontmatter = match[1];
-	const updated = frontmatter.replace(/^name:\s*.+$/m, `name: ${newName}`);
+	// Quote the value if it contains YAML-significant characters (colon, quotes, #, leading special)
+	const needsQuoting = /[:#"'[\]{}|>*&!%@`,]/.test(newName) || /^\s|\s$/.test(newName);
+	const yamlValue = needsQuoting ? JSON.stringify(newName) : newName;
+	const updated = frontmatter.replace(/^name:\s*.+$/m, `name: ${yamlValue}`);
 	if (updated === frontmatter) return content; // no name field found
-	return content.replace(match[0], `---\n${updated}\n---`);
+	const replacement = match[0].startsWith("---\r\n") ? `---\r\n${updated}\r\n---` : `---\n${updated}\n---`;
+	return content.slice(0, match.index) + replacement + content.slice(match.index + match[0].length);
+}
+
+async function pathExists(p: string): Promise<boolean> {
+	try {
+		await fs.access(p);
+		return true;
+	} catch {
+		return false;
+	}
 }
