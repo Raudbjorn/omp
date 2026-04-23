@@ -121,7 +121,7 @@ export function renderSearchResult(
 				? truncateToWidth(searchQueries[0], 80)
 				: undefined;
 		const header = queryPreview ? `Web Search("${queryPreview}")` : "Web Search";
-		const summary = `  ⎿  Did ${searches} search${plural}${dur ? ` in ${dur}` : ""}`;
+		const summary = `  ${theme.tree.last}  Did ${searches} search${plural}${dur ? ` in ${dur}` : ""}`;
 		return new Text(`${theme.fg("text", header)}\n${theme.fg("dim", summary)}`, 0, 0);
 	}
 
