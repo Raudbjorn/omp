@@ -58,9 +58,31 @@ def main() -> None:
         sys.exit(1)
 
     audio = load_wav(audio_path)
-    model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    device, compute_type = _resolve_device_and_compute_type()
+    model = WhisperModel(model_name, device=device, compute_type=compute_type)
     segments, _info = model.transcribe(audio, language=language, beam_size=5)
     print(" ".join(segment.text.strip() for segment in segments))
+
+
+def _resolve_device_and_compute_type() -> tuple[str, str]:
+    """Pick the best available device/compute type.
+
+    Honours PI_STT_DEVICE / PI_STT_COMPUTE_TYPE overrides. Otherwise probes for
+    CUDA via the ctranslate2 runtime and falls back to cpu/int8.
+    """
+    import os
+
+    env_device = os.environ.get("PI_STT_DEVICE")
+    env_compute = os.environ.get("PI_STT_COMPUTE_TYPE")
+    if env_device:
+        return env_device, env_compute or ("float16" if env_device == "cuda" else "int8")
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda", env_compute or "float16"
+    except Exception:
+        pass
+    return "cpu", env_compute or "int8"
 
 
 if __name__ == "__main__":

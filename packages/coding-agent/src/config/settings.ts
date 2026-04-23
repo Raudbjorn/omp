@@ -723,7 +723,7 @@ export class Settings {
 		try {
 			// Ensure .omp directory exists
 			const dir = path.dirname(configPath);
-			fs.mkdirSync(dir, { recursive: true });
+			await fs.promises.mkdir(dir, { recursive: true });
 
 			// Read existing project settings.json (or start fresh)
 			let current: RawSettings = {};

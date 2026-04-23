@@ -753,8 +753,8 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		},
 	},
 	{
-		name: "reload",
-		description: "Restart to apply plugin, extension, or config changes",
+		name: "restart",
+		description: "Fully restart the session (process re-exec with --resume)",
 		handle: async (_command, runtime) => {
 			runtime.ctx.editor.setText("");
 			await runtime.ctx.restart();
