@@ -56,12 +56,18 @@ export function mmrRerank<T>(
 			const candidate = candidates[idx];
 			const relevance = candidate.score;
 
-			// Max similarity to any already-selected candidate
+			// Max similarity to any already-selected candidate.
+			// Clamp to [0, 1]: cosineSimilarity is [-1, 1]; negative similarity means
+			// the vectors point away from each other — treat as "not a duplicate"
+			// (zero diversity penalty) rather than letting the subtraction invert
+			// to a spurious boost when relevance is always non-negative.
 			let maxSim = 0;
 			for (const sel of selected) {
 				const sim = cosineSimilarity(candidate.vector, sel.vector);
 				if (sim > maxSim) maxSim = sim;
 			}
+			if (maxSim < 0) maxSim = 0;
+			if (maxSim > 1) maxSim = 1;
 
 			const mmrScore = lambda * relevance - (1 - lambda) * maxSim;
 			if (mmrScore > bestMmrScore) {
