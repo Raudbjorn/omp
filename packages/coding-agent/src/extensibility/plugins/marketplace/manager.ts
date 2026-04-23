@@ -12,6 +12,8 @@ import * as path from "node:path";
 
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 
+import { loadManagedPolicy, resolvePolicyEnforcementMode } from "../../../security/policy";
+import * as git from "../../../utils/git";
 import { cachePlugin } from "./cache";
 import { classifySource, fetchMarketplace, parseMarketplaceCatalog, promoteCloneToCache } from "./fetcher";
 import {
@@ -30,6 +32,7 @@ import {
 import { resolvePluginSource } from "./source-resolver";
 import type {
 	InstalledPluginEntry,
+	InstalledPluginSourceAudit,
 	InstalledPluginSummary,
 	InstalledPluginsRegistry,
 	MarketplaceCatalog,
@@ -55,6 +58,13 @@ export interface MarketplaceManagerOptions {
 	 *  Receives any additional file paths that should also be invalidated from the fs cache.
 	 */
 	clearPluginRootsCache?: (extraPaths?: readonly string[]) => void;
+}
+
+interface PluginInstallIntegrityAssessment {
+	readonly gitCommitSha?: string;
+	readonly sourceAudit: InstalledPluginSourceAudit;
+	readonly installAllowed: boolean;
+	readonly blockedReason?: string;
 }
 
 // ── Manager ──────────────────────────────────────────────────────────────────
@@ -278,6 +288,17 @@ export class MarketplaceManager {
 			);
 		}
 
+		const integrityAssessment = await this.#assessPluginInstallIntegrity({
+			pluginEntry,
+			marketplaceEntry: mktEntry,
+			marketplaceRoot: marketplaceClonePath,
+		});
+		if (!integrityAssessment.installAllowed) {
+			throw new Error(
+				`Managed policy blocked installation of plugin "${pluginId}": ${integrityAssessment.blockedReason ?? "source is not pinned strongly enough"}.`,
+			);
+		}
+
 		const { dir: sourcePath, tempCloneRoot } = await resolvePluginSource(pluginEntry, {
 			marketplaceClonePath,
 			catalogMetadata: catalog.metadata,
@@ -329,6 +350,8 @@ export class MarketplaceManager {
 			version,
 			installedAt: now,
 			lastUpdated: now,
+			...(integrityAssessment.gitCommitSha ? { gitCommitSha: integrityAssessment.gitCommitSha } : {}),
+			sourceAudit: integrityAssessment.sourceAudit,
 			...(wasDisabled ? { enabled: false } : {}),
 		};
 
@@ -747,5 +770,116 @@ export class MarketplaceManager {
 		// For git/github/url sources, the catalog lives at <cloneDir>/marketplace.json
 		// under marketplacesCacheDir/<name>/; parent = <marketplacesCacheDir>/<name>/
 		return path.dirname(entry.catalogPath);
+	}
+
+	/**
+	 * Resolve managed-policy plugin-source integrity for an install attempt.
+	 *
+	 * Reads the managed policy (if any) and determines whether `requirePluginSha`
+	 * enforcement is active. Emits a `PluginInstallIntegrityAssessment` capturing:
+	 *   - an auditable `sourceAudit` (always — even on policy-permitted installs)
+	 *   - `gitCommitSha` when a concrete git HEAD/tag is available
+	 *   - `installAllowed` + `blockedReason` when enforcement rejects a weakly-pinned source
+	 *
+	 * Enforcement is OFF by default — managed policy must be present AND in
+	 * `enforce` mode AND declare `integrity.requirePluginSha: true` to block anything.
+	 */
+	async #assessPluginInstallIntegrity(options: {
+		pluginEntry: MarketplacePluginEntry;
+		marketplaceEntry: MarketplaceRegistryEntry;
+		marketplaceRoot: string;
+	}): Promise<PluginInstallIntegrityAssessment> {
+		const managedPolicy = (await loadManagedPolicy()).policy;
+		const requirePluginSha =
+			resolvePolicyEnforcementMode(managedPolicy) === "enforce" &&
+			managedPolicy?.document.integrity?.requirePluginSha === true;
+		const { pluginEntry, marketplaceEntry, marketplaceRoot } = options;
+
+		if (typeof pluginEntry.source === "string") {
+			const marketplaceHeadSha = await git.head.sha(marketplaceRoot);
+			const sourceAudit: InstalledPluginSourceAudit = {
+				sourceType: "relative",
+				locator: pluginEntry.source,
+				pinned: marketplaceHeadSha !== null || marketplaceEntry.sourceType === "local",
+				...(marketplaceHeadSha
+					? { pinKind: "marketplace-head-sha" as const, pinValue: marketplaceHeadSha }
+					: marketplaceEntry.sourceType === "local"
+						? { pinKind: "local-path" as const, pinValue: marketplaceEntry.sourceUri }
+						: {}),
+				marketplaceSourceType: marketplaceEntry.sourceType,
+			};
+			if (requirePluginSha && marketplaceEntry.sourceType !== "local" && marketplaceHeadSha === null) {
+				return {
+					sourceAudit,
+					installAllowed: false,
+					blockedReason:
+						"relative plugin sources require a local marketplace or a marketplace clone with a concrete git HEAD SHA",
+				};
+			}
+			return {
+				...(marketplaceHeadSha ? { gitCommitSha: marketplaceHeadSha } : {}),
+				sourceAudit,
+				installAllowed: true,
+			};
+		}
+
+		switch (pluginEntry.source.source) {
+			case "github":
+			case "url":
+			case "git-subdir": {
+				const locator = pluginEntry.source.source === "github" ? pluginEntry.source.repo : pluginEntry.source.url;
+				const sha = pluginEntry.source.sha?.trim();
+				const sourceAudit: InstalledPluginSourceAudit = {
+					sourceType: pluginEntry.source.source,
+					locator,
+					pinned: Boolean(sha),
+					...(sha ? { pinKind: "git-sha" as const, pinValue: sha } : {}),
+				};
+				if (requirePluginSha && !sha) {
+					return {
+						sourceAudit,
+						installAllowed: false,
+						blockedReason: `plugin source "${pluginEntry.source.source}" must include an explicit sha`,
+					};
+				}
+				return {
+					...(sha ? { gitCommitSha: sha } : {}),
+					sourceAudit,
+					installAllowed: true,
+				};
+			}
+			case "npm": {
+				const version = pluginEntry.source.version?.trim();
+				const sourceAudit: InstalledPluginSourceAudit = {
+					sourceType: "npm",
+					locator: pluginEntry.source.package,
+					pinned: Boolean(version),
+					...(version ? { pinKind: "npm-version" as const, pinValue: version } : {}),
+				};
+				if (requirePluginSha && !version) {
+					return {
+						sourceAudit,
+						installAllowed: false,
+						blockedReason: "npm plugin sources must include an explicit version",
+					};
+				}
+				return {
+					sourceAudit,
+					installAllowed: true,
+				};
+			}
+			default: {
+				const unexpectedSource = pluginEntry.source as { source?: string };
+				return {
+					sourceAudit: {
+						sourceType: "unknown",
+						locator: unexpectedSource.source ?? "unknown",
+						pinned: false,
+					},
+					installAllowed: false,
+					blockedReason: "plugin source type is not recognized by the integrity policy gate",
+				};
+			}
+		}
 	}
 }
