@@ -50,6 +50,7 @@ import { resolvePromptInput } from "./system-prompt";
 import type { LspStartupServerInfo } from "./tools";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
 import type { EventBus } from "./utils/event-bus";
+import { getOrStartWebTerminalServer } from "./web-terminal/server";
 
 async function checkForNewVersion(_currentVersion: string): Promise<string | undefined> {
 	if (!settings.get("startup.checkUpdate")) {
@@ -701,6 +702,23 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 	const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
 	const mode = parsedArgs.mode || "text";
+	if (parsedArgs.webTerminal) {
+		if (isInteractive) {
+			if (!settings.get("webTerminal.enabled")) {
+				notifs.push({ kind: "warn", message: "Web terminal is disabled in settings." });
+			} else {
+				const webTerminal = await getOrStartWebTerminalServer({ cwd });
+				const urls = webTerminal.urls;
+				const message =
+					urls.length > 1
+						? `Web terminal running at:\n${urls.map(url => `  ${url}`).join("\n")}`
+						: `Web terminal running at ${webTerminal.url}`;
+				notifs.push({ kind: "info", message });
+			}
+		} else {
+			process.stderr.write(`${chalk.yellow("--web-terminal is only available in interactive mode.")}\n`);
+		}
+	}
 
 	// Initialize discovery system with settings for provider persistence
 	logger.time("initializeWithSettings", initializeWithSettings, settings, cwd);

@@ -295,6 +295,14 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		},
 	},
 	{
+		name: "web_terminal",
+		description: "Start or show the local web terminal",
+		handle: async (_command, runtime) => {
+			await runtime.ctx.handleWebTerminalCommand();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "browser",
 		description: "Toggle browser headless vs visible mode",
 		subcommands: [

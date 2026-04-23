@@ -15,6 +15,7 @@ import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi
 import { formatDuration, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { reset as resetCapabilities } from "../../capability";
+import { settings } from "../../config/settings";
 import { buildUsageAccountOrder, resolveUsageAccountKey } from "../../danger-pi/usage-account-order";
 import { clearClaudePluginRootsCache } from "../../discovery/helpers";
 import { getGatewayStatus } from "../../eval/py/gateway-coordinator";
@@ -49,6 +50,8 @@ import { getChangelogPath, parseChangelog } from "../../utils/changelog";
 import { copyToClipboard } from "../../utils/clipboard";
 import { openPath } from "../../utils/open";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
+import { renderQrCode } from "../../web-terminal/qr";
+import { getOrStartWebTerminalServer, getWebTerminalServer, stopWebTerminalServer } from "../../web-terminal/server";
 
 function showMarkdownPanel(ctx: InteractiveModeContext, title: string, markdown: string): void {
 	ctx.chatContainer.addChild(new Spacer(1));
@@ -389,6 +392,42 @@ export class CommandController {
 	#doCopy(content: string, label: string) {
 		void copyToClipboard(content);
 		this.ctx.showStatus(label);
+	}
+
+	async handleWebTerminalCommand(): Promise<void> {
+		try {
+			if (!settings.get("webTerminal.enabled")) {
+				this.ctx.showError("Web terminal is disabled in settings.");
+				return;
+			}
+			const existing = getWebTerminalServer();
+			if (existing?.isRunning) {
+				stopWebTerminalServer("Web terminal stopped via /web_terminal");
+				return;
+			}
+			const server = await getOrStartWebTerminalServer({ cwd: this.ctx.sessionManager.getCwd() });
+			const urls = server.urls;
+			const lines = ["Web terminal URLs:"];
+			urls.forEach((url, index) => {
+				lines.push(`  ${url}`);
+				const qr = renderQrCode(url);
+				if (qr.trim().length > 0) {
+					lines.push(qr);
+				}
+				if (index < urls.length - 1) {
+					lines.push("");
+				}
+			});
+			if (server.bindingErrors.length > 0) {
+				lines.push("", "Failed bindings:");
+				for (const error of server.bindingErrors) {
+					lines.push(`  ${error.binding.label} - ${error.error}`);
+				}
+			}
+			this.ctx.showStatus(lines.join("\n"), { dim: false });
+		} catch (error) {
+			this.ctx.showError(`Failed to start web terminal: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	async handleSessionCommand(): Promise<void> {

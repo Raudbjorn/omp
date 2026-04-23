@@ -28,7 +28,8 @@ export type SettingTab =
 	| "editing"
 	| "tools"
 	| "tasks"
-	| "providers";
+	| "providers"
+	| "webterm";
 
 /** Tab display metadata - icon is resolved via theme.symbol() */
 export type TabMetadata = { label: string; icon: `tab.${string}` };
@@ -44,6 +45,7 @@ export const SETTING_TABS: SettingTab[] = [
 	"tools",
 	"tasks",
 	"providers",
+	"webterm",
 ];
 
 /** Tab display metadata - icon is a symbol key from theme.ts (tab.*) */
@@ -57,6 +59,7 @@ export const TAB_METADATA: Record<SettingTab, { label: string; icon: `tab.${stri
 	tools: { label: "Tools", icon: "tab.tools" },
 	tasks: { label: "Tasks", icon: "tab.tasks" },
 	providers: { label: "Providers", icon: "tab.providers" },
+	webterm: { label: "Web Terminal", icon: "tab.webterm" },
 };
 
 /** Status line segment identifiers */
@@ -2443,6 +2446,46 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	// ─────────────────────────────────────────────────────────────────────────
+	// Web terminal settings
+	// ─────────────────────────────────────────────────────────────────────────
+	"webTerminal.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "webterm",
+			label: "Web terminal",
+			description: "Enable the web terminal feature",
+		},
+	},
+	"webTerminal.bindings": {
+		type: "array",
+		default: [] as WebTerminalBinding[],
+	},
+	"webTerminal.showExtraControls": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "webterm",
+			label: "Show extra controls",
+			description: "Show mobile-friendly control bar",
+		},
+	},
+	"webTerminal.extraControlKeys": {
+		type: "array",
+		default: ["esc", "enter", "up", "down", "left", "right", "ctrl+c"] as WebTerminalControlKey[],
+	},
+	"webTerminal.extraControlsHeightPx": {
+		type: "number",
+		default: 48,
+		ui: {
+			tab: "webterm",
+			label: "Control bar height",
+			description: "Height of the extra controls bar in pixels",
+			submenu: true,
+		},
+	},
+
 	"providers.parallelFetch": {
 		type: "boolean",
 		default: true,
@@ -2768,6 +2811,21 @@ export interface ExaSettings {
 	enableWebsets: boolean;
 }
 
+export interface WebTerminalBinding {
+	interface: string;
+	ip: string;
+}
+
+export type WebTerminalControlKey = "esc" | "enter" | "up" | "down" | "left" | "right" | "ctrl+c";
+
+export interface WebTerminalSettings {
+	enabled: boolean;
+	bindings: WebTerminalBinding[];
+	showExtraControls: boolean;
+	extraControlKeys: WebTerminalControlKey[];
+	extraControlsHeightPx: number;
+}
+
 export interface StatusLineSettings {
 	preset: StatusLinePreset;
 	separator: StatusLineSeparatorStyle;
@@ -2821,6 +2879,7 @@ export interface GroupTypeMap {
 	commit: CommitSettings;
 	ttsr: TtsrSettings;
 	exa: ExaSettings;
+	webTerminal: WebTerminalSettings;
 	statusLine: StatusLineSettings;
 	thinkingBudgets: ThinkingBudgetsSettings;
 	stt: SttSettings;
