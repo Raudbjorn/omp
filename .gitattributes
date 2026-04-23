@@ -1,8 +1,6 @@
 *.wasm filter=lfs diff=lfs merge=lfs -text linguist-vendored
-
 # Default: normalize text files, but do not force binary files as text.
 * text=auto eol=lf
-
 # Common binary assets and archives must never be line-ending normalized.
 *.png -text
 *.jpg -text
@@ -17,7 +15,7 @@
 *.tgz -text
 *.7z -text
 *.ttf -text
-*.otf -text
+*.otf filter=lfs diff=lfs merge=lfs -text
 *.woff -text
 *.woff2 -text
 *.mp3 -text
@@ -32,7 +30,6 @@
 *.dylib -text
 *.class -text
 *.jar -text
-
 # Lock files are binary (machine-generated, should not be manually edited)
 *.lock -text
 Cargo.lock -text
@@ -42,13 +39,10 @@ bun.lockb -text
 yarn.lock -text
 pnpm-lock.yaml -text
 poetry.lock -text
-
 # Executed by Linux
 *.sh text eol=lf
 *.py text eol=lf
-
 # Windows-native scripts
 *.ps1 text eol=lf
 *.cmd text eol=crlf
 *.bat text eol=crlf
-

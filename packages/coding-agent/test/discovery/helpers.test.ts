@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { getExtensionNameFromPath } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 
 describe("parseFrontmatter", () => {
@@ -145,5 +146,19 @@ Body content`;
 			nestedField: { innerKey: "value" },
 		});
 		expect(result.body).toBe("Body content");
+	});
+});
+
+describe("getExtensionNameFromPath", () => {
+	test("uses the package directory for src/index entrypoints", () => {
+		expect(getExtensionNameFromPath("/tmp/.omp/extensions/pi-wakatime/src/index.ts")).toBe("pi-wakatime");
+	});
+
+	test("keeps direct package index naming", () => {
+		expect(getExtensionNameFromPath("/tmp/.omp/extensions/pi-wakatime/index.ts")).toBe("pi-wakatime");
+	});
+
+	test("keeps non-index manifest entry naming", () => {
+		expect(getExtensionNameFromPath("/tmp/.omp/extensions/checks/src/check-a.ts")).toBe("check-a");
 	});
 });

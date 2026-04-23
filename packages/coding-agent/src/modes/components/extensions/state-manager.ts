@@ -11,7 +11,7 @@ import type { MCPServer } from "../../../capability/mcp";
 import type { Prompt } from "../../../capability/prompt";
 import type { Rule } from "../../../capability/rule";
 import type { Skill } from "../../../capability/skill";
-import type { SlashCommand } from "../../../capability/slash-command";
+import { isTemplateSlashCommand, type SlashCommand } from "../../../capability/slash-command";
 import type { CustomTool } from "../../../capability/tool";
 import type { SourceMeta } from "../../../capability/types";
 import {
@@ -242,11 +242,14 @@ export async function loadAllExtensions(
 		const commands = await loadCapability<SlashCommand>("slash-commands", loadOpts);
 		addItems(commands.all, "slash-command", {
 			getDescription: c => {
+				if (!isTemplateSlashCommand(c)) {
+					return c.description || undefined;
+				}
 				const { frontmatter } = parseFrontmatter(c.content, { source: c.path, level: "off" });
 				if (typeof frontmatter.description === "string" && frontmatter.description.trim()) {
 					return frontmatter.description.trim();
 				}
-				const firstLine = c.content.split("\n").find(l => l.trim() && !l.startsWith("---"));
+				const firstLine = c.content.split("\n").find((l: string) => l.trim() && !l.startsWith("---"));
 				return firstLine?.slice(0, 80) || undefined;
 			},
 			getTrigger: c => `/${c.name}`,

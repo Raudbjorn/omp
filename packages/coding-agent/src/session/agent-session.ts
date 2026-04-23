@@ -74,6 +74,7 @@ import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-temp
 import type { Settings, SkillsSettings } from "../config/settings";
 import type { ToolResultBridge } from "../context/bridge";
 import type { EffectivePromptSnapshot } from "../context/effective-prompt-snapshot";
+import { createPromptChainExecutor, type PromptChainExecutor } from "../danger-pi/command-chain-files/runtime";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
 import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
 import { exportSessionToHtml } from "../export/html";
@@ -103,7 +104,7 @@ import type { CompactOptions, ContextUsage } from "../extensibility/extensions/t
 import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
-import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
+import { executeFileSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import {
 	disposeKernelSessionsByOwner,
@@ -426,6 +427,7 @@ export class AgentSession {
 	#thinkingLevel: ThinkingLevel | undefined;
 	#promptTemplates: PromptTemplate[];
 	#slashCommands: FileSlashCommand[];
+	#promptChainExecutor: PromptChainExecutor;
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
@@ -575,6 +577,42 @@ export class AgentSession {
 		this.#thinkingLevel = config.thinkingLevel;
 		this.#promptTemplates = config.promptTemplates ?? [];
 		this.#slashCommands = config.slashCommands ?? [];
+		this.#promptChainExecutor = createPromptChainExecutor({
+			onTurnComplete: handler => {
+				this.subscribe(event => {
+					if (event.type === "turn_end") {
+						const message = event.message as AssistantMessage;
+						// Catch dispatch failures here so the void-ed promise doesn't
+						// produce an unhandled rejection. The runtime preserves chain
+						// state on throw so the next turn completion can retry.
+						handler({
+							stopReason: message.stopReason,
+							success: message.stopReason !== "error" && message.stopReason !== "aborted",
+						}).catch(error => {
+							logger.error("Prompt chain turn handler dispatch failed", { error: String(error) });
+						});
+					}
+				});
+			},
+			prompt: async (text, options) => {
+				await this.prompt(text, {
+					images: options?.images ? [...options.images] : undefined,
+					streamingBehavior: options?.streamingBehavior,
+				});
+				if (options?.streamingBehavior === "followUp") {
+					// Route through the session scheduler so waitForIdle() and
+					// waitForPostPromptRecovery() see the queued follow-up.
+					this.#scheduleAgentContinue({
+						delayMs: 1,
+						generation: this.#promptGeneration,
+						shouldContinue: () => !this.agent.state.isStreaming && this.agent.hasQueuedMessages(),
+						onError: () => {
+							logger.error("Prompt-chain follow-up continue() failed");
+						},
+					});
+				}
+			},
+		});
 		this.#extensionRunner = config.extensionRunner;
 		this.#skills = config.skills ?? [];
 		this.#skillWarnings = config.skillWarnings ?? [];
@@ -2422,6 +2460,10 @@ export class AgentSession {
 		return this.#slashCommands;
 	}
 
+	get promptChainExecutor(): PromptChainExecutor {
+		return this.#promptChainExecutor;
+	}
+
 	/** Custom commands (TypeScript slash commands and MCP prompts) */
 	get customCommands(): ReadonlyArray<LoadedCustomCommand> {
 		if (this.#mcpPromptCommands.length === 0) return this.#customCommands;
@@ -2550,7 +2592,16 @@ export class AgentSession {
 			// Try file-based slash commands (markdown files from commands/ directories)
 			// Only if text still starts with "/" (wasn't transformed by custom command)
 			if (text.startsWith("/")) {
-				text = expandSlashCommand(text, this.#slashCommands);
+				const fileCommandResult = await executeFileSlashCommand(text, this.#slashCommands, {
+					cwd: this.sessionManager.getCwd(),
+					images: options?.images,
+					promptChainExecutor: this.#promptChainExecutor,
+					streamingBehavior: options?.streamingBehavior,
+				});
+				if (fileCommandResult.kind === "handled") {
+					return;
+				}
+				text = fileCommandResult.text;
 			}
 		}
 
@@ -3116,6 +3167,15 @@ export class AgentSession {
 			message.details,
 			message.attribution ?? "agent",
 		);
+	}
+
+	/**
+	 * Start a turn from the existing session context without appending a new message.
+	 * Used by multi-block submissions when all user-visible blocks have already been persisted.
+	 */
+	async continueFromContext(): Promise<void> {
+		await this.agent.continue();
+		await this.#waitForPostPromptRecovery();
 	}
 
 	/**
