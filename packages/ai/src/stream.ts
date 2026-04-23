@@ -149,6 +149,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	xiaomi: "XIAOMI_API_KEY",
 	devin: "DEVIN_API_KEY",
 	warp: "WARP_API_KEY",
+	deepseek: "DEEPSEEK_API_KEY",
 };
 
 /**
@@ -200,6 +201,14 @@ export function stream<TApi extends Api>(
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
 	const providerOptions = { ...options, apiKey };
+
+	// Apply proxy base URL override for deepseek
+	if (model.provider === "deepseek") {
+		const proxyBaseUrl = $env.DEEPSEEK_BASE_URL;
+		if (proxyBaseUrl) {
+			model = { ...model, baseUrl: proxyBaseUrl };
+		}
+	}
 
 	const api: Api = model.api;
 	switch (api) {

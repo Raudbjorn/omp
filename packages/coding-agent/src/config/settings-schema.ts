@@ -1322,6 +1322,15 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: { tab: "tools", label: "Web Search", description: "Enable the web_search tool for web searching" },
 	},
+	"web_search.verbose": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			label: "Web Search Verbose",
+			description: "Show detailed search panels (sources, metadata, tokens). When disabled, uses compact output.",
+		},
+	},
 
 	"browser.enabled": {
 		type: "boolean",
@@ -1340,6 +1349,15 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "Headless Browser",
 			description: "Launch browser in headless mode (disable to show browser UI)",
+		},
+	},
+	"script.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			label: "Script tool",
+			description: "Allow the agent to use the script tool for programmatic multi-tool orchestration",
 		},
 	},
 	"browser.screenshotDir": {
@@ -1378,7 +1396,7 @@ export const SETTINGS_SCHEMA = {
 	// Async jobs
 	"async.enabled": {
 		type: "boolean",
-		default: false,
+		default: true,
 		ui: {
 			tab: "tools",
 			label: "Async Execution",

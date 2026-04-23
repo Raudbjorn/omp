@@ -16,7 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { engines, version } from "../package.json" with { type: "json" };
 
-/** App name (e.g. "omp") */
+/** App name */
 export const APP_NAME: string = "omp";
 
 /** Config directory name (e.g. ".omp") */
