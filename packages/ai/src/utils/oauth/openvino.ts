@@ -12,7 +12,6 @@
 import type { OAuthController, OAuthProvider } from "./types";
 
 const PROVIDER_ID: OAuthProvider = "openvino";
-const _DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:8000/v1";
 export const DEFAULT_LOCAL_TOKEN = "openvino-local";
 
 /**

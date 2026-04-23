@@ -139,8 +139,10 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	nvidia: "NVIDIA_API_KEY",
 	nanogpt: "NANO_GPT_API_KEY",
 	"lm-studio": "LM_STUDIO_API_KEY",
-	"ipex-llm": "IPEX_LLM_API_KEY",
-	openvino: "OPENVINO_API_KEY",
+	// ipex-llm and openvino typically run unauthenticated local servers; fall back
+	// to a placeholder token so stream() doesn't throw before the request is made.
+	"ipex-llm": () => $env.IPEX_LLM_API_KEY ?? "ipex-llm-local",
+	openvino: () => $env.OPENVINO_API_KEY ?? "openvino-local",
 	ollama: "OLLAMA_API_KEY",
 	"llama.cpp": "LLAMA_CPP_API_KEY",
 	qianfan: "QIANFAN_API_KEY",
