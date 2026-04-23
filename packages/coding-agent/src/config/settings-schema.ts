@@ -704,6 +704,18 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "interaction", label: "Speech-to-Text", description: "Enable speech-to-text input via microphone" },
 	},
 
+	"stt.backend": {
+		type: "enum",
+		values: ["openai-whisper", "faster-whisper"] as const,
+		default: "openai-whisper",
+		ui: {
+			tab: "interaction",
+			label: "STT Backend",
+			description: "Whisper implementation (faster-whisper uses CTranslate2, lighter on aarch64)",
+			submenu: true,
+		},
+	},
+
 	"stt.language": {
 		type: "string",
 		default: "en",
@@ -1973,6 +1985,7 @@ export interface ThinkingBudgetsSettings {
 
 export interface SttSettings {
 	enabled: boolean;
+	backend: string;
 	language: string | undefined;
 	modelName: string;
 	whisperPath: string | undefined;

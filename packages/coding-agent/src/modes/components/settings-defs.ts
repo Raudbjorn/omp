@@ -449,6 +449,12 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		{ value: "none", label: "None", description: "Space only" },
 		{ value: "ascii", label: "ASCII", description: "Greater-than signs" },
 	],
+	// STT backend
+	"stt.backend": [
+		{ value: "openai-whisper", label: "OpenAI Whisper", description: "Original whisper (requires PyTorch)" },
+		{ value: "faster-whisper", label: "Faster Whisper", description: "CTranslate2-based (lighter, no PyTorch needed)" },
+	],
+
 };
 
 function createSubmenuSettingDef(base: Omit<SettingDef, "type" | "options">, provider: OptionProvider): SettingDef {
