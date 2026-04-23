@@ -69,7 +69,9 @@
         "@oh-my-pi/pi-tui": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
         "@sinclair/typebox": "catalog:",
+        "@xterm/addon-unicode11": "catalog:",
         "@xterm/headless": "catalog:",
+        "@xterm/xterm": "catalog:",
         "ajv": "catalog:",
         "chalk": "catalog:",
         "diff": "catalog:",
@@ -79,6 +81,7 @@
         "lru-cache": "catalog:",
         "markit-ai": "catalog:",
         "puppeteer": "catalog:",
+        "qrcode-terminal": "catalog:",
         "turndown": "catalog:",
         "turndown-plugin-gfm": "catalog:",
         "zod": "catalog:",
@@ -222,7 +225,9 @@
     "@types/react-dom": "^19.2",
     "@types/turndown": "5.0.6",
     "@typescript/native-preview": "7.0.0-dev.20260322.1",
+    "@xterm/addon-unicode11": "^0.9",
     "@xterm/headless": "^6.0",
+    "@xterm/xterm": "^6.0",
     "ajv": "^8.18",
     "ajv-formats": "^3.0",
     "beautiful-mermaid": "^1.1",
@@ -243,6 +248,7 @@
     "postcss": "^8.5",
     "prettier": "^3.8",
     "puppeteer": "^24.37",
+    "qrcode-terminal": "^0.12",
     "react": "^19.2",
     "react-chartjs-2": "^5.3",
     "react-dom": "^19.2",
@@ -766,7 +772,11 @@
 
     "@xmldom/xmldom": ["@xmldom/xmldom@0.8.12", "", {}, "sha512-9k/gHF6n/pAi/9tqr3m3aqkuiNosYTurLLUtc7xQ9sxB/wm7WPygCv8GYa6mS0fLJEHhqMC1ATYhz++U/lRHqg=="],
 
+    "@xterm/addon-unicode11": ["@xterm/addon-unicode11@0.9.0", "", {}, "sha512-FxDnYcyuXhNl+XSqGZL/t0U9eiNb/q3EWT5rYkQT/zuig8Gz/VagnQANKHdDWFM2lTMk9ly0EFQxxxtZUoRetw=="],
+
     "@xterm/headless": ["@xterm/headless@6.0.0", "", {}, "sha512-5Yj1QINYCyzrZtf8OFIHi47iQtI+0qYFPHmouEfG8dHNxbZ9Tb9YGSuLcsEwj9Z+OL75GJqPyJbyoFer80a2Hw=="],
+
+    "@xterm/xterm": ["@xterm/xterm@6.0.0", "", {}, "sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg=="],
 
     "agent-base": ["agent-base@7.1.4", "", {}, "sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ=="],
 
@@ -1207,6 +1217,8 @@
     "puppeteer": ["puppeteer@24.41.0", "", { "dependencies": { "@puppeteer/browsers": "2.13.0", "chromium-bidi": "14.0.0", "cosmiconfig": "^9.0.0", "devtools-protocol": "0.0.1595872", "puppeteer-core": "24.41.0", "typed-query-selector": "^2.12.1" }, "bin": { "puppeteer": "lib/cjs/puppeteer/node/cli.js" } }, "sha512-W6Fk0J3TPjjtwjXOyR/qf+YaL0H/Uq8HIgHcXG4mNM/IgbKMCH/HPyK0Fi2qbTU/QpSl9bCte2yBpGHKejTpIw=="],
 
     "puppeteer-core": ["puppeteer-core@24.41.0", "", { "dependencies": { "@puppeteer/browsers": "2.13.0", "chromium-bidi": "14.0.0", "debug": "^4.4.3", "devtools-protocol": "0.0.1595872", "typed-query-selector": "^2.12.1", "webdriver-bidi-protocol": "0.4.1", "ws": "^8.19.0" } }, "sha512-rLIUri7E/NQ3APSEYCCozaSJx0u8Tu9wxO6BJwnvXmIgILSK3L0TombaVh3izp1njAGrO6H2ru0hcIrLF+gWLw=="],
+
+    "qrcode-terminal": ["qrcode-terminal@0.12.0", "", { "bin": { "qrcode-terminal": "./bin/qrcode-terminal.js" } }, "sha512-EXtzRZmC+YGmGlDFbXKxQiMZNwCLEO6BANKXG4iCtSIM0yqc/pappSx3RIKr4r0uh5JsBckOXeKrB3Iz7mdQpQ=="],
 
     "react": ["react@19.2.5", "", {}, "sha512-llUJLzz1zTUBrskt2pwZgLq59AemifIftw4aB7JxOqf1HY2FDaGDxgwpAPVzHU1kdWabH7FauP4i1oEeer2WCA=="],
 

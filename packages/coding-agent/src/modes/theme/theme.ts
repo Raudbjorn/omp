@@ -187,7 +187,8 @@ export type SymbolKey =
 	| "tab.editing"
 	| "tab.tools"
 	| "tab.tasks"
-	| "tab.providers";
+	| "tab.providers"
+	| "tab.webterm";
 
 type SymbolMap = Record<SymbolKey, string>;
 
@@ -291,8 +292,8 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"thinking.high": "◕ high",
 	"thinking.xhigh": "◉ xhi",
 	// Checkboxes
-	"checkbox.checked": "☑",
-	"checkbox.unchecked": "☐",
+	"checkbox.checked": "▣",
+	"checkbox.unchecked": "□",
 	// Formatting
 	"format.bullet": "•",
 	"format.dash": "—",
@@ -348,6 +349,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"tab.tools": "🔧",
 	"tab.tasks": "📦",
 	"tab.providers": "🌐",
+	"tab.webterm": "🕸",
 };
 
 const NERD_SYMBOLS: SymbolMap = {
@@ -601,6 +603,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	"tab.tools": "󰠭",
 	"tab.tasks": "󰐱",
 	"tab.providers": "󰖟",
+	"tab.webterm": "󰖩",
 };
 
 const ASCII_SYMBOLS: SymbolMap = {
@@ -759,6 +762,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"tab.tools": "[T]",
 	"tab.tasks": "[K]",
 	"tab.providers": "[P]",
+	"tab.webterm": "[W]",
 };
 
 const SYMBOL_PRESETS: Record<SymbolPreset, SymbolMap> = {
@@ -1650,6 +1654,7 @@ async function loadThemeJson(name: string): Promise<ThemeJson> {
 interface CreateThemeOptions {
 	mode?: ColorMode;
 	symbolPresetOverride?: SymbolPreset;
+	symbolOverrides?: Partial<Record<SymbolKey, string>>;
 	colorBlindMode?: boolean;
 }
 
@@ -1657,7 +1662,7 @@ interface CreateThemeOptions {
 const COLORBLIND_ADJUSTMENT = { h: 60, s: 0.71 };
 
 function createTheme(themeJson: ThemeJson, options: CreateThemeOptions = {}): Theme {
-	const { mode, symbolPresetOverride, colorBlindMode } = options;
+	const { mode, symbolPresetOverride, colorBlindMode, symbolOverrides } = options;
 	const colorMode = mode ?? detectColorMode();
 	const resolvedColors = resolveThemeColors(themeJson.colors, themeJson.vars);
 
@@ -1688,8 +1693,11 @@ function createTheme(themeJson: ThemeJson, options: CreateThemeOptions = {}): Th
 	}
 	// Extract symbol configuration - settings override takes precedence over theme
 	const symbolPreset: SymbolPreset = symbolPresetOverride ?? themeJson.symbols?.preset ?? "unicode";
-	const symbolOverrides = themeJson.symbols?.overrides ?? {};
-	return new Theme(fgColors, bgColors, colorMode, symbolPreset, symbolOverrides);
+	const mergedSymbolOverrides: Partial<Record<SymbolKey, string>> = {
+		...(themeJson.symbols?.overrides ?? {}),
+		...(symbolOverrides ?? {}),
+	};
+	return new Theme(fgColors, bgColors, colorMode, symbolPreset, mergedSymbolOverrides);
 }
 
 async function loadTheme(name: string, options: CreateThemeOptions = {}): Promise<Theme> {
@@ -1760,6 +1768,7 @@ export function getCurrentThemeName(): string | undefined {
 	return currentThemeName;
 }
 var currentSymbolPresetOverride: SymbolPreset | undefined;
+var currentSymbolOverrides: Partial<Record<SymbolKey, string>> | undefined;
 var currentColorBlindMode: boolean = false;
 var themeWatcher: fs.FSWatcher | undefined;
 var themeReloadTimer: NodeJS.Timeout | undefined;
@@ -1773,6 +1782,7 @@ var themeLoadRequestId: number = 0;
 function getCurrentThemeOptions(): CreateThemeOptions {
 	return {
 		symbolPresetOverride: currentSymbolPresetOverride,
+		symbolOverrides: currentSymbolOverrides,
 		colorBlindMode: currentColorBlindMode,
 	};
 }
@@ -1921,10 +1931,35 @@ export async function setSymbolPreset(preset: SymbolPreset): Promise<void> {
 }
 
 /**
+ * Set symbol overrides, recreating the theme with the new overrides.
+ */
+export async function setSymbolOverrides(overrides: Partial<Record<SymbolKey, string>> | null): Promise<void> {
+	currentSymbolOverrides = overrides ?? undefined;
+	if (currentThemeName) {
+		try {
+			theme = await loadTheme(currentThemeName, getCurrentThemeOptions());
+		} catch {
+			// Fall back to dark theme with new overrides
+			theme = await loadTheme("dark", getCurrentThemeOptions());
+		}
+		if (onThemeChangeCallback) {
+			onThemeChangeCallback();
+		}
+	}
+}
+
+/**
  * Get the current symbol preset override.
  */
 export function getSymbolPresetOverride(): SymbolPreset | undefined {
 	return currentSymbolPresetOverride;
+}
+
+/**
+ * Get the current symbol override map.
+ */
+export function getSymbolOverrides(): Partial<Record<SymbolKey, string>> | undefined {
+	return currentSymbolOverrides;
 }
 
 /**

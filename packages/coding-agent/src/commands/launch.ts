@@ -119,6 +119,9 @@ export default class Index extends Command {
 		"no-title": Flags.boolean({
 			description: "Disable title auto-generation",
 		}),
+		"web-terminal": Flags.boolean({
+			description: "Start the local web terminal server",
+		}),
 	};
 
 	static examples = [

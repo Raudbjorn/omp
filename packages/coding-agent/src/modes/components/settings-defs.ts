@@ -335,6 +335,14 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		{ value: "tool-only", label: "tool-only", description: "Interrupt only on tool-call argument matches" },
 		{ value: "never", label: "never", description: "Never interrupt; inject warning after completion" },
 	],
+	// Web terminal extra controls height
+	"webTerminal.extraControlsHeightPx": [
+		{ value: "32", label: "32px", description: "Compact" },
+		{ value: "40", label: "40px", description: "Standard" },
+		{ value: "48", label: "48px", description: "Large (Default)" },
+		{ value: "56", label: "56px", description: "X-Large" },
+		{ value: "64", label: "64px", description: "XX-Large" },
+	],
 	// Provider options
 	"providers.webSearch": [
 		{
