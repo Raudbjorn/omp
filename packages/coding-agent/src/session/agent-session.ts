@@ -582,9 +582,14 @@ export class AgentSession {
 				this.subscribe(event => {
 					if (event.type === "turn_end") {
 						const message = event.message as AssistantMessage;
-						void handler({
+						// Catch dispatch failures here so the void-ed promise doesn't
+						// produce an unhandled rejection. The runtime preserves chain
+						// state on throw so the next turn completion can retry.
+						handler({
 							stopReason: message.stopReason,
 							success: message.stopReason !== "error" && message.stopReason !== "aborted",
+						}).catch(error => {
+							logger.error("Prompt chain turn handler dispatch failed", { error: String(error) });
 						});
 					}
 				});

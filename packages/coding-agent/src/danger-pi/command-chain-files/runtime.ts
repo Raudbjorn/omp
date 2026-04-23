@@ -1,5 +1,4 @@
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
 import { renderPromptTemplate } from "../../config/prompt-templates";
 import { parseCommandArgs, substituteArgs } from "../../utils/command-args";
 
@@ -107,25 +106,25 @@ export function createPromptChainExecutor(host: PromptChainRuntimeHost): PromptC
 			return;
 		}
 		listenerInstalled = true;
+		// Errors from dispatchCurrentStep are intentionally allowed to propagate so
+		// that the chain state (activeStepIndex cleared, nextStepIndex unchanged)
+		// is preserved for the next turn completion to retry the failed step.
+		// The production caller in AgentSession is responsible for catching the
+		// rejection on the void-ed promise to prevent unhandled-rejection noise.
 		host.onTurnComplete(async result => {
-			try {
-				const hadActiveStep = queue[0]?.activeStepIndex !== undefined;
-				if (!result.success && hadActiveStep) {
-					clearQueue();
-					return;
-				}
-				completeCurrentStep();
-				removeFinishedChains();
-				const chain = queue[0];
-				if (!chain) {
-					return;
-				}
-				await dispatchCurrentStep(chain, { streamingBehavior: "followUp" });
-				removeFinishedChains();
-			} catch (error) {
+			const hadActiveStep = queue[0]?.activeStepIndex !== undefined;
+			if (!result.success && hadActiveStep) {
 				clearQueue();
-				logger.error("Prompt chain turn handler failed; clearing queue", { error: String(error) });
+				return;
 			}
+			completeCurrentStep();
+			removeFinishedChains();
+			const chain = queue[0];
+			if (!chain) {
+				return;
+			}
+			await dispatchCurrentStep(chain, { streamingBehavior: "followUp" });
+			removeFinishedChains();
 		});
 	};
 
