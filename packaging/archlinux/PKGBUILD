@@ -11,42 +11,58 @@
 # worktree — uncommitted changes included — into $srcdir:
 #
 #   OMP_REPO=/home/you/dev/omp makepkg -si
-#   OMP_REPO=/srv/omp OMP_BRANCH=feature/x makepkg -si   # OMP_BRANCH is
-#                                                          informational
-#                                                          only; rsync
-#                                                          follows whatever
-#                                                          HEAD is checked
-#                                                          out in OMP_REPO
+#
+# Build strategy (mirrors the can1357/oh-my-pi AUR PKGBUILD):
+#   1. Build native addons directly via cargo (baseline + modern variants)
+#      and install them as .node files alongside the compiled binary.
+#   2. Compile omp with `bun build --compile` WITHOUT embedding the native
+#      addon and WITHOUT setting PI_COMPILED=true. At runtime the loader
+#      resolves `.node` from `path.dirname(process.execPath)` — i.e.
+#      /usr/bin/ — so no extraction-to-$HOME dance is needed.
+#
+# This avoids the workspace-wide `bun run build` + embed:native + runtime
+# extraction path, which was observed to leave the event loop unreachable
+# on exit (process hangs after main returns).
 
 pkgname=omp
-_release_tag='v14.1.4-acp.2'
-pkgver=14.1.4.acp.2
+_release_tag='v14.1.4-acp.3'
+pkgver=14.1.4.acp.3
 pkgrel=1
 pkgdesc='Coding agent CLI with read, bash, edit, write tools and session management (Raudbjorn fork of oh-my-pi)'
-arch=('x86_64' 'aarch64')
+arch=('x86_64')
 url='https://github.com/Raudbjorn/omp'
 license=('MIT')
 # The compiled binary bundles the bun runtime, so runtime deps are minimal.
-depends=('gcc-libs' 'glibc')
-# bun is both the package manager and the bundler; rustup provides the pinned
-# nightly toolchain declared in rust-toolchain.toml for packages/natives.
-# rsync + jq are only needed for the local-worktree dev path; keep them as
-# makedeps so that path also works out of the box.
-makedepends=('bun>=1.3.7' 'rustup' 'git' 'rsync' 'jq')
+# icu + zlib match upstream's depends (surfaced by transitive Rust crates).
+depends=('gcc-libs' 'glibc' 'icu' 'zlib')
+# bun compiles the standalone binary; rustup provides the pinned nightly
+# declared in rust-toolchain.toml; zig pins CPU contracts for zlob's
+# host-side build.rs on both variants. rsync + jq are only needed for the
+# local-worktree dev path; keep them as makedeps so OMP_REPO works out of
+# the box.
+makedepends=('bun>=1.3.7' 'rustup' 'zig' 'git' 'rsync' 'jq')
 # bun's --compile output is already a stripped, standalone binary; re-stripping
 # or trying to extract debug symbols from it breaks makepkg.
 options=('!strip' '!debug' '!lto')
 provides=('omp-coding-agent')
 
-# Production source: shallow-clone the tag from GitHub. Dev path below
-# short-circuits this by nuking $srcdir/$pkgname in prepare().
-source=("${pkgname}-${pkgver}::git+${url}.git#tag=${_release_tag}")
-sha256sums=('SKIP')
-
 # Optional local-dev override: if OMP_REPO is set and exists, we skip the
-# git checkout cloned by makepkg and rsync the worktree in instead.
+# git checkout entirely and rsync the worktree in during prepare().
+# Declared before source= so we can conditionally skip the git clone (the
+# referenced tag doesn't need to exist yet during dev).
 _default_repo=''
 _repo="${OMP_REPO:-$_default_repo}"
+
+# Production source: shallow-clone the tag from GitHub. In dev mode
+# (OMP_REPO set) we elide the source array entirely so makepkg doesn't
+# try to resolve a tag that may not exist yet.
+if [[ -n "${_repo}" && -d "${_repo}/.git" ]]; then
+	source=()
+	sha256sums=()
+else
+	source=("${pkgname}-${pkgver}::git+${url}.git#tag=${_release_tag}")
+	sha256sums=('SKIP')
+fi
 
 pkgver() {
 	# When built from the git+https source, the tag is authoritative: we
@@ -77,6 +93,7 @@ prepare() {
 			--exclude='/dist-release/' \
 			--exclude='/packaging/archlinux/src/' \
 			--exclude='/packaging/archlinux/pkg/' \
+			--exclude='/packaging/archlinux/omp-*/' \
 			--exclude='/packaging/archlinux/*.pkg.tar.*' \
 			--exclude='**/node_modules/' \
 			--exclude='**/dist/' \
@@ -127,28 +144,88 @@ build() {
 	export DO_NOT_TRACK=1
 	export CI=1
 
-	# Install workspace deps (frozen lockfile for reproducibility).
+	# Resolve pinned toolchain channel from rust-toolchain.toml so cargo
+	# uses the same compiler as the rest of the workspace.
+	local _toolchain
+	_toolchain="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+	if [[ -z "${_toolchain}" ]]; then
+		error "Could not parse rust-toolchain.toml channel"
+		return 1
+	fi
+
+	local _rust_target='x86_64-unknown-linux-gnu'
+
+	# Install workspace deps (frozen lockfile for reproducibility). The
+	# top-level install is required even though we're bypassing the workspace
+	# build, because coding-agent's source imports @oh-my-pi/* workspace
+	# packages that bun resolves via node_modules.
 	bun install --frozen-lockfile
 
-	# Step 1: build the native N-API addon first. This runs build-native.ts,
-	# which does the zig/napi-rs/CPU-variant detection dance and produces
-	# packages/natives/native/pi_natives.linux-x64-modern.node.
-	bun --cwd=packages/natives run build
+	# Step 1: build the native addons directly via cargo — two variants,
+	# one per CPU contract. This is the upstream (can1357/oh-my-pi) approach
+	# and avoids napi-rs/build-native.ts orchestration, which wires up the
+	# embedded-addon extraction path that we don't want in the packaged
+	# build. The .so produced by `cargo build --release -p pi-natives` is
+	# identical to what napi-rs renames to .node.
+	local _variant _cpu _target_dir
+	for _variant in baseline modern; do
+		if [[ "${_variant}" = 'modern' ]]; then
+			_cpu='x86-64-v3'
+		else
+			_cpu='x86-64-v2'
+		fi
+		_target_dir="${srcdir}/target-${_variant}"
+		msg2 "Building pi-natives (${_variant}, target-cpu=${_cpu})"
+		CARGO_TARGET_DIR="${_target_dir}" RUSTFLAGS="-C target-cpu=${_cpu}" \
+			rustup run "${_toolchain}" cargo build \
+				--release \
+				--target "${_rust_target}" \
+				-p pi-natives
+		install -Dm755 \
+			"${_target_dir}/${_rust_target}/release/libpi_natives.so" \
+			"packages/natives/native/pi_natives.linux-x64-${_variant}.node"
+	done
 
-	# Step 2: workspace-wide build from the repo root. This triggers the
-	# coding-agent build (which bundles the stats client, embeds the native
-	# addon, and compiles the standalone omp binary via `bun build --compile`)
-	# as well as any other workspace packages that expose a `build` script.
-	# Running each workspace build in isolation (e.g. only `packages/coding-agent`)
-	# produces a binary that hangs on exit because the embed:native step
-	# doesn't see the freshly built addon in the right context.
-	bun run build
+	# Step 2: generate the stats client bundle that coding-agent imports.
+	# This is the only workspace-prep step we keep from the upstream
+	# `bun run build` — others would pull in things we don't need.
+	bun --cwd=packages/stats scripts/generate-client-bundle.ts --generate
+
+	# Step 3: compile the standalone binary WITHOUT embed:native and WITHOUT
+	# --define PI_COMPILED=true. The runtime loader in
+	# packages/natives/native/index.js falls back to
+	# path.dirname(process.execPath) — i.e. /usr/bin/ — where we'll install
+	# the .node files in package(). No extraction path is taken.
+	cd packages/coding-agent
+	bun build \
+		--compile \
+		--external mupdf \
+		--root ../.. \
+		./src/cli.ts \
+		--outfile dist/omp
+	cd "${srcdir}/${pkgname}"
+
+	# Step 4: reset the stats client bundle stub so the worktree isn't
+	# permanently dirty after a dev-mode build.
+	bun --cwd=packages/stats scripts/generate-client-bundle.ts --reset
 }
 
 check() {
 	cd "${srcdir}/${pkgname}/packages/coding-agent/dist"
+
 	# Sanity: the compiled binary answers --version.
 	./omp --version >/dev/null
+
+	# Regression guard: previously, the workspace-wide build + embed:native
+	# + runtime-extraction path produced a binary that hung on exit after
+	# --version. Run with a timeout so a regression here fails the build
+	# instead of hanging makepkg.
+	msg2 "Verifying clean exit on --version..."
+	if ! timeout --signal=KILL 10 ./omp --version >/dev/null; then
+		error "omp --version hung (>10s) — the hang-on-exit regression is back"
+		return 1
+	fi
+	msg2 "omp --version returned and exited cleanly."
 }
 
 package() {
@@ -156,21 +233,18 @@ package() {
 
 	install -Dm755 packages/coding-agent/dist/omp "${pkgdir}/usr/bin/omp"
 
-	# Install the N-API native addon alongside the binary. The bun-compiled
-	# omp executable now (post PI_COMPILED fix) extracts its embedded
-	# addon to ~/.omp/natives/${version}/ at first run, so these on-disk
-	# copies act as a fallback for that path and let the binary work even
-	# if $HOME is unwritable. We install under /usr/lib/omp/ and symlink
-	# into /usr/bin/ so the linter doesn't complain about a shared-object
-	# in /usr/bin.
-	local addon
-	for addon in packages/natives/native/pi_natives.linux-x64-*.node; do
-		[[ -f "${addon}" ]] || continue
-		local base
-		base="$(basename "${addon}")"
-		install -Dm644 "${addon}" "${pkgdir}/usr/lib/${pkgname}/${base}"
-		install -d "${pkgdir}/usr/bin"
-		ln -sf "../lib/${pkgname}/${base}" "${pkgdir}/usr/bin/${base}"
+	# Install the N-API native addons directly alongside the binary, which
+	# is where the runtime loader looks them up
+	# (path.dirname(process.execPath)). This matches the upstream layout
+	# and avoids the /usr/lib/omp/ + /usr/bin/ symlink dance of the
+	# previous PKGBUILD.
+	local _variant
+	for _variant in baseline modern; do
+		local _addon="packages/natives/native/pi_natives.linux-x64-${_variant}.node"
+		if [[ -f "${_addon}" ]]; then
+			install -Dm755 "${_addon}" \
+				"${pkgdir}/usr/bin/pi_natives.linux-x64-${_variant}.node"
+		fi
 	done
 
 	install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
@@ -178,6 +252,7 @@ package() {
 
 	# Stash a copy of AGENTS.md and STAGES.md alongside the README — they're
 	# the project's primary developer documentation.
+	local doc
 	for doc in AGENTS.md STAGES.md; do
 		if [[ -f "${doc}" ]]; then
 			install -Dm644 "${doc}" "${pkgdir}/usr/share/doc/${pkgname}/${doc}"
