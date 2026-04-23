@@ -1,12 +1,12 @@
 pkgbase = omp
 	pkgdesc = Coding agent CLI with read, bash, edit, write tools and session management (Raudbjorn fork of oh-my-pi)
-	pkgver = 14.1.4.r4244.c106ab91
+	pkgver = 14.1.4.acp.2
 	pkgrel = 1
 	url = https://github.com/Raudbjorn/omp
 	arch = x86_64
 	arch = aarch64
 	license = MIT
-	makedepends = bun>=1.3.5
+	makedepends = bun>=1.3.7
 	makedepends = rustup
 	makedepends = git
 	makedepends = rsync
@@ -17,5 +17,7 @@ pkgbase = omp
 	options = !strip
 	options = !debug
 	options = !lto
+	source = omp-14.1.4.acp.2::git+https://github.com/Raudbjorn/omp.git#tag=v14.1.4-acp.2
+	sha256sums = SKIP
 
 pkgname = omp

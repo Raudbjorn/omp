@@ -2,18 +2,25 @@
 #
 # Build-and-install PKGBUILD for omp — Raudbjorn's fork of oh-my-pi.
 #
-# Default source is the local git worktree at $OMP_REPO (auto-detected to
-# ../.. relative to this PKGBUILD) on branch $OMP_BRANCH. Override either
-# with an env var to build a different tree/branch without editing the file:
+# Default: fetches the pinned release tag from github.com/Raudbjorn/omp
+# via git+https. Someone running `makepkg -si` from a checkout of this
+# PKGBUILD alone will get a reproducible build of that release.
 #
-#   OMP_BRANCH=main makepkg -si
-#   OMP_REPO=/srv/omp OMP_BRANCH=release/14.1.4 makepkg -si
+# To build from a local worktree instead (dev mode), point OMP_REPO at
+# a checkout; that short-circuits the git+https fetch and rsyncs your
+# worktree — uncommitted changes included — into $srcdir:
 #
-# To build from GitHub instead of a local worktree, uncomment the git+https
-# source line below and comment out the git+file one.
+#   OMP_REPO=/home/you/dev/omp makepkg -si
+#   OMP_REPO=/srv/omp OMP_BRANCH=feature/x makepkg -si   # OMP_BRANCH is
+#                                                          informational
+#                                                          only; rsync
+#                                                          follows whatever
+#                                                          HEAD is checked
+#                                                          out in OMP_REPO
 
 pkgname=omp
-pkgver=14.1.4.r4244.c106ab91
+_release_tag='v14.1.4-acp.2'
+pkgver=14.1.4.acp.2
 pkgrel=1
 pkgdesc='Coding agent CLI with read, bash, edit, write tools and session management (Raudbjorn fork of oh-my-pi)'
 arch=('x86_64' 'aarch64')
@@ -23,53 +30,68 @@ license=('MIT')
 depends=('gcc-libs' 'glibc')
 # bun is both the package manager and the bundler; rustup provides the pinned
 # nightly toolchain declared in rust-toolchain.toml for packages/natives.
-makedepends=('bun>=1.3.5' 'rustup' 'git' 'rsync' 'jq')
+# rsync + jq are only needed for the local-worktree dev path; keep them as
+# makedeps so that path also works out of the box.
+makedepends=('bun>=1.3.7' 'rustup' 'git' 'rsync' 'jq')
 # bun's --compile output is already a stripped, standalone binary; re-stripping
 # or trying to extract debug symbols from it breaks makepkg.
 options=('!strip' '!debug' '!lto')
 provides=('omp-coding-agent')
 
-# Resolve the default repo path to the worktree containing this PKGBUILD.
-# $startdir is the directory makepkg was invoked from (where PKGBUILD lives).
-_default_repo="$(realpath -m "${startdir:-$PWD}/../..")"
+# Production source: shallow-clone the tag from GitHub. Dev path below
+# short-circuits this by nuking $srcdir/$pkgname in prepare().
+source=("${pkgname}-${pkgver}::git+${url}.git#tag=${_release_tag}")
+sha256sums=('SKIP')
+
+# Optional local-dev override: if OMP_REPO is set and exists, we skip the
+# git checkout cloned by makepkg and rsync the worktree in instead.
+_default_repo=''
 _repo="${OMP_REPO:-$_default_repo}"
 
-# Empty source: we snapshot the working tree in prepare() so uncommitted
-# changes are picked up. This is a dev-oriented PKGBUILD; to build from a
-# committed ref instead, replace with a git+https/git+file source.
-source=()
-sha256sums=()
-
 pkgver() {
-	cd "${_repo}"
-	local base
-	base="$(jq -r '.version' packages/coding-agent/package.json 2>/dev/null || echo '14.1.4')"
-	local rev sha
-	rev="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
-	sha="$(git rev-parse --short=8 HEAD 2>/dev/null || echo 00000000)"
-	printf '%s.r%s.%s' "${base}" "${rev}" "${sha}"
+	# When built from the git+https source, the tag is authoritative: we
+	# keep the static pkgver above. When OMP_REPO is set, derive a dev
+	# pkgver from the worktree so every rebuild is strictly increasing.
+	if [[ -n "${_repo}" && -d "${_repo}/.git" ]]; then
+		cd "${_repo}"
+		local base rev sha
+		base="$(jq -r '.version' packages/coding-agent/package.json 2>/dev/null || echo '14.1.4')"
+		rev="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
+		sha="$(git rev-parse --short=8 HEAD 2>/dev/null || echo 00000000)"
+		printf '%s.r%s.%s' "${base}" "${rev}" "${sha}"
+	else
+		printf '%s' "${pkgver}"
+	fi
 }
 
 prepare() {
-	# Snapshot the worktree into $srcdir/$pkgname, excluding build artefacts
-	# and VCS internals. rsync keeps uncommitted changes visible to the build.
-	rm -rf "${srcdir}/${pkgname}"
-	mkdir -p "${srcdir}/${pkgname}"
-	rsync -a --delete \
-		--exclude='/.git/' \
-		--exclude='/node_modules/' \
-		--exclude='/target/' \
-		--exclude='/dist/' \
-		--exclude='/packaging/archlinux/src/' \
-		--exclude='/packaging/archlinux/pkg/' \
-		--exclude='/packaging/archlinux/*.pkg.tar.*' \
-		--exclude='**/node_modules/' \
-		--exclude='**/dist/' \
-		--exclude='**/target/' \
-		--exclude='**/.turbo/' \
-		--exclude='**/tsconfig.tsbuildinfo' \
-		--exclude='**/*.tsbuildinfo' \
-		"${_repo}/" "${srcdir}/${pkgname}/"
+	if [[ -n "${_repo}" && -d "${_repo}/.git" ]]; then
+		msg2 "Using local worktree: %s" "${_repo}"
+		rm -rf "${srcdir}/${pkgname}-${pkgver}" "${srcdir}/${pkgname}"
+		mkdir -p "${srcdir}/${pkgname}"
+		rsync -a --delete \
+			--exclude='/.git/' \
+			--exclude='/node_modules/' \
+			--exclude='/target/' \
+			--exclude='/dist/' \
+			--exclude='/dist-release/' \
+			--exclude='/packaging/archlinux/src/' \
+			--exclude='/packaging/archlinux/pkg/' \
+			--exclude='/packaging/archlinux/*.pkg.tar.*' \
+			--exclude='**/node_modules/' \
+			--exclude='**/dist/' \
+			--exclude='**/target/' \
+			--exclude='**/.turbo/' \
+			--exclude='**/tsconfig.tsbuildinfo' \
+			--exclude='**/*.tsbuildinfo' \
+			"${_repo}/" "${srcdir}/${pkgname}/"
+	else
+		# Production path: the makepkg-cloned tree lives at
+		# $srcdir/${pkgname}-${pkgver} (because of the named source=()
+		# entry). Symlink it as $srcdir/${pkgname} so build() can be
+		# path-agnostic.
+		ln -sfn "${pkgname}-${pkgver}" "${srcdir}/${pkgname}"
+	fi
 
 	cd "${srcdir}/${pkgname}"
 
@@ -87,8 +109,7 @@ prepare() {
 	# Isolate bun's global install state to the build dir so the user's
 	# ~/.bun is untouched and the build is reproducible. Prefer the
 	# pacman-installed /usr/bin/bun (tracked as a makedep) over any older
-	# user-local bun on $PATH — e.g. ~/.bun/bin — since the build uses
-	# modern Bun APIs (Bun.Archive.write) introduced after 1.3.7.
+	# user-local bun on $PATH — the build uses Bun.Archive.write (≥1.3.7).
 	export BUN_INSTALL="${srcdir}/.bun"
 	export PATH="/usr/bin:${BUN_INSTALL}/bin:${PATH}"
 
@@ -136,17 +157,12 @@ package() {
 	install -Dm755 packages/coding-agent/dist/omp "${pkgdir}/usr/bin/omp"
 
 	# Install the N-API native addon alongside the binary. The bun-compiled
-	# omp executable has __filename baked to the build-time source path, so
-	# at runtime it does not recognise itself as a compiled-binary and skips
-	# the ~/.omp/natives extraction path. The loader in
-	# packages/natives/native/index.js then falls through to execDir
-	# (i.e. `dirname(process.execPath)` → /usr/bin), so the .node file must
-	# be reachable as /usr/bin/pi_natives.linux-x64-*.node. We install it
-	# under /usr/lib/omp/ and symlink it into /usr/bin/ so the linter
-	# doesn't complain about a shared-object in /usr/bin.
-	#
-	# Without this, PTY/terminal ops (all in Rust via napi-rs) never load
-	# and omp hangs on exit because the session can't be cleaned up.
+	# omp executable now (post PI_COMPILED fix) extracts its embedded
+	# addon to ~/.omp/natives/${version}/ at first run, so these on-disk
+	# copies act as a fallback for that path and let the binary work even
+	# if $HOME is unwritable. We install under /usr/lib/omp/ and symlink
+	# into /usr/bin/ so the linter doesn't complain about a shared-object
+	# in /usr/bin.
 	local addon
 	for addon in packages/natives/native/pi_natives.linux-x64-*.node; do
 		[[ -f "${addon}" ]] || continue
