@@ -1140,10 +1140,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#cleanupUnsubscribe) {
 			this.#cleanupUnsubscribe();
 		}
+		if (this.ui.terminal instanceof MirroredTerminal) {
+			setActiveWebTerminalBridge(null);
+		}
+		setWebTerminalServerCallbacks(null);
 		if (this.isInitialized) {
-			if (this.ui.terminal instanceof MirroredTerminal) {
-				setActiveWebTerminalBridge(null);
-			}
 			this.ui.stop();
 			this.isInitialized = false;
 		}
