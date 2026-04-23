@@ -62,6 +62,7 @@ export class STTController {
 			try {
 				options.showStatus("Checking STT dependencies...");
 				await ensureSTTDependencies({
+					backend: settings.get("stt.backend") as string | undefined,
 					modelName: settings.get("stt.modelName") as string | undefined,
 					onProgress: p => options.showStatus(p.stage + (p.percent != null ? ` (${p.percent}%)` : "")),
 				});
@@ -106,6 +107,7 @@ export class STTController {
 			this.#setState("transcribing", options);
 
 			const sttSettings = {
+				backend: settings.get("stt.backend") as string | undefined,
 				modelName: settings.get("stt.modelName") as string | undefined,
 				language: settings.get("stt.language") as string | undefined,
 			};
