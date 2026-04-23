@@ -47,7 +47,9 @@ async function ensurePythonWhisper(options?: EnsureOptions): Promise<void> {
 	}
 
 	const isFaster = options?.backend === "faster-whisper";
-	const importCheck = isFaster ? "from faster_whisper import WhisperModel" : "import whisper";
+	const importCheck = isFaster
+		? "from faster_whisper import WhisperModel; import ctranslate2, tokenizers, huggingface_hub, numpy"
+		: "import whisper";
 
 	const check = Bun.spawnSync([pythonCmd, "-c", importCheck], {
 		stdout: "pipe",
@@ -73,7 +75,7 @@ async function ensurePythonWhisper(options?: EnsureOptions): Promise<void> {
 			.nothrow();
 		if (deps.exitCode !== 0) {
 			const stderr = deps.stderr.toString().trim();
-			logger.warn(`Some faster-whisper deps failed to install: ${stderr.split("\n").pop()}`);
+			throw new Error(`Failed to install faster-whisper dependencies: ${stderr.split("\n").pop()}`);
 		}
 	} else {
 		const install = await $`${pythonCmd} -m pip install -q openai-whisper`.quiet().nothrow();
