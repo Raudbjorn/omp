@@ -159,28 +159,28 @@ describe("dynamic composer system prompt", () => {
 		).rejects.toThrow("composer: compilation response missing <compiled-system-prompt> wrapper");
 	});
 
-	it("rejects compiled output that omits invariants", () => {
+	it("appends invariants post-hoc when the compiled prompt omits them", async () => {
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(
 			createAssistantMessage("<compiled-system-prompt>\nCompiled prompt only\n</compiled-system-prompt>"),
 		);
 
-		return expect(
-			composerModule.compileSystemPrompt({
-				model: createModel(),
-				apiKey: "test-key",
-				inventory: {
-					tools: [{ name: "read", label: "Read", description: "Reads files" }],
-					editMode: "hashline",
-					skills: [],
-					environment: [{ label: "OS", value: "darwin arm64" }],
-					cwd: tempDir,
-				},
-				contextFiles: "",
-				invariants: composerInvariants,
-				tokenBudget: 2048,
-				noCache: true,
-			}),
-		).rejects.toThrow("composer: compiled prompt omitted invariants");
+		const result = await composerModule.compileSystemPrompt({
+			model: createModel(),
+			apiKey: "test-key",
+			inventory: {
+				tools: [{ name: "read", label: "Read", description: "Reads files" }],
+				editMode: "hashline",
+				skills: [],
+				environment: [{ label: "OS", value: "darwin arm64" }],
+				cwd: tempDir,
+			},
+			contextFiles: "",
+			invariants: composerInvariants,
+			tokenBudget: 2048,
+			noCache: true,
+		});
+
+		expect(result.systemPrompt).toBe(`Compiled prompt only\n\n${composerInvariants}`);
 	});
 
 	it("uses canonical composer invariants and still applies prompt overrides", async () => {
