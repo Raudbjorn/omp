@@ -205,8 +205,8 @@ parse_package_metadata() {
 	local pkg_dir pkg_json pkg_name pkg_version base_version new_version
 	for pkg_dir in "${PACKAGES[@]}"; do
 		pkg_json="$ROOT_DIR/packages/$pkg_dir/package.json"
-		pkg_name=$(bun -e 'const args = process.argv.slice(1); const [path] = args; if (!path) process.exit(1); const pkg = JSON.parse(await Bun.file(path).text()); console.log(pkg.name);' "$pkg_json")
-		pkg_version=$(bun -e 'const args = process.argv.slice(1); const [path] = args; if (!path) process.exit(1); const pkg = JSON.parse(await Bun.file(path).text()); console.log(pkg.version);' "$pkg_json")
+		pkg_name=$(bun -e 'const path = process.argv[2]; if (!path) process.exit(1); const pkg = JSON.parse(await Bun.file(path).text()); console.log(pkg.name);' "$pkg_json")
+		pkg_version=$(bun -e 'const path = process.argv[2]; if (!path) process.exit(1); const pkg = JSON.parse(await Bun.file(path).text()); console.log(pkg.version);' "$pkg_json")
 		base_version=$(normalize_fork_local_base_version "$pkg_version")
 		new_version="${base_version}-${LOCAL_BUILD_ID}"
 		PACKAGE_NAME_BY_DIR["$pkg_dir"]="$pkg_name"
@@ -235,7 +235,7 @@ patch_package_json() {
 	done
 	backup_package_json "$pkg_json"
 	# shellcheck disable=SC2016
-	bun -e 'const args = process.argv.slice(1);
+	bun -e 'const args = process.argv.slice(2);
 const [pkgPath, rootPackagePath, newVersion, ...rest] = args;
 const pkg = JSON.parse(await Bun.file(pkgPath).text());
 const rootPackage = JSON.parse(await Bun.file(rootPackagePath).text());

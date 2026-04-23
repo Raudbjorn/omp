@@ -88,8 +88,17 @@ remove_broken_lightningcss_store_entries() {
 	shopt -s nullglob
 	local entries=(
 		"$ROOT_DIR"/node_modules/.bun/lightningcss@*
+		"$ROOT_DIR"/node_modules/.bun/lightningcss-android-arm64@*
+		"$ROOT_DIR"/node_modules/.bun/lightningcss-darwin-arm64@*
+		"$ROOT_DIR"/node_modules/.bun/lightningcss-darwin-x64@*
+		"$ROOT_DIR"/node_modules/.bun/lightningcss-freebsd-x64@*
+		"$ROOT_DIR"/node_modules/.bun/lightningcss-linux-arm-gnueabihf@*
+		"$ROOT_DIR"/node_modules/.bun/lightningcss-linux-arm64-gnu@*
+		"$ROOT_DIR"/node_modules/.bun/lightningcss-linux-arm64-musl@*
 		"$ROOT_DIR"/node_modules/.bun/lightningcss-linux-x64-gnu@*
 		"$ROOT_DIR"/node_modules/.bun/lightningcss-linux-x64-musl@*
+		"$ROOT_DIR"/node_modules/.bun/lightningcss-win32-arm64-msvc@*
+		"$ROOT_DIR"/node_modules/.bun/lightningcss-win32-x64-msvc@*
 	)
 	shopt -u nullglob
 	if (( ${#entries[@]} == 0 )); then

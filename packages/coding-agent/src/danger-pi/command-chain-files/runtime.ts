@@ -1,4 +1,5 @@
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
+import { logger } from "@oh-my-pi/pi-utils";
 import { renderPromptTemplate } from "../../config/prompt-templates";
 import { parseCommandArgs, substituteArgs } from "../../utils/command-args";
 
@@ -123,7 +124,7 @@ export function createPromptChainExecutor(host: PromptChainRuntimeHost): PromptC
 				removeFinishedChains();
 			} catch (error) {
 				clearQueue();
-				console.error("Prompt chain turn handler failed; clearing queue", error);
+				logger.error("Prompt chain turn handler failed; clearing queue", { error: String(error) });
 			}
 		});
 	};

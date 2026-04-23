@@ -1667,8 +1667,17 @@ export class Editor implements Component, Focusable {
 	#submitValue(): void {
 		this.#resetKillSequence();
 
-		const result = this.#expandPasteMarkers(this.#state.lines.join("\n")).trim();
-		const lineIntents = this.#buildSubmissionLineIntents(result);
+		// Build line intents on the untrimmed expansion so paste segments with
+		// trailing newlines (e.g. "!cmd\n") still match. Then remap line indices
+		// to the trimmed result that callers actually see.
+		const expanded = this.#expandPasteMarkers(this.#state.lines.join("\n"));
+		const result = expanded.trim();
+		const leadingTrimmed = expanded.length - expanded.trimStart().length;
+		const leadingLineShift = expanded.slice(0, leadingTrimmed).split("\n").length - 1;
+		const trimmedLineCount = result.length === 0 ? 0 : result.split("\n").length;
+		const lineIntents = this.#buildSubmissionLineIntents(expanded)
+			.map(entry => ({ line: entry.line - leadingLineShift, intent: entry.intent }))
+			.filter(entry => entry.line >= 0 && entry.line < trimmedLineCount);
 
 		this.#state = { lines: [""], cursorLine: 0, cursorCol: 0 };
 		this.#pastes.clear();

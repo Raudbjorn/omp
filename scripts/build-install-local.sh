@@ -36,6 +36,7 @@ case "$(uname -m)" in
 esac
 NATIVE_DIR="$REPO_ROOT/packages/natives/native"
 TMP_BACKUP="$(mktemp "${TMPDIR:-/tmp}/omp-utils-package.XXXXXX")"
+BACKUP_READY=0
 declare -a NATIVE_CANDIDATES=()
 declare -a NATIVE_ADDON_FILES=()
 if [ "$ARCH" = "x64" ]; then
@@ -91,16 +92,17 @@ collect_native_addons() {
 cleanup() {
 	local exit_code=$?
 
-	if [ -f "$TMP_BACKUP" ]; then
+	if [ "$BACKUP_READY" = "1" ] && [ -f "$TMP_BACKUP" ]; then
 		cp "$TMP_BACKUP" "$UTILS_PACKAGE_JSON"
-		rm -f "$TMP_BACKUP"
 	fi
+	rm -f "$TMP_BACKUP" 2>/dev/null || true
 
 	exit "$exit_code"
 }
-trap cleanup EXIT INT TERM HUP
 
 cp "$UTILS_PACKAGE_JSON" "$TMP_BACKUP"
+BACKUP_READY=1
+trap cleanup EXIT INT TERM HUP
 
 echo "Patching version in packages/utils/package.json to +local-{yymmdd-hhmmss}"
 LOCAL_SUFFIX="local-$(date +%y%m%d-%H%M%S)"
