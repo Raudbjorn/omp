@@ -148,6 +148,20 @@ prepare() {
 	local bun_ver
 	bun_ver="$(/usr/bin/bun --version 2>/dev/null || true)"
 	msg2 "Using bun: /usr/bin/bun (%s)" "${bun_ver:-unknown}"
+
+	# If $srcdir was carried over from a prior failed build (makepkg keeps it
+	# between runs unless invoked with -C), packages/natives/package.json may
+	# still carry a bumped version from build()'s post-install jq step. On
+	# the next run, the on-disk version no longer matches the catalog spec
+	# in root package.json, and `bun install --frozen-lockfile` rejects the
+	# install. Restore the file from the source git tree at the start of
+	# prepare() — before bun install runs — so the workspace state is what
+	# the tag declared. (-e covers regular files, dirs, and git-worktree
+	# .git pointer files.)
+	local _git_tree="${srcdir}/${pkgname}-${pkgver}"
+	if [[ -e "${_git_tree}/.git" ]]; then
+		git -C "${_git_tree}" checkout -- packages/natives/package.json 2>/dev/null || true
+	fi
 }
 
 build() {
@@ -191,19 +205,11 @@ build() {
 	local _bun_cache_dir="${srcdir}/.bun-cache"
 	mkdir -p "${_bun_cache_dir}"
 
-	# If the source tree was reused from a prior failed build (makepkg keeps
-	# $srcdir between runs), $srcdir/${pkgname}/packages/natives/package.json
-	# may still carry a bumped version that no longer matches the catalog
-	# spec in root package.json. Restore the on-disk version to whatever the
-	# git tree at this commit declares, so --frozen-lockfile resolves cleanly.
-	local _git_tree="${srcdir}/${pkgname}-${pkgver}"
-	if [[ -d "${_git_tree}/.git" || -L "${_git_tree}/.git" ]]; then
-		git -C "${_git_tree}" checkout -- packages/natives/package.json 2>/dev/null || true
-	fi
-
 	# Install workspace deps (frozen lockfile for reproducibility). Required
 	# because coding-agent's source imports @oh-my-pi/* workspace packages
-	# that bun resolves through node_modules symlinks.
+	# that bun resolves through node_modules symlinks. The companion restore
+	# of packages/natives/package.json runs in prepare() so the workspace
+	# state is clean before this install.
 	bun install --frozen-lockfile --cache-dir="${_bun_cache_dir}"
 
 	# Bump pi-natives package.json version to the fork pkgver so the runtime
