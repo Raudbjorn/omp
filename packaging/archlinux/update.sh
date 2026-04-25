@@ -195,12 +195,12 @@ cmd makepkg -f || fail "makepkg failed"
 # changed). Tracked in git, so this needs to be committed alongside.
 cmd makepkg --printsrcinfo >.SRCINFO || fail "failed to regenerate .SRCINFO"
 
-# Read pkgname from the (now updated) PKGBUILD so we can address the
-# built binary directly under pkg/${pkgname}/usr/bin/omp without
-# scanning. Awk-extract; PKGBUILD pkgname is unquoted in our case.
-pkgname_value="$(awk -F= '/^pkgname=/{print $2; exit}' PKGBUILD | tr -d ' "'"'"'')"
+# Read pkgname from the freshly-regenerated .SRCINFO. It's the canonical
+# key=value form (`pkgname = omp` at column 0) and copes with PKGBUILD
+# array syntax (`pkgname=('omp')`) without parsing shell quoting.
+pkgname_value="$(awk '/^pkgname =/ {print $3; exit}' .SRCINFO)"
 if [[ -z $pkgname_value ]]; then
-	fail "unable to extract pkgname from PKGBUILD"
+	fail "unable to extract pkgname from .SRCINFO"
 fi
 pkg_omp="${script_dir}/pkg/${pkgname_value}/usr/bin/omp"
 if [[ ! -x $pkg_omp ]]; then
