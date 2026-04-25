@@ -53,6 +53,12 @@ makedepends=('bun' 'rustup' 'zig' 'rsync' 'jq')
 # makepkg trying to extract debug info or apply LTO post-processing.
 options=('!strip' '!debug' '!lto')
 provides=('omp-coding-agent')
+optdepends=(
+	'ollama: local LLM inference (gemma4, qwen, etc.) without network'
+	'sccache: caches Rust compilation artifacts; speeds up rebuilds significantly'
+	'mold: faster linker; auto-used during cargo build when present'
+)
+install="${pkgname}.install"
 
 # GitHub names archive-of-tag tarballs <repo>-<tag-without-v>, so for
 # tag v14.1.4-acp.5 the extracted dir is omp-14.1.4-acp.5/. We keep
@@ -134,11 +140,47 @@ build() {
 	export RUSTUP_TOOLCHAIN="${_toolchain}"
 	# Strip host build-flag pollution from /etc/makepkg.conf so the
 	# baseline (v2) / modern (v3) split isn't silently overridden by the
-	# user's -march=native or sccache CC/CXX wrappers.
+	# user's -march=native, znver4, etc. We re-set CC/CXX below if sccache
+	# is in PATH.
 	unset CI CC CXX CFLAGS CXXFLAGS LDFLAGS RUSTFLAGS
+
+	# Optional rebuild-acceleration: if sccache is installed, wrap rustc
+	# and the C compiler so cargo's per-crate hits are cached on disk.
+	# CARGO_INCREMENTAL=0 because incremental compilation conflicts with
+	# rustc-wrapper caching (cargo issue #6489). No-op without sccache.
+	local _sccache_status='unavailable'
+	if command -v sccache >/dev/null 2>&1; then
+		export RUSTC_WRAPPER=sccache
+		export CARGO_INCREMENTAL=0
+		# Wrap C compiler too — pi-natives' transitive deps (tree-sitter
+		# grammars, libwebp-sys, libmimalloc-sys, …) build C/C++ code
+		# through cc-rs which respects CC/CXX.
+		export CC="sccache cc"
+		export CXX="sccache c++"
+		_sccache_status='enabled'
+	fi
+	msg2 "sccache: %s" "${_sccache_status}"
+
+	# Optional faster linker: append mold to the inline RUSTFLAGS for
+	# each cargo invocation (below) if mold is on PATH. We don't set
+	# RUSTFLAGS at module scope because each cargo build needs its own
+	# `-C target-cpu=...` and inline assignment overrides exported env.
+	local _link_rustflags=''
+	local _mold_status='unavailable'
+	if command -v mold >/dev/null 2>&1; then
+		_link_rustflags='-C link-arg=-fuse-ld=mold'
+		_mold_status='enabled'
+	fi
+	msg2 "mold linker: %s" "${_mold_status}"
 
 	# bun telemetry is already off via bunfig.toml; this is belt-and-braces.
 	export DO_NOT_TRACK=1
+	# Skip puppeteer/playwright browser downloads during `bun install`.
+	# omp resolves browsers lazily at runtime (~/.omp/puppeteer/) so the
+	# install-time download is wasted bytes and a frequent failure point
+	# behind firewalls or in containers without network.
+	export PUPPETEER_SKIP_DOWNLOAD=1
+	export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 	bun install
 
@@ -157,12 +199,12 @@ build() {
 
 	rm -rf "${_baseline_target}" "${_modern_target}"
 
-	CARGO_TARGET_DIR="${_baseline_target}" RUSTFLAGS='-C target-cpu=x86-64-v2' \
+	CARGO_TARGET_DIR="${_baseline_target}" RUSTFLAGS="-C target-cpu=x86-64-v2 ${_link_rustflags}" \
 		cargo build --release --target "${_rust_target}" -p pi-natives
 	install -Dm755 "${_baseline_target}/${_rust_target}/release/libpi_natives.so" \
 		"packages/natives/native/pi_natives.linux-x64-baseline.node"
 
-	CARGO_TARGET_DIR="${_modern_target}" RUSTFLAGS='-C target-cpu=x86-64-v3' \
+	CARGO_TARGET_DIR="${_modern_target}" RUSTFLAGS="-C target-cpu=x86-64-v3 ${_link_rustflags}" \
 		cargo build --release --target "${_rust_target}" -p pi-natives
 	install -Dm755 "${_modern_target}/${_rust_target}/release/libpi_natives.so" \
 		"packages/natives/native/pi_natives.linux-x64-modern.node"
