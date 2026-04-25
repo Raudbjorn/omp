@@ -6,12 +6,20 @@ import { AcpError } from "../errors";
 import { hasExecutable } from "../auth-probe";
 
 /**
- * Spawn `gemini auth login` with the TTY inherited so the user can complete
- * the browser OAuth flow interactively. Resolves once the subprocess exits;
- * throws if the binary is missing or the credential file wasn't produced.
+ * Spawn an interactive `gemini` session with the TTY inherited so the user
+ * can complete the OAuth flow via the `/auth` slash command. Resolves once
+ * the subprocess exits; throws if the binary is missing or the credential
+ * file wasn't produced.
  *
- * Callers must pause their TUI (raw mode, alternate screen) before invoking;
- * this function does not attempt to suspend/resume stdin state.
+ * Older gemini-cli (≤ ~v0.30) supported `gemini auth login` as a subcommand;
+ * v0.38+ removed it — positional args are now treated as initial-prompt
+ * input ("Positional arguments now default to interactive mode"). The
+ * supported way to authenticate is `/auth` from inside the interactive UI,
+ * or the OAuth flow that fires automatically on first launch when
+ * ~/.gemini/oauth_creds.json is missing.
+ *
+ * Callers must pause their TUI (raw mode, alternate screen) before
+ * invoking; this function does not suspend/resume stdin state.
  */
 export async function runGeminiCliAcpLogin(timeoutMs = 5 * 60 * 1000): Promise<void> {
 	if (!(await hasExecutable("gemini"))) {
@@ -19,19 +27,21 @@ export async function runGeminiCliAcpLogin(timeoutMs = 5 * 60 * 1000): Promise<v
 	}
 
 	await new Promise<void>((resolve, reject) => {
-		const child = spawn("gemini", ["auth", "login"], { stdio: "inherit" });
+		const child = spawn("gemini", [], { stdio: "inherit" });
 		const timer = setTimeout(() => {
 			child.kill("SIGTERM");
-			reject(new AcpError("auth_required", `gemini auth login timed out after ${timeoutMs}ms`));
+			reject(new AcpError("auth_required", `gemini interactive login timed out after ${timeoutMs}ms`));
 		}, timeoutMs);
 		child.once("error", err => {
 			clearTimeout(timer);
-			reject(new AcpError("auth_required", `gemini auth login failed to start: ${err.message}`));
+			reject(new AcpError("auth_required", `gemini failed to start: ${err.message}`));
 		});
 		child.once("exit", (code, signal) => {
 			clearTimeout(timer);
-			if (code === 0) resolve();
-			else reject(new AcpError("auth_required", `gemini auth login exited with code=${code} signal=${signal}`));
+			// Accept any clean exit (including the user quitting after /auth);
+			// we verify success by checking the credentials file below.
+			if (code === 0 || signal === "SIGINT" || signal === "SIGTERM") resolve();
+			else reject(new AcpError("auth_required", `gemini exited with code=${code} signal=${signal}`));
 		});
 	});
 
@@ -41,7 +51,7 @@ export async function runGeminiCliAcpLogin(timeoutMs = 5 * 60 * 1000): Promise<v
 	} catch {
 		throw new AcpError(
 			"auth_required",
-			`gemini auth login completed but no credentials found at ${credsPath}`,
+			`No credentials at ${credsPath}. Inside the gemini TUI, run /auth and complete the browser sign-in, then /quit.`,
 		);
 	}
 }
