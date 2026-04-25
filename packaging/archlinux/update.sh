@@ -67,7 +67,8 @@ cd -- "$script_dir"
 
 [[ -f PKGBUILD ]] || fail "PKGBUILD not found in ${script_dir}"
 [[ -f .SRCINFO ]] || fail ".SRCINFO not found in ${script_dir}"
-cmd git rev-parse --show-toplevel >/dev/null || fail "not inside a git worktree"
+# Silent guard — no need to echo this routine sanity check.
+git rev-parse --show-toplevel >/dev/null 2>&1 || fail "not inside a git worktree"
 cmd git diff --cached --quiet || fail "git index is not clean; commit or unstage existing changes first"
 cmd git diff --quiet -- PKGBUILD .SRCINFO || fail "PKGBUILD or .SRCINFO has unstaged changes; clean them up first"
 
@@ -105,24 +106,32 @@ if ! confirm "Update _release_tag from ${current_tag} to ${latest_tag}?"; then
 	exit 0
 fi
 
-# Replace the _release_tag= line.
+# Replace the _release_tag= line and reset pkgrel=1. A new upstream
+# release should always start at pkgrel=1; if the previous release was
+# rebuilt (pkgrel=2 etc.) we don't want to carry that forward.
 pkgbuild_tmp="$(new_tmp)"
 awk -v latest_tag="$latest_tag" '
 BEGIN {
-	updated = 0
+	tag_done = 0
+	rel_done = 0
 }
-/^_release_tag=/ && !updated {
+/^_release_tag=/ && !tag_done {
 	print "_release_tag=\x27" latest_tag "\x27"
-	updated = 1
+	tag_done = 1
+	next
+}
+/^pkgrel=/ && !rel_done {
+	print "pkgrel=1"
+	rel_done = 1
 	next
 }
 {
 	print
 }
 END {
-	exit(updated ? 0 : 1)
+	exit((tag_done && rel_done) ? 0 : 1)
 }
-' PKGBUILD >"$pkgbuild_tmp" || fail "unable to update _release_tag in PKGBUILD"
+' PKGBUILD >"$pkgbuild_tmp" || fail "unable to update _release_tag/pkgrel in PKGBUILD"
 cmd mv "$pkgbuild_tmp" PKGBUILD
 
 # Regenerate checksums against the new tag's tarball.
@@ -137,7 +146,10 @@ if [[ $new_checksums != *sums=* ]]; then
 	fail "unexpected checksum output from makepkg -g"
 fi
 
-# Replace the integrity assignment block in PKGBUILD.
+# Replace the integrity assignment block in PKGBUILD. Handles both
+# single-line (`sha256sums=('hash')`) and multi-line forms emitted by
+# `makepkg -g` for sources arrays — once we hit the opening assignment,
+# we keep dropping continuation lines until the array's closing `)`.
 pkgbuild_tmp="$(new_tmp)"
 awk -v new_checksums="$new_checksums" '
 function is_integrity_assignment(line) {
@@ -145,12 +157,25 @@ function is_integrity_assignment(line) {
 }
 BEGIN {
 	replaced = 0
+	in_block = 0
 }
 {
+	if (in_block) {
+		# Drop continuation lines until we eat the closing `)`.
+		if ($0 ~ /\)/) {
+			in_block = 0
+		}
+		next
+	}
 	if (is_integrity_assignment($0)) {
 		if (!replaced) {
 			print new_checksums
 			replaced = 1
+		}
+		# If the opening line did not also close the array, swallow
+		# subsequent continuation lines too.
+		if ($0 !~ /\)/) {
+			in_block = 1
 		}
 		next
 	}
@@ -170,12 +195,16 @@ cmd makepkg -f || fail "makepkg failed"
 # changed). Tracked in git, so this needs to be committed alongside.
 cmd makepkg --printsrcinfo >.SRCINFO || fail "failed to regenerate .SRCINFO"
 
-# pkgver in the built package may differ from latest_tag (we strip 'v'
-# and replace '-' with '.'), so find the binary by path. -maxdepth 4
-# matches pkg/<pkgname>/usr/bin/omp; -print -quit stops on first hit.
-pkg_omp="$(find pkg -maxdepth 4 -path '*/usr/bin/omp' -executable -print -quit)"
-if [[ -z $pkg_omp ]]; then
-	fail "could not locate built omp binary under pkg/"
+# Read pkgname from the (now updated) PKGBUILD so we can address the
+# built binary directly under pkg/${pkgname}/usr/bin/omp without
+# scanning. Awk-extract; PKGBUILD pkgname is unquoted in our case.
+pkgname_value="$(awk -F= '/^pkgname=/{print $2; exit}' PKGBUILD | tr -d ' "'"'"'')"
+if [[ -z $pkgname_value ]]; then
+	fail "unable to extract pkgname from PKGBUILD"
+fi
+pkg_omp="${script_dir}/pkg/${pkgname_value}/usr/bin/omp"
+if [[ ! -x $pkg_omp ]]; then
+	fail "expected built binary at ${pkg_omp}"
 fi
 cmd "$pkg_omp" --version || fail "omp --version smoke test failed"
 
