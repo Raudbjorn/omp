@@ -33,8 +33,8 @@
 # files without overwriting them).
 
 pkgname=omp
-_release_tag='v14.1.4-acp.3'
-pkgver=14.1.4.acp.3
+_release_tag='v14.1.4-acp.4'
+pkgver=14.1.4.acp.4
 pkgrel=1
 pkgdesc='Coding agent CLI with read, bash, edit, write tools and session management (Raudbjorn fork of oh-my-pi)'
 # x86_64-only: the packaged pi-natives addons are built twice (baseline
