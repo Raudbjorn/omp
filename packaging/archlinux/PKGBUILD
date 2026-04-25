@@ -181,10 +181,30 @@ build() {
 
 	local _rust_target='x86_64-unknown-linux-gnu'
 
+	# Pin bun's package cache to the build dir so a stale entry in the user's
+	# ~/.bun/install/cache (e.g., a 13.x @oh-my-pi/pi-natives left over from
+	# an old upstream install) can't poison the workspace-package resolution
+	# under bunfig.toml's `linker = "isolated"`. With isolated linking, bun
+	# is strict about catalog version matches and a stale-cache hit surfaces
+	# as `error: No version matching "14.1.4" found for specifier
+	# "@oh-my-pi/pi-natives" (but package exists)`.
+	local _bun_cache_dir="${srcdir}/.bun-cache"
+	mkdir -p "${_bun_cache_dir}"
+
+	# If the source tree was reused from a prior failed build (makepkg keeps
+	# $srcdir between runs), $srcdir/${pkgname}/packages/natives/package.json
+	# may still carry a bumped version that no longer matches the catalog
+	# spec in root package.json. Restore the on-disk version to whatever the
+	# git tree at this commit declares, so --frozen-lockfile resolves cleanly.
+	local _git_tree="${srcdir}/${pkgname}-${pkgver}"
+	if [[ -d "${_git_tree}/.git" || -L "${_git_tree}/.git" ]]; then
+		git -C "${_git_tree}" checkout -- packages/natives/package.json 2>/dev/null || true
+	fi
+
 	# Install workspace deps (frozen lockfile for reproducibility). Required
 	# because coding-agent's source imports @oh-my-pi/* workspace packages
 	# that bun resolves through node_modules symlinks.
-	bun install --frozen-lockfile
+	bun install --frozen-lockfile --cache-dir="${_bun_cache_dir}"
 
 	# Bump pi-natives package.json version to the fork pkgver so the runtime
 	# loader's versionedDir (~/.omp/natives/<version>/) is unique to this
