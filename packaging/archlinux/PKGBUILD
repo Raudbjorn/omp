@@ -155,8 +155,7 @@ build() {
 	mv packages/natives/package.json.new packages/natives/package.json
 	msg2 "Set @oh-my-pi/pi-natives version to %s for cache-key uniqueness" "${pkgver}"
 
-	if [ -e "${_baseline_target}" ]; then rm -r "${_baseline_target}"; fi
-	if [ -e "${_modern_target}" ]; then rm -r "${_modern_target}"; fi
+	rm -rf "${_baseline_target}" "${_modern_target}"
 
 	CARGO_TARGET_DIR="${_baseline_target}" RUSTFLAGS='-C target-cpu=x86-64-v2' \
 		cargo build --release --target "${_rust_target}" -p pi-natives
