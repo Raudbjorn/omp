@@ -8,18 +8,21 @@ import { registerAdapter, streamAcp } from "./stream";
 // `stream.ts` or the rest of the module.
 registerAdapter("gemini-cli-acp", geminiAdapter);
 
-// Custom OAuth provider: login is delegated to a subprocess (`gemini auth login`)
-// because credentials live in `~/.gemini/oauth_creds.json` managed by the gemini
-// CLI itself. We store a sentinel api key so `/login` and `hasAuth` reflect the
-// user's intent; the ACP adapter re-probes the credential file at spawn time.
+// Custom OAuth provider: login is delegated to an interactive `gemini`
+// subprocess because credentials live in `~/.gemini/oauth_creds.json` managed
+// by the gemini CLI itself. gemini-cli ≥ v0.38 removed the `auth login`
+// subcommand — auth is now via the `/auth` slash command inside the TUI, or
+// the OAuth flow that fires automatically when oauth_creds.json is missing.
+// We store a sentinel api key so `/login` and `hasAuth` reflect the user's
+// intent; the ACP adapter re-probes the credential file at spawn time.
 const GEMINI_CLI_ACP_SENTINEL = "managed-by-gemini-cli";
 registerOAuthProvider({
 	id: "gemini-cli-acp",
 	name: "Gemini CLI (ACP)",
 	async login(callbacks) {
-		callbacks.onProgress?.("Launching `gemini auth login` in the terminal…");
+		callbacks.onProgress?.("Launching `gemini` interactively — run `/auth` to sign in, then `/quit`…");
 		await runGeminiCliAcpLogin();
-		callbacks.onProgress?.("gemini auth login completed. Credentials stored in ~/.gemini/oauth_creds.json.");
+		callbacks.onProgress?.("gemini sign-in completed. Credentials stored in ~/.gemini/oauth_creds.json.");
 		return GEMINI_CLI_ACP_SENTINEL;
 	},
 });

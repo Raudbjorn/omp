@@ -2,10 +2,11 @@
 /**
  * Manual smoke test for the Gemini CLI ACP adapter.
  *
- * Runs a single prompt through `gemini --experimental-acp` via the real
- * `streamAcp` orchestrator and prints each event to the console. Intended
- * for developers validating the stack on a host that has `gemini` installed
- * and authenticated (via `gemini auth login` or a GEMINI_API_KEY env var).
+ * Runs a single prompt through `gemini --acp` via the real `streamAcp`
+ * orchestrator and prints each event to the console. Intended for
+ * developers validating the stack on a host that has `gemini` installed
+ * and authenticated (via the TUI's `/auth` command or a GEMINI_API_KEY
+ * env var).
  *
  * Gated by the `GEMINI_SMOKE=1` environment variable so it cannot run in
  * unattended CI and rack up API usage or hit an unauthenticated host.

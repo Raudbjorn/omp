@@ -12,7 +12,11 @@ export const geminiAdapter: CliAdapter = {
 	displayName: "Gemini CLI (ACP)",
 	binary: "gemini",
 	installHint: INSTALL_HINT,
-	loginCommand: ["gemini", "auth", "login"],
+	// gemini-cli ≥ v0.38 dropped the `auth login` subcommand; the supported
+	// auth path is the `/auth` slash command inside an interactive session.
+	// We invoke `gemini` with no positional args so the user lands in the
+	// TUI and can run /auth, then /quit.
+	loginCommand: ["gemini"],
 
 	async probeAuth(env: NodeJS.ProcessEnv): Promise<AuthStatus> {
 		if (!(await hasExecutable("gemini"))) {
@@ -26,12 +30,16 @@ export const geminiAdapter: CliAdapter = {
 			const creds = await stat(credsPath);
 			return { kind: "logged_in_oauth", mtime: creds.mtime };
 		} catch {
-			return { kind: "logged_out", hint: "Run `gemini auth login`" };
+			return { kind: "logged_out", hint: "Run `gemini` and use `/auth` to sign in" };
 		}
 	},
 
 	spawnArgs(config: AcpConfig): readonly string[] {
-		const args: string[] = ["--experimental-acp"];
+		// gemini-cli marks `--experimental-acp` as deprecated in favour of
+		// `--acp` (per `gemini --help`). Both still work; prefer the
+		// supported flag so we don't break when the deprecated one is
+		// removed.
+		const args: string[] = ["--acp"];
 		if (config.model) {
 			args.push("--model", config.model);
 		}
