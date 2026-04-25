@@ -66,9 +66,10 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd -- "$script_dir"
 
 [[ -f PKGBUILD ]] || fail "PKGBUILD not found in ${script_dir}"
+[[ -f .SRCINFO ]] || fail ".SRCINFO not found in ${script_dir}"
 cmd git rev-parse --show-toplevel >/dev/null || fail "not inside a git worktree"
 cmd git diff --cached --quiet || fail "git index is not clean; commit or unstage existing changes first"
-cmd git diff --quiet -- PKGBUILD || fail "PKGBUILD has unstaged changes; clean them up first"
+cmd git diff --quiet -- PKGBUILD .SRCINFO || fail "PKGBUILD or .SRCINFO has unstaged changes; clean them up first"
 
 # Find the latest fork release tag. We look at origin's refs so this
 # works even if the local clone is behind. Sort by version, descending.
@@ -164,6 +165,11 @@ cmd mv "$pkgbuild_tmp" PKGBUILD
 # Build the package and smoke-test the resulting binary.
 cmd makepkg -f || fail "makepkg failed"
 
+# Regenerate .SRCINFO from the now-current PKGBUILD so the AUR-style
+# metadata stays in sync (pkgver, makedepends, source, checksums all
+# changed). Tracked in git, so this needs to be committed alongside.
+cmd makepkg --printsrcinfo >.SRCINFO || fail "failed to regenerate .SRCINFO"
+
 # pkgver in the built package may differ from latest_tag (we strip 'v'
 # and replace '-' with '.'), so find the binary by path. -maxdepth 4
 # matches pkg/<pkgname>/usr/bin/omp; -print -quit stops on first hit.
@@ -174,7 +180,7 @@ fi
 cmd "$pkg_omp" --version || fail "omp --version smoke test failed"
 
 # Stage and review.
-cmd git add PKGBUILD
+cmd git add PKGBUILD .SRCINFO
 cmd git --no-pager diff --cached
 
 if ! confirm "Does the staged diff look good?"; then
