@@ -182,6 +182,14 @@ build() {
 	export PUPPETEER_SKIP_DOWNLOAD=1
 	export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
+	# Note: no --frozen-lockfile. Matches upstream's permissive posture
+	# (a stale ~/.bun/install/cache entry from an old upstream install
+	# can otherwise fail catalog resolution under bunfig.toml's
+	# `linker = "isolated"`). Tarball-extract gives a clean source tree
+	# every run, so the lockfile/package.json on disk match the tagged
+	# release; bun install converges to that state without mutation in
+	# the normal case. If you need stricter reproducibility, add
+	# `--frozen-lockfile --cache-dir=${srcdir}/.bun-cache` here.
 	bun install
 
 	# Bump pi-natives package.json version to the fork pkgver so the
@@ -197,6 +205,14 @@ build() {
 	mv packages/natives/package.json.new packages/natives/package.json
 	msg2 "Set @oh-my-pi/pi-natives version to %s for cache-key uniqueness" "${pkgver}"
 
+	# Wipe both target dirs every build for deterministic output. Cargo's
+	# incremental compilation has known cross-crate staleness issues, and
+	# we already gate sccache above for the actual rebuild speedup —
+	# sccache caches the rustc invocations themselves, so warm rebuilds
+	# stay fast despite the rm -rf. If you're rebuilding repeatedly
+	# without sccache and want to keep cargo's deps cache, comment this
+	# out (you'll trade speed for the small risk of stale incremental
+	# state).
 	rm -rf "${_baseline_target}" "${_modern_target}"
 
 	CARGO_TARGET_DIR="${_baseline_target}" RUSTFLAGS="-C target-cpu=x86-64-v2 ${_link_rustflags}" \
@@ -247,7 +263,11 @@ package() {
 	# Flat layout (matches upstream can1357/oh-my-pi): binary and both
 	# native variants live under /usr/bin/. The loader's execDir
 	# resolution (path.dirname(process.execPath)) lands in /usr/bin/
-	# and finds the addons there.
+	# and finds the addons there. Tradeoff: namcap may warn about
+	# non-executable .node files in /usr/bin/. We accept the lint noise
+	# for parity with upstream — the .node files are deliberately
+	# colocated so execDir works regardless of symlink hops, which a
+	# /usr/lib/omp/ layout would require working through.
 	install -Dm755 packages/coding-agent/dist/omp "${pkgdir}/usr/bin/omp"
 
 	local _variant
