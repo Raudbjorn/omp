@@ -13,19 +13,24 @@
 #   OMP_REPO=/home/you/dev/omp makepkg -si
 #
 # Build strategy (mirrors the can1357/oh-my-pi AUR PKGBUILD):
-#   1. Build native addons directly via cargo (baseline + modern variants)
-#      and install them as .node files alongside the compiled binary.
-#   2. Compile omp with `bun build --compile` WITHOUT embedding the native
-#      addon and WITHOUT setting PI_COMPILED=true. At runtime the loader
-#      resolves `.node` from `path.dirname(process.execPath)`. On Linux,
-#      process.execPath is derived from /proc/self/exe and resolves
-#      symlinks, so the /usr/bin/omp -> /usr/lib/omp/omp entry point
-#      yields execDir=/usr/lib/omp — where the addons live, FHS-compliantly.
-#      No extraction-to-$HOME dance is needed.
+#   1. Build native addons directly via cargo for baseline (x86-64-v2) and
+#      modern (x86-64-v3) CPU contracts, installing each .so as a .node
+#      file under packages/natives/native/.
+#   2. Run the coding-agent's own build script via
+#      `bun --cwd=packages/coding-agent run build`. That runs
+#      `embed:native` to bake the .node files into the compiled binary,
+#      then `bun build --compile --define 'process.env.PI_COMPILED="true"'`.
+#      At runtime the binary self-extracts to ~/.omp/natives/<version>/;
+#      the on-disk .node copies under /usr/lib/omp/ act as a fallback for
+#      that path (resolved via path.dirname(process.execPath), which on
+#      Linux follows the /usr/bin/omp -> /usr/lib/omp/omp symlink).
 #
-# This avoids the workspace-wide `bun run build` + embed:native + runtime
-# extraction path, which was observed to leave the event loop unreachable
-# on exit (process hangs after main returns).
+# We intentionally bump packages/natives/package.json version to the
+# fork's release tag in prepare(). The native loader uses packageVersion
+# as the cache key for ~/.omp/natives/<version>/, so without the bump,
+# stale caches from upstream's 14.1.4 release shadow this fork's addons
+# (the loader checks versionedDir before execDir, and returns existing
+# files without overwriting them).
 
 pkgname=omp
 _release_tag='v14.1.4-acp.3'
@@ -154,6 +159,17 @@ build() {
 	export DO_NOT_TRACK=1
 	export CI=1
 
+	# Strip host build-flag pollution (mirrors upstream PKGBUILD). The user's
+	# /etc/makepkg.conf typically exports CFLAGS/CXXFLAGS/LDFLAGS pinned to
+	# -march=native (or znver4, etc.), and RUSTFLAGS likewise. cargo + cc-rs
+	# pick these up for any C/C++ deps in the pi-natives crate graph (zlib,
+	# ICU bindings via jemalloc, etc.), which would silently override the
+	# baseline (x86-64-v2) / modern (x86-64-v3) split we're trying to ship
+	# and produce a non-portable binary that crashes on older CPUs. Inline
+	# RUSTFLAGS=... below still wins for the Rust side regardless, but the
+	# C-side cc-rs invocations need a clean env.
+	unset CC CXX CFLAGS CXXFLAGS LDFLAGS RUSTFLAGS
+
 	# Resolve pinned toolchain channel from rust-toolchain.toml so cargo
 	# uses the same compiler as the rest of the workspace.
 	local _toolchain
@@ -165,18 +181,33 @@ build() {
 
 	local _rust_target='x86_64-unknown-linux-gnu'
 
-	# Install workspace deps (frozen lockfile for reproducibility). The
-	# top-level install is required even though we're bypassing the workspace
-	# build, because coding-agent's source imports @oh-my-pi/* workspace
-	# packages that bun resolves via node_modules.
+	# Install workspace deps (frozen lockfile for reproducibility). Required
+	# because coding-agent's source imports @oh-my-pi/* workspace packages
+	# that bun resolves through node_modules symlinks.
 	bun install --frozen-lockfile
 
+	# Bump pi-natives package.json version to the fork pkgver so the runtime
+	# loader's versionedDir (~/.omp/natives/<version>/) is unique to this
+	# fork's release. Without this, prior-installed upstream caches at
+	# ~/.omp/natives/14.1.4/ shadow our addons (loader checks versionedDir
+	# first when isCompiledBinary is true, and returns existing files
+	# without overwriting). Done AFTER `bun install --frozen-lockfile`
+	# because the catalog reference ("@oh-my-pi/pi-natives": "14.1.4")
+	# resolves against the on-disk package.json version and a mismatch
+	# fails the install. The embed:native script and the runtime loader
+	# both read packageJson.version directly, so the bump here flows into
+	# both the embedded-addon manifest and the bundled package.json.
+	local _native_version="${pkgver}"
+	jq --arg v "${_native_version}" '.version = $v' \
+		packages/natives/package.json > packages/natives/package.json.new
+	mv packages/natives/package.json.new packages/natives/package.json
+	msg2 "Set @oh-my-pi/pi-natives version to %s for cache-key uniqueness" "${_native_version}"
+
 	# Step 1: build the native addons directly via cargo — two variants,
-	# one per CPU contract. This is the upstream (can1357/oh-my-pi) approach
-	# and avoids napi-rs/build-native.ts orchestration, which wires up the
-	# embedded-addon extraction path that we don't want in the packaged
-	# build. The .so produced by `cargo build --release -p pi-natives` is
-	# identical to what napi-rs renames to .node.
+	# one per CPU contract. This is the upstream (can1357/oh-my-pi) approach.
+	# The .so produced by `cargo build --release -p pi-natives` is identical
+	# to what napi-rs renames to .node; we install both as the .node names
+	# the embed:native script expects in step 2.
 	local _variant _cpu _target_dir
 	for _variant in baseline modern; do
 		if [[ "${_variant}" = 'modern' ]]; then
@@ -196,40 +227,29 @@ build() {
 			"packages/natives/native/pi_natives.linux-x64-${_variant}.node"
 	done
 
-	# Step 2: generate the stats client bundle that coding-agent imports.
-	# This is the only workspace-prep step we keep from the upstream
-	# `bun run build` — others would pull in things we don't need.
-	bun --cwd=packages/stats scripts/generate-client-bundle.ts --generate
-
-	# Step 3: compile the standalone binary WITHOUT embed:native and WITHOUT
-	# --define PI_COMPILED=true. The runtime loader in
-	# packages/natives/native/index.js falls back to
-	# path.dirname(process.execPath) — i.e. /usr/bin/ — where we'll install
-	# the .node files in package(). No extraction path is taken.
-	cd packages/coding-agent
-	bun build \
-		--compile \
-		--external mupdf \
-		--root ../.. \
-		./src/cli.ts \
-		--outfile dist/omp
-	cd "${srcdir}/${pkgname}"
-
-	# Step 4: reset the stats client bundle stub so the worktree isn't
-	# permanently dirty after a dev-mode build.
-	bun --cwd=packages/stats scripts/generate-client-bundle.ts --reset
+	# Step 2: invoke the coding-agent's own build script (mirrors upstream).
+	# This runs:
+	#   - generate-client-bundle.ts --generate (inlines the stats client)
+	#   - embed:native (bakes the .node files we just built into the bundle
+	#     via Bun's `with { type: "file" }` mechanism, keyed by the pi-natives
+	#     package.json version we bumped in prepare())
+	#   - bun build --compile --define 'process.env.PI_COMPILED="true"'
+	#     --external mupdf --root ../.. ./src/cli.ts --outfile dist/omp
+	#   - embed:native --reset and generate-client-bundle.ts --reset to
+	#     return the worktree to a clean state
+	bun --cwd=packages/coding-agent run build
 }
 
 check() {
 	cd "${srcdir}/${pkgname}/packages/coding-agent/dist"
 
-	# Mirror the install-time layout so the native loader finds its addons
-	# during check(): the runtime loader uses path.dirname(process.execPath),
-	# which here points at dist/ — but the cargo-built .node files live two
-	# directories up at packages/natives/native/. Without these, the loader
-	# would silently fall back to an un-addon'd code path and the
-	# hang-on-exit regression this check is supposed to catch wouldn't
-	# trigger.
+	# Mirror the install-time layout so the native loader's execDir fallback
+	# resolves during check(): process.execPath points at dist/omp, so
+	# path.dirname(process.execPath) is dist/. The embed:native step bakes
+	# .node files into the binary, so the loader's primary path is
+	# self-extraction to ~/.omp/natives/<version>/, but if extraction fails
+	# (e.g., HOME unwritable in a chroot), the execDir fallback needs the
+	# .node files alongside the binary.
 	local _variant
 	for _variant in baseline modern; do
 		local _addon="${srcdir}/${pkgname}/packages/natives/native/pi_natives.linux-x64-${_variant}.node"
@@ -238,14 +258,13 @@ check() {
 		fi
 	done
 
-	# Regression guard: previously, the workspace-wide build + embed:native
-	# + runtime-extraction path produced a binary that hung on exit after
-	# --version. Run with a timeout so a regression here fails the build
-	# instead of hanging makepkg — and run every invocation under the same
-	# timeout, so an unguarded sanity call can't wedge makepkg on its own.
+	# Regression guard: a 10s timeout on --version. This catches gross
+	# event-loop-stuck-on-exit regressions in the compiled binary itself.
+	# It does NOT catch the MCP-child-process hang (that needs a session
+	# with stdio MCP servers connected, which --version doesn't trigger).
 	msg2 "Verifying --version exits cleanly..."
 	if ! timeout --signal=KILL 10 ./omp --version >/dev/null; then
-		error "omp --version hung (>10s) — the hang-on-exit regression is back"
+		error "omp --version hung (>10s) — exit-handler regression"
 		return 1
 	fi
 	msg2 "omp --version returned and exited cleanly."
