@@ -1,6 +1,12 @@
+# Bounded `omp --version` so a hung or misbehaving binary can't block
+# pacman. 10s is generous — a healthy build returns in <1s.
+_omp_version() {
+	timeout --signal=KILL 10 omp --version 2>/dev/null || echo 'unknown'
+}
+
 post_install() {
 	local _v
-	_v="$(omp --version 2>/dev/null || echo 'unknown')"
+	_v="$(_omp_version)"
 	cat <<EOF
 :: omp installed (${_v})
 :: Run 'omp' to start the coding agent.
@@ -9,7 +15,7 @@ post_install() {
 ::   - anthropic        Claude (web subscription via claude-gate, or API key)
 ::   - github-copilot   Copilot OAuth
 ::   - openai / gemini  API keys via env (OPENAI_API_KEY, GEMINI_API_KEY)
-::   - ollama           local inference (install 'ollama' optdep, then 'ollama pull gemma2')
+::   - ollama           local inference (install 'ollama' optdep, then 'ollama pull gemma4')
 ::   - ipex-llm/openvino Intel XPU local inference (no auth)
 ::
 :: Faster rebuilds: install 'sccache' and/or 'mold' (optdeps) — the PKGBUILD
@@ -24,7 +30,7 @@ EOF
 
 post_upgrade() {
 	local _v
-	_v="$(omp --version 2>/dev/null || echo 'unknown')"
+	_v="$(_omp_version)"
 	cat <<EOF
 :: omp upgraded (${_v})
 ::
