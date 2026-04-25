@@ -34,7 +34,12 @@
 
 pkgname=omp
 _release_tag='v14.1.4-acp.4'
-pkgver=14.1.4.acp.4
+# Derive pkgver from _release_tag to prevent drift on future bumps. Arch's
+# pkgver doesn't allow hyphens (they're reserved for the pkgrel separator),
+# so we strip the leading 'v' and replace '-' with '.':
+#   v14.1.4-acp.4 -> 14.1.4.acp.4
+pkgver="${_release_tag#v}"
+pkgver="${pkgver//-/.}"
 pkgrel=1
 pkgdesc='Coding agent CLI with read, bash, edit, write tools and session management (Raudbjorn fork of oh-my-pi)'
 # x86_64-only: the packaged pi-natives addons are built twice (baseline
