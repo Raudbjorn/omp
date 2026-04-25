@@ -33,7 +33,7 @@
 # files without overwriting them).
 
 pkgname=omp
-_release_tag='v14.1.4-acp.4'
+_release_tag='v14.1.4-acp.5'
 # Derive pkgver from _release_tag to prevent drift on future bumps. Arch's
 # pkgver doesn't allow hyphens (they're reserved for the pkgrel separator),
 # so we strip the leading 'v' and replace '-' with '.':
