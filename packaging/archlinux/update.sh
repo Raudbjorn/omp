@@ -164,12 +164,10 @@ cmd mv "$pkgbuild_tmp" PKGBUILD
 # Build the package and smoke-test the resulting binary.
 cmd makepkg -f || fail "makepkg failed"
 
-# pkgver in the built package may differ from latest_tag (it strips 'v'
-# and replaces '-' with '.') — find the binary by glob.
-pkg_omp="$(printf '%s\n' pkg/${pkgname:-omp}/usr/bin/omp 2>/dev/null | head -n 1)"
-if [[ -z $pkg_omp || ! -x $pkg_omp ]]; then
-	pkg_omp="$(find pkg -type f -name omp -path '*/usr/bin/omp' -executable | head -n 1)"
-fi
+# pkgver in the built package may differ from latest_tag (we strip 'v'
+# and replace '-' with '.'), so find the binary by path. -maxdepth 4
+# matches pkg/<pkgname>/usr/bin/omp; -print -quit stops on first hit.
+pkg_omp="$(find pkg -maxdepth 4 -path '*/usr/bin/omp' -executable -print -quit)"
 if [[ -z $pkg_omp ]]; then
 	fail "could not locate built omp binary under pkg/"
 fi
