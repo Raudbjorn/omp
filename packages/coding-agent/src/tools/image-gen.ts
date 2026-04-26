@@ -665,6 +665,22 @@ function resolveOpenAIImageSize(aspectRatio: string | undefined, imageSize: stri
 	}
 }
 
+// Gemini's image generation API expects `imageSize` as a tier label ("1K", "2K", "4K"),
+// not the pixel-dimension strings the schema exposes. Map the OpenAI-style values to
+// the closest tier so the same schema works across providers.
+function resolveGeminiImageSize(imageSize: string | undefined): string | undefined {
+	if (!imageSize) return undefined;
+	switch (imageSize) {
+		case "1024x1024":
+			return "1K";
+		case "1536x1024":
+		case "1024x1536":
+			return "2K";
+		default:
+			return imageSize;
+	}
+}
+
 function buildOpenAIHostedImageRequest(
 	model: Model,
 	promptText: string,
@@ -880,7 +896,9 @@ function buildAntigravityRequest(
 	}
 	parts.push({ text: prompt });
 
-	const imageConfig = aspectRatio || imageSize ? { aspectRatio: aspectRatio, imageSize: imageSize } : undefined;
+	const geminiImageSize = resolveGeminiImageSize(imageSize);
+	const imageConfig =
+		aspectRatio || geminiImageSize ? { aspectRatio: aspectRatio, imageSize: geminiImageSize } : undefined;
 
 	return {
 		project: projectId,
@@ -1197,10 +1215,11 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				responseModalities: ["IMAGE"],
 			};
 
-			if (params.aspect_ratio || params.image_size) {
+			const geminiImageSize = resolveGeminiImageSize(params.image_size);
+			if (params.aspect_ratio || geminiImageSize) {
 				generationConfig.imageConfig = {
 					aspectRatio: params.aspect_ratio,
-					imageSize: params.image_size,
+					imageSize: geminiImageSize,
 				};
 			}
 
