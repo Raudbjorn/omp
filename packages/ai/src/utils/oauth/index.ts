@@ -95,6 +95,7 @@ export { loginNanoGPT } from "./nanogpt";
 export { loginNvidia } from "./nvidia";
 // Ollama (optional API key)
 export { loginOllama } from "./ollama";
+export { loginOllamaCloud } from "./ollama-cloud";
 export type { OpenAICodexLoginOptions } from "./openai-codex";
 // OpenAI Codex (ChatGPT OAuth)
 export { loginOpenAICodex, refreshOpenAICodexToken } from "./openai-codex";
@@ -221,6 +222,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "ollama",
 		name: "Ollama (Local OpenAI-compatible)",
+		available: true,
+	},
+	{
+		id: "ollama-cloud",
+		name: "Ollama Cloud",
 		available: true,
 	},
 	{
@@ -433,6 +439,7 @@ export async function refreshOAuthToken(
 		case "ipex-llm":
 		case "openvino":
 		case "ollama":
+		case "ollama-cloud":
 		case "xiaomi":
 		case "zai":
 		case "qianfan":

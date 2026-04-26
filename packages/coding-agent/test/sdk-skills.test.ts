@@ -6,6 +6,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/sdk";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { cleanupTempHome } from "./helpers/temp-home-cleanup";
 
 function createIsolatedSkillsSettings(): Settings {
 	return Settings.isolated({
@@ -66,19 +67,7 @@ Loaded via symbolic link.
 		fs.symlinkSync(externalSkillDir, path.join(path.dirname(skillsDir), "symlinked-skill-link"), "dir");
 	});
 
-	afterEach(() => {
-		if (tempDir) {
-			fs.rmSync(tempDir, { recursive: true, force: true });
-		}
-		if (tempHomeDir) {
-			fs.rmSync(tempHomeDir, { recursive: true, force: true });
-		}
-		if (originalHome === undefined) {
-			delete process.env.HOME;
-		} else {
-			process.env.HOME = originalHome;
-		}
-	});
+	afterEach(cleanupTempHome(() => ({ tempDir, tempHomeDir, originalHome })));
 
 	// First createAgentSession in the suite warms up the workspace loader; give
 	// discovery tests a more generous budget so they don't flake on the boot cost

@@ -7,6 +7,7 @@ import type { ModelManagerOptions } from "../model-manager";
 import type { Api, KnownProvider } from "../types";
 import type { OAuthProvider } from "../utils/oauth/types";
 import { googleModelManagerOptions } from "./google";
+import { ollamaCloudModelManagerOptions } from "./ollama";
 import {
 	alibabaCodingPlanModelManagerOptions,
 	anthropicModelManagerOptions,
@@ -187,6 +188,12 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 		config => ollamaModelManagerOptions(config),
 		catalog("Ollama", ["OLLAMA_API_KEY"]),
 		{ allowUnauthenticated: true },
+	),
+	catalogDescriptor(
+		"ollama-cloud",
+		"gpt-oss:120b",
+		config => ollamaCloudModelManagerOptions(config),
+		catalog("Ollama Cloud", ["OLLAMA_CLOUD_API_KEY"], { oauthProvider: "ollama-cloud" }),
 	),
 	catalogDescriptor(
 		"cloudflare-ai-gateway",

@@ -246,7 +246,7 @@ describe("computeHashlineDiff", () => {
 		await Bun.write(sourcePath, "first\n");
 
 		const result = await computeHashlineDiff(
-			{ path: sourcePath, edits: [{ path: sourcePath, loc: "append", content: "second" }] },
+			{ path: sourcePath, edits: [{ path: sourcePath, loc: "append", content: ["second"] }] },
 			tempDir,
 		);
 		expect("diff" in result).toBe(true);
@@ -254,23 +254,6 @@ describe("computeHashlineDiff", () => {
 			expect(result.diff).toContain("second");
 		}
 	});
-
-	test("allows move-only operation when content is unchanged", async () => {
-		const sourcePath = path.join(tempDir, "source.txt");
-		await Bun.write(sourcePath, "unchanged content\n");
-
-		const result = await computeHashlineDiff(
-			{ path: sourcePath, edits: [], move: path.join(tempDir, "moved", "target.txt") },
-			tempDir,
-		);
-
-		expect("error" in result).toBe(false);
-		if ("diff" in result) {
-			expect(result.diff).toBe("");
-			expect(result.firstChangedLine).toBeUndefined();
-		}
-	});
-
 	test("returns a handled error when the source path is a local URL", async () => {
 		const result = await computeHashlineDiff({ path: "local://PLAN.md", edits: [] }, tempDir);
 

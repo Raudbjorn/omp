@@ -120,6 +120,25 @@ describe("ModelRegistry", () => {
 		});
 	}
 
+	function mockOllamaDiscovery(modelNames: string[]) {
+		return hookFetch(input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:11434/api/tags") {
+				return new Response(JSON.stringify({ models: modelNames.map(name => ({ name })) }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			if (url === "http://127.0.0.1:11434/api/show") {
+				return new Response(JSON.stringify({ capabilities: ["completion"] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		});
+	}
+
 	describe("canonical equivalence", () => {
 		test("groups dotted provider variants under the bundled canonical id", () => {
 			writeRawModelsJson({
@@ -402,6 +421,22 @@ describe("ModelRegistry", () => {
 
 			for (const model of anthropicModels) {
 				expect(model.headers?.["X-Custom-Header"]).toBe("custom-value");
+			}
+		});
+
+		test("headers-only override applies to built-in models", () => {
+			writeRawModelsJson({
+				anthropic: {
+					headers: { "X-Custom-Header": "custom-only" },
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const anthropicModels = getModelsForProvider(registry, "anthropic");
+
+			expect(anthropicModels.length).toBeGreaterThan(1);
+			for (const model of anthropicModels) {
+				expect(model.headers?.["X-Custom-Header"]).toBe("custom-only");
 			}
 		});
 
@@ -1372,7 +1407,20 @@ describe("ModelRegistry", () => {
 	});
 	describe("runtime discovery", () => {
 		test("auto-discovers ollama models without provider config", async () => {
-			using _hook = hookFetch(input => {
+			using _hook = mockOllamaDiscovery(["phi4-mini"]);
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh();
+			const ollamaModels = getModelsForProvider(registry, "ollama");
+			expect(ollamaModels.some(m => m.id === "phi4-mini")).toBe(true);
+			expect(registry.getAvailable().some(m => m.provider === "ollama" && m.id === "phi4-mini")).toBe(true);
+			expect(await registry.getApiKey(ollamaModels[0])).toBe(kNoAuth);
+		});
+
+		test("discovers ollama-cloud through built-in descriptor flow without regressing local implicit ollama", async () => {
+			authStorage.setRuntimeApiKey("ollama-cloud", "cloud-test-key");
+
+			using _hook = hookFetch((input, init) => {
 				const url = String(input);
 				if (url === "http://127.0.0.1:11434/api/tags") {
 					return new Response(JSON.stringify({ models: [{ name: "phi4-mini" }] }), {
@@ -1386,17 +1434,51 @@ describe("ModelRegistry", () => {
 						headers: { "Content-Type": "application/json" },
 					});
 				}
+				if (url === "https://ollama.com/api/tags") {
+					const headers = new Headers(init?.headers);
+					expect(headers.get("Authorization")).toBe("Bearer cloud-test-key");
+					return new Response(JSON.stringify({ models: [{ name: "gpt-oss:120b" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				if (url === "https://ollama.com/api/show") {
+					const headers = new Headers(init?.headers);
+					expect(headers.get("Authorization")).toBe("Bearer cloud-test-key");
+					const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
+					expect(body.model).toBe("gpt-oss:120b");
+					return new Response(
+						JSON.stringify({
+							capabilities: ["completion", "thinking"],
+							model_info: { "gpt-oss.context_length": 262144 },
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
 				throw new Error(`Unexpected URL: ${url}`);
 			});
 
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 			await registry.refresh();
-			const ollamaModels = getModelsForProvider(registry, "ollama");
-			expect(ollamaModels.some(m => m.id === "phi4-mini")).toBe(true);
-			expect(registry.getAvailable().some(m => m.provider === "ollama" && m.id === "phi4-mini")).toBe(true);
-			expect(await registry.getApiKey(ollamaModels[0])).toBe(kNoAuth);
-		});
 
+			const local = registry.find("ollama", "phi4-mini");
+			const cloud = registry.find("ollama-cloud", "gpt-oss:120b");
+
+			expect(local?.provider).toBe("ollama");
+			expect(local?.api).toBe("openai-responses");
+			expect(cloud?.provider).toBe("ollama-cloud");
+			expect(cloud?.api).toBe("ollama-chat");
+			expect(cloud?.baseUrl).toBe("https://ollama.com");
+			expect(cloud?.reasoning).toBe(true);
+			expect(cloud?.contextWindow).toBe(262144);
+			expect(await registry.getApiKey(cloud!)).toBe("cloud-test-key");
+			expect(registry.getAvailable().some(model => model.provider === "ollama" && model.id === "phi4-mini")).toBe(
+				true,
+			);
+			expect(
+				registry.getAvailable().some(model => model.provider === "ollama-cloud" && model.id === "gpt-oss:120b"),
+			).toBe(true);
+		});
 		test("discovers ollama models at runtime and treats auth:none providers as available", async () => {
 			writeRawModelsJson({
 				ollama: {
@@ -1591,22 +1673,7 @@ describe("ModelRegistry", () => {
 			});
 
 			{
-				using _hook = hookFetch(input => {
-					const url = String(input);
-					if (url === "http://127.0.0.1:11434/api/tags") {
-						return new Response(JSON.stringify({ models: [{ name: "phi4-mini" }] }), {
-							status: 200,
-							headers: { "Content-Type": "application/json" },
-						});
-					}
-					if (url === "http://127.0.0.1:11434/api/show") {
-						return new Response(JSON.stringify({ capabilities: ["completion"] }), {
-							status: 200,
-							headers: { "Content-Type": "application/json" },
-						});
-					}
-					throw new Error(`Unexpected URL: ${url}`);
-				});
+				using _hook = mockOllamaDiscovery(["phi4-mini"]);
 				const primedRegistry = new ModelRegistry(authStorage, modelsJsonPath);
 				await primedRegistry.refresh();
 			}
@@ -1790,6 +1857,18 @@ describe("ModelRegistry", () => {
 			expect(llama?.contextWindow).toBe(262144);
 			expect(llama?.maxTokens).toBe(8192);
 			expect(llama?.input).toEqual(["text", "image"]);
+		});
+	});
+	describe("bundled Anthropic catalog availability", () => {
+		test("includes native Opus 4.7 in available models when Anthropic auth exists", async () => {
+			await authStorage.set("anthropic", [{ type: "api_key", key: "sk-ant-api-test" }]);
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh("offline");
+
+			expect(
+				registry.getAvailable().some(model => model.provider === "anthropic" && model.id === "claude-opus-4-7"),
+			).toBe(true);
 		});
 	});
 });

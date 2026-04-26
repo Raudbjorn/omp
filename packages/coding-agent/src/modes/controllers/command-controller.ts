@@ -30,6 +30,7 @@ import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
 import { buildToolsMarkdown } from "../../modes/utils/tools-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
 import type { AuthStorage } from "../../session/auth-storage";
+import type { NewSessionOptions } from "../../session/session-manager";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd, stripOuterDoubleQuotes } from "../../tools/path-utils";
 import { replaceTabs } from "../../tools/render-utils";
@@ -613,7 +614,7 @@ export class CommandController {
 		this.ctx.showError("Usage: /memory <view|clear|reset|enqueue|rebuild>");
 	}
 
-	async handleClearCommand(): Promise<void> {
+	async #runNewSessionFlow(options?: NewSessionOptions, label: string = "New session started"): Promise<void> {
 		if (this.ctx.loadingAnimation) {
 			this.ctx.loadingAnimation.stop();
 			this.ctx.loadingAnimation = undefined;
@@ -626,7 +627,7 @@ export class CommandController {
 				await Bun.sleep(10);
 			}
 		}
-		await this.ctx.session.newSession();
+		if (!(await this.ctx.session.newSession(options))) return;
 		this.ctx.resetObserverRegistry();
 		setSessionTerminalTitle(
 			this.ctx.sessionManager.getSessionName(),
@@ -648,11 +649,21 @@ export class CommandController {
 		this.ctx.pendingTools.clear();
 
 		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(
-			new Text(`${theme.fg("accent", `${theme.status.success} New session started`)}`, 1, 1),
-		);
+		this.ctx.chatContainer.addChild(new Text(`${theme.fg("accent", `${theme.status.success} ${label}`)}`, 1, 1));
 		await this.ctx.reloadTodos();
 		this.ctx.ui.requestRender();
+	}
+
+	async handleClearCommand(): Promise<void> {
+		await this.#runNewSessionFlow();
+	}
+
+	async handleDropCommand(): Promise<void> {
+		if (!this.ctx.sessionManager.getSessionFile()) {
+			this.ctx.showError("Nothing to drop (in-memory session)");
+			return;
+		}
+		await this.#runNewSessionFlow({ drop: true }, "Session dropped");
 	}
 
 	async handleForkCommand(): Promise<void> {

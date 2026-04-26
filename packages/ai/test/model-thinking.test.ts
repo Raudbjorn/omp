@@ -4,7 +4,7 @@ import {
 	clampThinkingLevelForModel,
 	Effort,
 	enrichModelThinking,
-	linkSparkPromotionTargets,
+	linkOpenAIPromotionTargets,
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
 	requireSupportedEffort,
@@ -259,7 +259,7 @@ describe("generated model policies", () => {
 		expect(models[3]?.priority).toBe(1);
 	});
 
-	it("does not special-case Copilot Opus 4.6 generated limits", () => {
+	it("normalizes Copilot generated fallback limits", () => {
 		const models: Model<Api>[] = [
 			{
 				...createModel({
@@ -267,8 +267,26 @@ describe("generated model policies", () => {
 					api: "anthropic-messages",
 					provider: "github-copilot",
 				}),
-				contextWindow: 168000,
-				maxTokens: 32000,
+				contextWindow: 144000,
+				maxTokens: 64000,
+			},
+			{
+				...createModel({
+					id: "gpt-5.4-mini",
+					api: "openai-responses",
+					provider: "github-copilot",
+				}),
+				contextWindow: 400000,
+				maxTokens: 128000,
+			},
+			{
+				...createModel({
+					id: "grok-code-fast-1",
+					api: "openai-completions",
+					provider: "github-copilot",
+				}),
+				contextWindow: 128000,
+				maxTokens: 64000,
 			},
 		];
 
@@ -276,25 +294,73 @@ describe("generated model policies", () => {
 
 		expect(models[0]?.contextWindow).toBe(168000);
 		expect(models[0]?.maxTokens).toBe(32000);
+		expect(models[1]?.contextWindow).toBe(272000);
+		expect(models[1]?.maxTokens).toBe(128000);
+		expect(models[2]?.contextWindow).toBe(192000);
+		expect(models[2]?.maxTokens).toBe(64000);
 	});
 
-	it("links spark variants to their base models", () => {
+	it("links spark variants and gpt-5.5 to their context promotion targets", () => {
 		const models = [
 			createModel({
-				id: "gpt-5.2-codex-spark",
+				id: "gpt-5.3-codex-spark",
 				api: "openai-codex-responses",
 				provider: "openai-codex",
 			}),
 			createModel({
-				id: "gpt-5.2-codex",
+				id: "gpt-5.5",
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+			}),
+			createModel({
+				id: "gpt-5.4",
 				api: "openai-codex-responses",
 				provider: "openai-codex",
 			}),
 		];
 
-		linkSparkPromotionTargets(models);
+		linkOpenAIPromotionTargets(models);
 
-		expect(models[0]?.contextPromotionTarget).toBe("openai-codex/gpt-5.2-codex");
+		expect(models[0]?.contextPromotionTarget).toBe("openai-codex/gpt-5.5");
+		expect(models[1]?.contextPromotionTarget).toBe("openai-codex/gpt-5.4");
+	});
+
+	it("sets freeform apply_patch metadata for first-party GPT-5 Responses models", () => {
+		const models: Model<Api>[] = [
+			createModel({
+				id: "gpt-5.4",
+				api: "openai-responses",
+				provider: "openai",
+			}),
+			createModel({
+				id: "gpt-5.3-codex-spark",
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+			}),
+			{
+				...createModel({
+					id: "gpt-5.3-codex-spark",
+					api: "openai-responses",
+					provider: "opencode",
+				}),
+				applyPatchToolType: "freeform",
+			},
+			{
+				...createModel({
+					id: "gpt-5.4",
+					api: "openai-completions",
+					provider: "litellm",
+				}),
+				applyPatchToolType: "freeform",
+			},
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.applyPatchToolType).toBe("freeform");
+		expect(models[1]?.applyPatchToolType).toBe("freeform");
+		expect(models[2]?.applyPatchToolType).toBeUndefined();
+		expect(models[3]?.applyPatchToolType).toBeUndefined();
 	});
 });
 

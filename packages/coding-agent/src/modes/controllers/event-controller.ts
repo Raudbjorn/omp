@@ -179,12 +179,18 @@ export class EventController {
 			const signature = `${textContent}\u0000${imageCount}`;
 
 			this.#resetReadGroup();
-			if (this.ctx.optimisticUserMessageSignature !== signature) {
+			const wasOptimistic = this.ctx.optimisticUserMessageSignature === signature;
+			if (!wasOptimistic) {
 				this.ctx.addMessageToChat(event.message);
 			}
 			this.ctx.optimisticUserMessageSignature = undefined;
 
-			if (!event.message.synthetic) {
+			// Clear the editor only when the submission did not originate from this
+			// session's optimistic flow (which already cleared the editor at submit
+			// time). Clearing here on the optimistic path would race with the user
+			// typing the next prompt while the previous large redraw lands and erase
+			// their in-progress draft (#783).
+			if (!event.message.synthetic && !wasOptimistic) {
 				this.ctx.editor.setText("");
 				this.ctx.updatePendingMessagesDisplay();
 			}
@@ -270,8 +276,21 @@ export class EventController {
 			for (const content of this.ctx.streamingMessage.content) {
 				if (content.type !== "toolCall") continue;
 				const args = content.arguments;
-				if (!args || typeof args !== "object" || !(INTENT_FIELD in args)) continue;
-				this.#updateWorkingMessageFromIntent(args[INTENT_FIELD] as string | undefined);
+				if (!args || typeof args !== "object") continue;
+				if (INTENT_FIELD in args) {
+					this.#updateWorkingMessageFromIntent(args[INTENT_FIELD] as string | undefined);
+					continue;
+				}
+				const tool = this.ctx.session.getToolByName(content.name);
+				if (typeof tool?.intent !== "function") continue;
+				try {
+					const derived = tool.intent(args as never)?.trim();
+					if (derived) {
+						this.#updateWorkingMessageFromIntent(derived);
+					}
+				} catch {
+					// intent function must never break the UI
+				}
 			}
 
 			this.ctx.ui.requestRender();
