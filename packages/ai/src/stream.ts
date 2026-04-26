@@ -20,6 +20,7 @@ import { type GoogleGeminiCliOptions, streamGoogleGeminiCli } from "./providers/
 import { type GoogleVertexOptions, streamGoogleVertex } from "./providers/google-vertex";
 import { isKimiModel, streamKimi } from "./providers/kimi";
 import { type AcpAgentOptions, streamAcp } from "./providers/acp";
+import { type OllamaChatOptions, streamOllama } from "./providers/ollama";
 import { streamOpenAICodexResponses } from "./providers/openai-codex-responses";
 import { type OpenAICompletionsOptions, streamOpenAICompletions } from "./providers/openai-completions";
 import { streamOpenAIResponses } from "./providers/openai-responses";
@@ -37,6 +38,7 @@ import type {
 	ThinkingBudgets,
 	ToolChoice,
 } from "./types";
+import { isFoundryEnabled } from "./utils/foundry";
 
 let cachedVertexAdcCredentialsExists: boolean | null = null;
 
@@ -56,13 +58,6 @@ function hasVertexAdcCredentials(): boolean {
 
 type KeyResolver = string | (() => string | undefined);
 
-function isFoundryEnabled(): boolean {
-	const value = $env.CLAUDE_CODE_USE_FOUNDRY;
-	if (!value) return false;
-	const normalized = value.trim().toLowerCase();
-	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
 const serviceProviderMap: Record<string, KeyResolver> = {
 	"alibaba-coding-plan": "ALIBABA_CODING_PLAN_API_KEY",
 	openai: "OPENAI_API_KEY",
@@ -81,6 +76,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	"opencode-go": "OPENCODE_API_KEY",
 	"opencode-zen": "OPENCODE_API_KEY",
 	cursor: "CURSOR_ACCESS_TOKEN",
+	deepseek: "DEEPSEEK_API_KEY",
 	"openai-codex": "OPENAI_CODEX_OAUTH_TOKEN",
 	"azure-openai-responses": "AZURE_OPENAI_API_KEY",
 	exa: "EXA_API_KEY",
@@ -144,6 +140,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	"ipex-llm": () => $env.IPEX_LLM_API_KEY ?? "ipex-llm-local",
 	openvino: () => $env.OPENVINO_API_KEY ?? "openvino-local",
 	ollama: "OLLAMA_API_KEY",
+	"ollama-cloud": "OLLAMA_CLOUD_API_KEY",
 	"llama.cpp": "LLAMA_CPP_API_KEY",
 	qianfan: "QIANFAN_API_KEY",
 	"qwen-portal": () => $pickenv("QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"),
@@ -154,7 +151,6 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	xiaomi: "XIAOMI_API_KEY",
 	devin: "DEVIN_API_KEY",
 	warp: "WARP_API_KEY",
-	deepseek: "DEEPSEEK_API_KEY",
 };
 
 /**
@@ -245,6 +241,9 @@ export function stream<TApi extends Api>(
 				context,
 				providerOptions as GoogleGeminiCliOptions,
 			);
+
+		case "ollama-chat":
+			return streamOllama(model as Model<"ollama-chat">, context, providerOptions as OllamaChatOptions);
 
 		case "cursor-agent":
 			return streamCursor(model as Model<"cursor-agent">, context, providerOptions as CursorOptions);
@@ -713,6 +712,13 @@ function mapOptionsForApi<TApi extends Api>(
 				toolChoice: mapGoogleToolChoice(options?.toolChoice),
 			});
 		}
+
+		case "ollama-chat":
+			return castApi<"ollama-chat">({
+				...base,
+				reasoning: resolveOpenAiReasoningEffort(model, options),
+				toolChoice: options?.toolChoice,
+			});
 
 		case "cursor-agent": {
 			const execHandlers = options?.cursorExecHandlers ?? options?.execHandlers;

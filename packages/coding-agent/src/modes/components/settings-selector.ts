@@ -33,7 +33,7 @@ import {
 } from "../../web-terminal/interfaces";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
-import { PluginSettingsComponent } from "./plugin-settings";
+import { handleInputOrEscape, PluginSettingsComponent } from "./plugin-settings";
 import { getSettingsForTab, type SettingDef } from "./settings-defs";
 import { getPreset } from "./status-line/presets";
 
@@ -78,11 +78,7 @@ class TextInputSubmenu extends Container {
 	}
 
 	handleInput(data: string): void {
-		if (data === "\x1b" || data === "\x1b\x1b") {
-			this.onCancel();
-			return;
-		}
-		this.#input.handleInput(data);
+		handleInputOrEscape(data, this.#input, this.onCancel);
 	}
 }
 

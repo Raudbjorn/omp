@@ -33,6 +33,7 @@ export type OAuthProvider =
 	| "nvidia"
 	| "nanogpt"
 	| "ollama"
+	| "ollama-cloud"
 	| "openai-codex"
 	| "opencode-go"
 	| "opencode-zen"

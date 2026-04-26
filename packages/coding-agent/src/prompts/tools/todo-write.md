@@ -1,28 +1,60 @@
-Manages a phased task list. Each field is a verb — set the ones you need in a single call.
+Manages a phased task list through an `ops` array of flat operations.
 The next pending task is auto-promoted to `in_progress` after completing the current one.
 
 <protocol>
-## Fields
+## Shape
+
+Pass an object with an `ops` array:
+
+```ts
+{
+  ops: [
+    { op: "replace", phases: [...] },
+    { op: "start", task: "task-3" },
+    { op: "done", phase: "Implementation" },
+    { op: "rm" },
+    { op: "drop", task: "task-9" },
+    { op: "append", phase: "Implementation", items: [{ id: "task-10", label: "Run tests" }] },
+  ],
+}
+```
+
+## Operation fields
 
 |Field|Type|When to use|
 |---|---|---|
-|`phases`|Phase[]|Initial setup, or full restructure when the plan changes significantly|
-|`complete`|string[]|Mark tasks done|
-|`start`|string|Jump to a specific task out of order|
-|`abandon`|string[]|Drop tasks intentionally|
-|`remove`|string[]|Remove tasks that are no longer relevant|
-|`add_notes`|{id, notes}[]|Append runtime observations to tasks|
-|`add_tasks`|{phase, content, details?}[]|Add tasks to a phase (by name or ID)|
-|`add_phase`|{name, tasks?}|Add a new phase of work discovered mid-task|
+|`op`|string|Required. One of `replace`, `start`, `done`, `rm`, `drop`, `append`, `note`|
+|`task`|string|Task id for `start`, or a task target for `done` / `rm` / `drop`|
+|`phase`|string|Phase target for `done` / `rm` / `drop`, or append destination for `append`|
+|`items`|{id, label}[]|Required for `append`. If the phase does not exist, it is created at the end|
+|`phases`|Phase[]|Only for `replace`. Keeps initial phased setup available for harness bootstrap and full restructures|
+|`text`|string|Required for `note`. The note text appended to `task.notes` (which is a list, joined with newlines on render)|
+
+## Semantics
+- `start`: requires `task`; sets that task to `in_progress`
+- `done`: marks one task, one phase, or all tasks completed
+- `rm`: removes one task, one phase's tasks, or all tasks
+- `drop`: marks one task, one phase, or all tasks abandoned
+- `append`: appends `items` to `phase`; creates the phase if missing
+- `replace`: replaces the full todo list
+- `note`: append `text` as a new note attached to `task`. Notes are append-only context the user added; they only render to you when the task is `in_progress`. Other tasks display only a `+N` marker. Use this when you want to leave a follow-up reminder for yourself when you reach a later task.
+
+If `done`, `rm`, or `drop` omits both `task` and `phase`, it applies to all tasks.
 
 ## Task Anatomy
-- `content`: Short label (5-10 words). What is being done, not how.
-- `details`: File paths, implementation steps, edge cases. Shown only when task is active.
+- `label`: Short label (5-10 words). What is being done, not how.
+- `replace` task `content` should stay short and specific.
+
+## Phase Anatomy
+- `name`: Short, human-readable noun phrase (1-3 words). Capitalize naturally.
+- Always prefix with a roman-numeral ordinal (`I.`, `II.`, `III.`, `IV.`, …) to convey ordering — e.g. `I. Foundation`, `II. Auth`, `III. Routing`. Single-phase plans use `I.` too.
+- You **MUST NOT** use snake_case, `Phase1_*`, arabic numerals (`1.`), or letter prefixes (`A.`) — they render as ugly identifiers.
 
 ## Rules
-- Mark tasks completed immediately after finishing — never defer
-- Complete phases in order — do not skip ahead to later phases while earlier ones are pending
-- On blockers: add a new task describing the blocker
+- Mark tasks done immediately after finishing — never defer.
+- Complete phases in order — do not skip ahead while earlier ones are pending.
+- On blockers, append a new task to the active phase.
+- Keep ids stable once introduced.
 </protocol>
 
 <conditions>
@@ -33,44 +65,22 @@ Create a todo list when:
 4. New instructions arrive mid-task — capture before proceeding
 </conditions>
 
-<example name="initial-setup">
-{phases: [
-  {name: "Investigation", tasks: [{content: "Read source"}, {content: "Map callsites"}]},
-  {name: "Implementation", tasks: [{content: "Apply fix", details: "Update parser.ts to handle edge case in line 42"}, {content: "Run tests"}]}
-]}
-</example>
-
-<example name="complete">
-{complete: ["task-2"]}
-</example>
-
-<example name="complete-multiple">
-{complete: ["task-2", "task-3"]}
-</example>
-
-<example name="add-notes">
-{add_notes: [{id: "task-3", notes: "Found edge case in parser — needs null check"}]}
-</example>
-
-<example name="add-task">
-{add_tasks: [{phase: "Implementation", content: "Handle retries", details: "Cap exponential backoff in retry.ts"}]}
-</example>
-
-<example name="add-phase">
-{add_phase: {name: "Cleanup", tasks: [{content: "Remove dead code"}]}}
-</example>
-
-<example name="remove">
-{remove: ["task-5"]}
-</example>
-
-<example name="abandon">
-{abandon: ["task-4"]}
-</example>
-
-<example name="combined">
-{complete: ["task-2"], add_notes: [{id: "task-3", notes: "Needs extra validation"}]}
-</example>
+<examples>
+# Initial setup (multi-phase)
+`{"ops":[{"op":"replace","phases":[{"name":"I. Foundation","tasks":[{"content":"Scaffold crate"},{"content":"Wire workspace"}]},{"name":"II. Auth","tasks":[{"content":"Port credential store"},{"content":"Wire OAuth providers"}]},{"name":"III. Verification","tasks":[{"content":"Run cargo test"}]}]}]}`
+# Initial setup (single phase — still prefixed)
+`{"ops":[{"op":"replace","phases":[{"name":"I. Implementation","tasks":[{"content":"Apply fix"},{"content":"Run tests"}]}]}]}`
+# Complete one task
+`{"ops":[{"op":"done","task":"task-2"}]}`
+# Complete a whole phase
+`{"ops":[{"op":"done","phase":"II. Auth"}]}`
+# Remove all tasks
+`{"ops":[{"op":"rm"}]}`
+# Drop one task
+`{"ops":[{"op":"drop","task":"task-7"}]}`
+# Append tasks to a phase
+`{"ops":[{"op":"append","phase":"II. Auth","items":[{"id":"task-8","label":"Handle retries"},{"id":"task-9","label":"Run tests"}]}]}`
+</examples>
 
 <avoid>
 - Single-step tasks — act directly

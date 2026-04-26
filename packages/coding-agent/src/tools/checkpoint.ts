@@ -18,13 +18,13 @@ export interface CheckpointState {
 }
 
 const checkpointSchema = Type.Object({
-	goal: Type.String({ description: "What you are investigating and why" }),
+	goal: Type.String({ description: "investigation goal", examples: ["investigate retry logic"] }),
 });
 
 type CheckpointParams = Static<typeof checkpointSchema>;
 
 const rewindSchema = Type.Object({
-	report: Type.String({ description: "Concise investigation findings to retain after rewind" }),
+	report: Type.String({ description: "investigation findings" }),
 });
 
 type RewindParams = Static<typeof rewindSchema>;
@@ -52,6 +52,7 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 	readonly description: string;
 	readonly parameters = checkpointSchema;
 	readonly strict = true;
+	readonly intent = (args: Partial<CheckpointParams>) => args.goal;
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(checkpointDescription);
@@ -94,6 +95,7 @@ export class RewindTool implements AgentTool<typeof rewindSchema, RewindToolDeta
 	readonly description: string;
 	readonly parameters = rewindSchema;
 	readonly strict = true;
+	readonly intent = (): string => "Rewinding to checkpoint";
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(rewindDescription);

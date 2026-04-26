@@ -129,8 +129,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 
 	/**
 	 * Enable intent tracing for tool calls.
-	 * When enabled, the harness injects an `_i: string` field into tool schemas sent to the model,
-	 * then strips `_i` from arguments before executing tools.
+	 * When enabled, the harness injects a `string` field into tool schemas sent to the model,
+	 * then strips from arguments before executing tools.
 	 */
 	intentTracing?: boolean;
 
@@ -250,6 +250,16 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	concurrency?: "shared" | "exclusive";
 	/** If true, argument validation errors are non-fatal: raw args are passed to execute() instead of returning an error to the LLM. */
 	lenientArgValidation?: boolean;
+	/**
+	 * Controls how the INTENT_FIELD (`_i`) is handled for this tool.
+	 * - `"require"` (default): `_i` is injected and required in the parameter schema.
+	 * - `"optional"`: `_i` is injected as an optional/nullable field.
+	 * - `"omit"`: `_i` is NOT injected. Use for tools where intent is obvious (yield, resolve, todo_write, …).
+	 * - function: `_i` is NOT injected; intent is derived dynamically from (potentially partial / streaming) args.
+	 */
+	intent?: "omit" | "optional" | "require" | ((args: Partial<Static<TParameters>>) => string | undefined);
+
+	/** The main execution callback for this tool. */
 	execute: AgentToolExecFn<TParameters, TDetails, TTheme>;
 
 	/** Optional custom rendering for tool call display (returns UI component) */

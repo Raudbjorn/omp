@@ -53,6 +53,7 @@ import { loginMoonshot } from "./utils/oauth/moonshot";
 import { loginNanoGPT } from "./utils/oauth/nanogpt";
 import { loginNvidia } from "./utils/oauth/nvidia";
 import { loginOllama } from "./utils/oauth/ollama";
+import { loginOllamaCloud } from "./utils/oauth/ollama-cloud";
 import { loginOpenAICodex } from "./utils/oauth/openai-codex";
 import { loginOpenCode } from "./utils/oauth/opencode";
 import { loginOpenvino } from "./utils/oauth/openvino";
@@ -211,6 +212,10 @@ function getOpenAICodexPlanPriority(report: UsageReport | null): number {
 	const planType = getUsagePlanType(report);
 	if (!planType) return 1;
 	return planType.includes("pro") ? 0 : 2;
+}
+
+function hasOpenAICodexProPlan(report: UsageReport | null): boolean {
+	return getUsagePlanType(report)?.includes("pro") === true;
 }
 
 function resolveDefaultUsageProvider(provider: Provider): UsageProvider | undefined {
@@ -936,6 +941,11 @@ export class AuthStorage {
 				if (!apiKey) {
 					return;
 				}
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "ollama-cloud": {
+				const apiKey = await loginOllamaCloud(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
@@ -1839,7 +1849,8 @@ export class AuthStorage {
 		const providerKey = this.#getProviderTypeKey(provider, "oauth");
 		const order = this.#getCredentialOrder(providerKey, sessionId, credentials.length);
 		const strategy = this.#rankingStrategyResolver?.(provider);
-		const checkUsage = strategy !== undefined && credentials.length > 1;
+		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
+		const checkUsage = strategy !== undefined && (credentials.length > 1 || requiresProModel);
 		const previousSessionCredential = this.#getSessionCredential(provider, sessionId);
 		const previousCodexIdentity =
 			provider === CODEX_PROVIDER && previousSessionCredential?.type === "oauth"
@@ -1847,11 +1858,10 @@ export class AuthStorage {
 				: undefined;
 		const sessionPreferredIndex =
 			previousSessionCredential?.type === "oauth" ? previousSessionCredential.index : undefined;
-		// Skip ranking only when the session already has a working preferred credential - re-ranking
+		// Skip ranking only when the session already has a working preferred credential — re-ranking
 		// mid-session causes account switches that cold-start the server-side prompt cache. New sessions
 		// (no preference) and sessions whose preferred is blocked still rank, so we pick the account
 		// with the most headroom proactively and fall back intelligently when rate-limited.
-		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
 		const sessionPreferredIsAvailable =
 			sessionPreferredIndex !== undefined && !this.#isCredentialBlocked(providerKey, sessionPreferredIndex);
 		const shouldRank = checkUsage && (!sessionPreferredIsAvailable || requiresProModel);
@@ -1912,6 +1922,11 @@ export class AuthStorage {
 			}),
 		);
 
+		// Skip the Pro-plan filter when no candidate is confirmed Pro, so users with only
+		// non-Pro accounts can still attempt Spark requests (e.g. trial/grandfathered access).
+		const enforceProRequirement =
+			requiresProModel && candidates.some(candidate => hasOpenAICodexProPlan(candidate.usage));
+
 		const fallback = candidates[0];
 
 		for (const candidate of candidates) {
@@ -1920,6 +1935,7 @@ export class AuthStorage {
 				allowBlocked: false,
 				prefetchedUsage: candidate.usage,
 				usagePrechecked: candidate.usageChecked,
+				enforceProRequirement,
 			});
 			if (apiKey) {
 				if (provider === CODEX_PROVIDER) {
@@ -1946,6 +1962,7 @@ export class AuthStorage {
 					allowBlocked: true,
 					prefetchedUsage: fallback.usage,
 					usagePrechecked: fallback.usageChecked,
+					enforceProRequirement,
 				},
 			);
 			if (fallbackApiKey) {
@@ -2007,17 +2024,26 @@ export class AuthStorage {
 			allowBlocked: boolean;
 			prefetchedUsage?: UsageReport | null;
 			usagePrechecked?: boolean;
+			enforceProRequirement?: boolean;
 		},
 	): Promise<string | undefined> {
-		const { checkUsage, allowBlocked, prefetchedUsage = null, usagePrechecked = false } = usageOptions;
+		const {
+			checkUsage,
+			allowBlocked,
+			prefetchedUsage = null,
+			usagePrechecked = false,
+			enforceProRequirement,
+		} = usageOptions;
 		if (!allowBlocked && this.#isCredentialBlocked(providerKey, selection.index)) {
 			return undefined;
 		}
 
+		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
+		const applyProFilter = enforceProRequirement ?? requiresProModel;
 		let usage: UsageReport | null = null;
 		let usageChecked = false;
 
-		if (checkUsage && !allowBlocked) {
+		if ((checkUsage && !allowBlocked) || requiresProModel) {
 			if (usagePrechecked) {
 				usage = prefetchedUsage;
 				usageChecked = true;
@@ -2028,7 +2054,10 @@ export class AuthStorage {
 				});
 				usageChecked = true;
 			}
-			if (usage && this.#isUsageLimitReached(usage)) {
+			if (applyProFilter && !hasOpenAICodexProPlan(usage)) {
+				return undefined;
+			}
+			if (checkUsage && !allowBlocked && usage && this.#isUsageLimitReached(usage)) {
 				const resetAtMs = this.#getUsageResetAtMs(usage, Date.now());
 				this.#markCredentialBlocked(
 					providerKey,
@@ -2066,15 +2095,19 @@ export class AuthStorage {
 				enterpriseUrl: result.newCredentials.enterpriseUrl ?? selection.credential.enterpriseUrl,
 			};
 			this.#replaceCredentialAt(provider, selection.index, updated);
-			if (checkUsage && !allowBlocked) {
+			if ((checkUsage && !allowBlocked) || requiresProModel) {
 				const sameAccount = selection.credential.accountId === updated.accountId;
 				if (!usageChecked || !sameAccount) {
 					usage = await this.#getUsageReport(provider, updated, {
 						...options,
 						timeoutMs: this.#usageRequestTimeoutMs,
 					});
+					usageChecked = true;
 				}
-				if (usage && this.#isUsageLimitReached(usage)) {
+				if (applyProFilter && !hasOpenAICodexProPlan(usage)) {
+					return undefined;
+				}
+				if (checkUsage && !allowBlocked && usage && this.#isUsageLimitReached(usage)) {
 					const resetAtMs = this.#getUsageResetAtMs(usage, Date.now());
 					this.#markCredentialBlocked(
 						providerKey,

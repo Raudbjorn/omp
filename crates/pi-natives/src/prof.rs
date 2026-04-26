@@ -238,12 +238,6 @@ pub fn get_work_profile(last_seconds: f64) -> WorkProfile {
 	};
 
 	let total_us: u64 = samples.iter().map(|s| s.duration_us).sum();
-
-	WorkProfile {
-		folded,
-		summary,
-		svg,
-		total_ms: total_us as f64 / 1000.0,
-		sample_count: samples.len() as u32,
-	}
+	let total_ms = (total_us as f64) * 0.001;
+	WorkProfile { folded, summary, svg, total_ms, sample_count: samples.len() as u32 }
 }

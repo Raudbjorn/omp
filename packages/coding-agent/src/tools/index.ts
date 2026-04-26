@@ -6,7 +6,6 @@ import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import type { RecallStore } from "../context/recall/store";
 import { EditTool } from "../edit";
-import { RecallTool } from "./recall";
 import type { Skill } from "../extensibility/skills";
 import type { InternalUrlRouter } from "../internal-urls";
 import { getPreludeDocs, resetPreludeDocsCache, warmPythonEnvironment } from "../ipy/executor";
@@ -14,6 +13,7 @@ import { checkPythonKernelAvailability } from "../ipy/kernel";
 import { LspTool } from "../lsp";
 import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 import type { PlanModeState } from "../plan-mode/state";
+import type { AgentRegistry } from "../registry/agent-registry";
 import type { CustomMessage } from "../session/messages";
 import type { ToolChoiceQueue } from "../session/tool-choice-queue";
 import { TaskTool } from "../task";
@@ -26,29 +26,20 @@ import { AstGrepTool } from "./ast-grep";
 import { BashTool } from "./bash";
 import { BrowserTool } from "./browser";
 import { CalculatorTool } from "./calculator";
-import { CancelJobTool } from "./cancel-job";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 import { DebugTool } from "./debug";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FindTool } from "./find";
-import {
-	GhIssueViewTool,
-	GhPrCheckoutTool,
-	GhPrDiffTool,
-	GhPrPushTool,
-	GhPrViewTool,
-	GhRepoViewTool,
-	GhRunWatchTool,
-	GhSearchIssuesTool,
-	GhSearchPrsTool,
-} from "./gh";
+import { GithubTool } from "./gh";
 import { GrepTool } from "./grep";
 import { InspectImageTool } from "./inspect-image";
+import { IrcTool } from "./irc";
+import { JobTool } from "./job";
 import { NotebookTool } from "./notebook";
 import { wrapToolWithMetaNotice } from "./output-meta";
-import { PollTool } from "./poll-tool";
 import { PythonTool } from "./python";
 import { ReadTool } from "./read";
+import { RecallTool } from "./recall";
 import { RenderMermaidTool } from "./render-mermaid";
 import { createReportToolIssueTool, isAutoQaEnabled } from "./report-tool-issue";
 import { ResolveTool } from "./resolve";
@@ -56,9 +47,9 @@ import { reportFindingTool } from "./review";
 import { ScriptTool } from "./script";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { loadSshTool } from "./ssh";
-import { SubmitResultTool } from "./submit-result";
 import { type TodoPhase, TodoWriteTool } from "./todo-write";
 import { WriteTool } from "./write";
+import { YieldTool } from "./yield";
 
 // Exa MCP tools (22 tools)
 
@@ -75,17 +66,17 @@ export * from "./ast-grep";
 export * from "./bash";
 export * from "./browser";
 export * from "./calculator";
-export * from "./cancel-job";
 export * from "./checkpoint";
 export * from "./debug";
 export * from "./exit-plan-mode";
 export * from "./find";
-export * from "./gemini-image";
 export * from "./gh";
 export * from "./grep";
+export * from "./image-gen";
 export * from "./inspect-image";
+export * from "./irc";
+export * from "./job";
 export * from "./notebook";
-export * from "./poll-tool";
 export * from "./python";
 export * from "./read";
 export * from "./render-mermaid";
@@ -95,10 +86,10 @@ export * from "./review";
 export * from "./script";
 export * from "./search-tool-bm25";
 export * from "./ssh";
-export * from "./submit-result";
 export * from "./todo-write";
 export * from "./vim";
 export * from "./write";
+export * from "./yield";
 
 /** Tool type (AgentTool from pi-ai) */
 export type Tool = AgentTool<any, any, any>;
@@ -135,8 +126,8 @@ export interface ToolSession {
 	eventBus?: EventBus;
 	/** Output schema for structured completion (subagents) */
 	outputSchema?: unknown;
-	/** Whether to include the submit_result tool by default */
-	requireSubmitResultTool?: boolean;
+	/** Whether to include the yield tool by default */
+	requireYieldTool?: boolean;
 	/** Task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
 	/** Get session file */
@@ -149,6 +140,10 @@ export interface ToolSession {
 	trackPythonExecution?<T>(execution: Promise<T>, abortController: AbortController): Promise<T>;
 	/** Get session ID */
 	getSessionId?: () => string | null;
+	/** Agent identity used for IRC routing. Returns the registry id (e.g. "0-Main", "0-AuthLoader"). */
+	getAgentId?: () => string | null;
+	/** Agent registry for IRC routing across live sessions. */
+	agentRegistry?: AgentRegistry;
 	/** Get artifacts directory for artifact:// URLs */
 	getArtifactsDir?: () => string | null;
 	/** Allocate a new artifact path and ID for session-scoped truncated output. */
@@ -237,15 +232,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	calc: s => new CalculatorTool(s),
 	ssh: loadSshTool,
 	edit: s => new EditTool(s),
-	gh_repo_view: GhRepoViewTool.createIf,
-	gh_issue_view: GhIssueViewTool.createIf,
-	gh_pr_view: GhPrViewTool.createIf,
-	gh_pr_diff: GhPrDiffTool.createIf,
-	gh_pr_checkout: GhPrCheckoutTool.createIf,
-	gh_pr_push: GhPrPushTool.createIf,
-	gh_run_watch: GhRunWatchTool.createIf,
-	gh_search_issues: GhSearchIssuesTool.createIf,
-	gh_search_prs: GhSearchPrsTool.createIf,
+	github: GithubTool.createIf,
 	find: s => new FindTool(s),
 	grep: s => new GrepTool(s),
 	lsp: LspTool.createIf,
@@ -257,8 +244,8 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
 	task: TaskTool.create,
-	cancel_job: CancelJobTool.createIf,
-	poll: PollTool.createIf,
+	job: JobTool.createIf,
+	irc: IrcTool.createIf,
 	todo_write: s => new TodoWriteTool(s),
 	web_search: s => new SearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
@@ -267,7 +254,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 };
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
-	submit_result: s => new SubmitResultTool(s),
+	yield: s => new YieldTool(s),
 	report_finding: () => reportFindingTool,
 	report_tool_issue: s => createReportToolIssueTool(s),
 	exit_plan_mode: s => new ExitPlanModeTool(s),
@@ -310,7 +297,7 @@ function getPythonModeFromEnv(): PythonToolMode | null {
  * Create tools from BUILTIN_TOOLS registry.
  */
 export async function createTools(session: ToolSession, toolNames?: string[]): Promise<Tool[]> {
-	const includeSubmitResult = session.requireSubmitResultTool === true;
+	const includeYield = session.requireYieldTool === true;
 	const enableLsp = session.enableLsp ?? true;
 	const requestedTools =
 		toolNames && toolNames.length > 0 ? [...new Set(toolNames.map(name => name.toLowerCase()))] : undefined;
@@ -412,10 +399,10 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "bash") return allowBash;
 		if (name === "python") return allowPython;
 		if (name === "debug") return session.settings.get("debug.enabled");
-		if (name === "todo_write") return !includeSubmitResult && session.settings.get("todo.enabled");
+		if (name === "todo_write") return !includeYield && session.settings.get("todo.enabled");
 		if (name === "find") return session.settings.get("find.enabled");
 		if (name === "grep") return session.settings.get("grep.enabled");
-		if (name.startsWith("gh_")) return session.settings.get("github.enabled");
+		if (name === "github") return session.settings.get("github.enabled");
 		if (name === "ast_grep") return session.settings.get("astGrep.enabled");
 		if (name === "ast_edit") return session.settings.get("astEdit.enabled");
 		if (name === "render_mermaid") return session.settings.get("renderMermaid.enabled");
@@ -427,6 +414,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
 		if (name === "script") return session.settings.get("script.enabled");
+		if (name === "irc") return session.settings.get("irc.enabled");
 		if (name === "task") {
 			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 2;
 			const currentDepth = session.taskDepth ?? 0;
@@ -434,8 +422,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		}
 		return true;
 	};
-	if (includeSubmitResult && requestedTools && !requestedTools.includes("submit_result")) {
-		requestedTools.push("submit_result");
+	if (includeYield && requestedTools && !requestedTools.includes("yield")) {
+		requestedTools.push("yield");
 	}
 
 	const filteredRequestedTools = requestedTools?.filter(name => name in allTools && isToolAllowed(name));
@@ -444,7 +432,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			? filteredRequestedTools.filter(name => name !== "resolve").map(name => [name, allTools[name]] as const)
 			: [
 					...Object.entries(BUILTIN_TOOLS).filter(([name]) => isToolAllowed(name)),
-					...(includeSubmitResult ? ([["submit_result", HIDDEN_TOOLS.submit_result]] as const) : []),
+					...(includeYield ? ([["yield", HIDDEN_TOOLS.yield]] as const) : []),
 					...([["exit_plan_mode", HIDDEN_TOOLS.exit_plan_mode]] as const),
 				];
 
