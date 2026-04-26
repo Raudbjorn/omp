@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-coding-agent",
-	"version": "14.1.4",
+	"version": "14.3.0",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"homepage": "https://github.com/can1357/oh-my-pi",
 	"author": "Can Boluk",
@@ -31,7 +31,7 @@
 		"omp": "src/cli.ts"
 	},
 	"scripts": {
-		"build": "bun --cwd=../stats scripts/generate-client-bundle.ts --generate && bun --cwd=../natives run embed:native && bun build --compile --define 'process.env.PI_COMPILED=\"true\"' --external mupdf --root ../.. ./src/cli.ts --outfile dist/omp && bun --cwd=../natives run embed:native --reset && bun --cwd=../stats scripts/generate-client-bundle.ts --reset",
+		"build": "bun scripts/build-binary.ts",
 		"check": "biome check . && bun run check:types",
 		"check:types": "tsgo -p tsconfig.json --noEmit",
 		"lint": "biome lint .",
@@ -45,7 +45,6 @@
 	},
 	"dependencies": {
 		"@agentclientprotocol/sdk": "catalog:",
-		"@lancedb/lancedb": "0.26.2",
 		"@mozilla/readability": "catalog:",
 		"@oh-my-pi/omp-stats": "catalog:",
 		"@oh-my-pi/pi-agent-core": "catalog:",
@@ -54,9 +53,7 @@
 		"@oh-my-pi/pi-tui": "catalog:",
 		"@oh-my-pi/pi-utils": "catalog:",
 		"@sinclair/typebox": "catalog:",
-		"@xterm/addon-unicode11": "catalog:",
 		"@xterm/headless": "catalog:",
-		"@xterm/xterm": "catalog:",
 		"ajv": "catalog:",
 		"chalk": "catalog:",
 		"diff": "catalog:",
@@ -66,7 +63,6 @@
 		"lru-cache": "catalog:",
 		"markit-ai": "catalog:",
 		"puppeteer": "catalog:",
-		"qrcode-terminal": "catalog:",
 		"turndown": "catalog:",
 		"turndown-plugin-gfm": "catalog:",
 		"zod": "catalog:"
@@ -193,38 +189,6 @@
 		"./config/*": {
 			"types": "./src/config/*.ts",
 			"import": "./src/config/*.ts"
-		},
-		"./context/*": {
-			"types": "./src/context/*.ts",
-			"import": "./src/context/*.ts"
-		},
-		"./context/assembler": {
-			"types": "./src/context/assembler/index.ts",
-			"import": "./src/context/assembler/index.ts"
-		},
-		"./context/assembler/*": {
-			"types": "./src/context/assembler/*.ts",
-			"import": "./src/context/assembler/*.ts"
-		},
-		"./context/bridge": {
-			"types": "./src/context/bridge/index.ts",
-			"import": "./src/context/bridge/index.ts"
-		},
-		"./context/bridge/*": {
-			"types": "./src/context/bridge/*.ts",
-			"import": "./src/context/bridge/*.ts"
-		},
-		"./context/recall": {
-			"types": "./src/context/recall/index.ts",
-			"import": "./src/context/recall/index.ts"
-		},
-		"./context/recall/*": {
-			"types": "./src/context/recall/*.ts",
-			"import": "./src/context/recall/*.ts"
-		},
-		"./context-manager": {
-			"types": "./src/context-manager/index.ts",
-			"import": "./src/context-manager/index.ts"
 		},
 		"./dap": {
 			"types": "./src/dap/index.ts",

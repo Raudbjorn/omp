@@ -1,7 +1,6 @@
 /**
  * Edit tool renderer and LSP batching helpers.
  */
-import type { ToolCallContext } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -16,6 +15,8 @@ import {
 	formatStatusIcon,
 	formatTitle,
 	getDiffStats,
+	getLspBatchRequest,
+	type LspBatchRequest,
 	PREVIEW_LIMITS,
 	replaceTabs,
 	shortenPath,
@@ -23,36 +24,18 @@ import {
 } from "../tools/render-utils";
 import { type VimRenderArgs, vimToolRenderer } from "../tools/vim";
 import { Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
+import type { EditMode } from "../utils/edit-mode";
 import type { VimToolDetails } from "../vim/types";
 import type { DiffError, DiffResult } from "./diff";
-import { type ChunkToolEdit, parseChunkEditPath } from "./modes/chunk";
-import type { HashlineToolEdit } from "./modes/hashline";
-import type { Operation } from "./modes/patch";
+import { expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
+import type { Operation, PatchEditEntry } from "./modes/patch";
+import type { PerFileDiffPreview } from "./streaming";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // LSP Batching
 // ═══════════════════════════════════════════════════════════════════════════
 
-const LSP_BATCH_TOOLS = new Set(["edit", "write"]);
-
-export interface LspBatchRequest {
-	id: string;
-	flush: boolean;
-}
-
-export function getLspBatchRequest(toolCall: ToolCallContext | undefined): LspBatchRequest | undefined {
-	if (!toolCall) {
-		return undefined;
-	}
-	const hasOtherWrites = toolCall.toolCalls.some(
-		(call, index) => index !== toolCall.index && LSP_BATCH_TOOLS.has(call.name),
-	);
-	if (!hasOtherWrites) {
-		return undefined;
-	}
-	const hasLaterWrites = toolCall.toolCalls.slice(toolCall.index + 1).some(call => LSP_BATCH_TOOLS.has(call.name));
-	return { id: toolCall.batchId, flush: !hasLaterWrites };
-}
+export { getLspBatchRequest, type LspBatchRequest };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Tool Details Types
@@ -97,6 +80,7 @@ interface EditRenderArgs {
 	oldText?: string;
 	newText?: string;
 	patch?: string;
+	input?: string;
 	all?: boolean;
 	// Patch mode fields
 	op?: Operation;
@@ -106,8 +90,21 @@ interface EditRenderArgs {
 	 * Computed preview diff (used when tool args don't include a diff, e.g. hashline mode).
 	 */
 	previewDiff?: string;
+	__partialJson?: string;
 	// Hashline / chunk mode fields
-	edits?: Partial<HashlineToolEdit | ChunkToolEdit>[];
+	edits?: EditRenderEntry[];
+}
+
+type EditRenderEntry = {
+	path?: string;
+	rename?: string;
+	move?: string;
+	op?: Operation;
+};
+
+interface ApplyPatchRenderSummary {
+	entries: PatchEditEntry[];
+	error?: string;
 }
 
 function isVimRenderArgs(args: EditRenderArgs | VimRenderArgs): args is VimRenderArgs {
@@ -137,8 +134,12 @@ function isVimToolDetails(details: unknown): details is VimToolDetails {
 
 /** Extended context for edit tool rendering */
 export interface EditRenderContext {
+	/** Edit mode resolved by the caller; lets the renderer dispatch without shape-sniffing */
+	editMode?: EditMode;
 	/** Pre-computed diff preview (computed before tool executes) */
 	editDiffPreview?: DiffResult | DiffError;
+	/** Multi-file streaming diff preview (chunk edits spanning several files) */
+	perFileDiffPreview?: PerFileDiffPreview[];
 	/** Function to render diff text with syntax highlighting */
 	renderDiff?: (diffText: string, options?: { filePath?: string }) => string;
 }
@@ -146,14 +147,6 @@ export interface EditRenderContext {
 const EDIT_STREAMING_PREVIEW_LINES = 12;
 const CALL_TEXT_PREVIEW_LINES = 6;
 const CALL_TEXT_PREVIEW_WIDTH = 80;
-const STREAMING_EDIT_PREVIEW_WIDTH = 120;
-const STREAMING_EDIT_PREVIEW_LIMIT = 4;
-const STREAMING_EDIT_PREVIEW_DST_LINE_LIMIT = 8;
-
-interface FormattedStreamingEdit {
-	srcLabel: string;
-	dst: string;
-}
 
 /** Extract file path from an edit entry's path (handles chunk's file:selector format). */
 function filePathFromEditEntry(p: string | undefined): string | undefined {
@@ -162,9 +155,51 @@ function filePathFromEditEntry(p: string | undefined): string | undefined {
 	return ci === -1 ? p : p.slice(0, ci);
 }
 
+function decodePartialJsonStringFragment(fragment: string): string {
+	let text = fragment;
+	const trailingBackslashes = text.match(/\\+$/)?.[0].length ?? 0;
+	if (trailingBackslashes % 2 === 1) {
+		text = text.slice(0, -1);
+	}
+	try {
+		return JSON.parse(`"${text}"`) as string;
+	} catch {
+		return text
+			.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+			.replace(/\\(["\\/bfnrt])/g, (_, ch: string) => {
+				switch (ch) {
+					case "b":
+						return "\b";
+					case "f":
+						return "\f";
+					case "n":
+						return "\n";
+					case "r":
+						return "\r";
+					case "t":
+						return "\t";
+					default:
+						return ch;
+				}
+			});
+	}
+}
+
+function extractPartialJsonString(partialJson: string | undefined, key: string): string | undefined {
+	if (!partialJson) return undefined;
+	const pattern = new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)`, "u");
+	const match = pattern.exec(partialJson);
+	if (!match) return undefined;
+	return decodePartialJsonStringFragment(match[1]);
+}
+
+function getPartialJsonEditPath(args: EditRenderArgs): string | undefined {
+	return filePathFromEditEntry(extractPartialJsonString(args.__partialJson, "path"));
+}
+
 /** Count distinct file paths in an edits array. */
-function countEditFiles(edits: any[]): number {
-	return new Set(edits.map((e: any) => filePathFromEditEntry(e?.path)).filter(Boolean)).size;
+function countEditFiles(edits: EditRenderEntry[]): number {
+	return new Set(edits.map(edit => filePathFromEditEntry(edit.path)).filter(Boolean)).size;
 }
 
 function countLines(text: string): number {
@@ -234,111 +269,6 @@ function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, labe
 	return text;
 }
 
-function isChunkStreamingEdit(edit: Partial<HashlineToolEdit | ChunkToolEdit>): edit is Partial<ChunkToolEdit> {
-	return (
-		typeof edit === "object" &&
-		edit !== null &&
-		"path" in edit &&
-		("write" in edit || "replace" in edit || "insert" in edit)
-	);
-}
-
-function getStreamingEditContent(content: unknown): string {
-	if (Array.isArray(content)) {
-		return content.join("\n");
-	}
-	return typeof content === "string" ? content : "";
-}
-
-function formatHashlineStreamingEdit(edit: Partial<HashlineToolEdit>): FormattedStreamingEdit {
-	if (typeof edit !== "object" || !edit) {
-		return { srcLabel: "\u2022 (incomplete edit)", dst: "" };
-	}
-
-	const contentLines = getStreamingEditContent(edit.content);
-	const loc = edit.loc;
-
-	if (loc === "append" || loc === "prepend") {
-		return { srcLabel: `\u2022 ${loc} (file-level)`, dst: contentLines };
-	}
-	if (typeof loc === "object" && loc) {
-		if ("range" in loc && typeof loc.range === "object" && loc.range) {
-			return { srcLabel: `\u2022 range ${loc.range.pos ?? "?"}\u2026${loc.range.end ?? "?"}`, dst: contentLines };
-		}
-		if ("line" in loc) {
-			return { srcLabel: `\u2022 line ${(loc as { line: string }).line}`, dst: contentLines };
-		}
-		if ("append" in loc) {
-			return { srcLabel: `\u2022 append ${(loc as { append: string }).append}`, dst: contentLines };
-		}
-		if ("prepend" in loc) {
-			return { srcLabel: `\u2022 prepend ${(loc as { prepend: string }).prepend}`, dst: contentLines };
-		}
-	}
-	return { srcLabel: "\u2022 (unknown edit)", dst: contentLines };
-}
-
-function formatChunkStreamingEdit(edit: Partial<ChunkToolEdit>): FormattedStreamingEdit {
-	if (typeof edit !== "object" || !edit) {
-		return { srcLabel: "\u2022 (incomplete edit)", dst: "" };
-	}
-
-	const target = edit.path ? (parseChunkEditPath(edit.path).selector ?? edit.path) : "?";
-	if (edit.write === null) {
-		return { srcLabel: `\u2022 remove ${target}`, dst: "" };
-	}
-	if (typeof edit.write === "string") {
-		return { srcLabel: `\u2022 replace ${target}`, dst: getStreamingEditContent(edit.write) };
-	}
-	if (typeof edit.replace === "object" && edit.replace) {
-		return { srcLabel: `\u2022 replace ${target}`, dst: getStreamingEditContent(edit.replace.new) };
-	}
-	if (typeof edit.insert === "object" && edit.insert) {
-		return { srcLabel: `\u2022 ${edit.insert.loc} ${target}`, dst: getStreamingEditContent(edit.insert.body) };
-	}
-	return { srcLabel: `\u2022 edit ${target}`, dst: "" };
-}
-
-function formatStreamingHashlineEdits(edits: Partial<HashlineToolEdit | ChunkToolEdit>[], uiTheme: Theme): string {
-	let text = "\n\n";
-
-	// Detect whether these are chunk edits (target field) or hashline edits (loc field)
-	const isChunk = edits.length > 0 && isChunkStreamingEdit(edits[0]);
-	const label = isChunk ? "chunk edit" : "hashline edit";
-	const formatEdit = isChunk ? formatChunkStreamingEdit : formatHashlineStreamingEdit;
-	text += uiTheme.fg("dim", `[${edits.length} ${label}${edits.length === 1 ? "" : "s"}]`);
-	text += "\n";
-	let shownEdits = 0;
-	let shownDstLines = 0;
-	for (const edit of edits) {
-		shownEdits++;
-		if (shownEdits > STREAMING_EDIT_PREVIEW_LIMIT) break;
-		const formatted = formatEdit(edit as never);
-		text += uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(formatted.srcLabel), STREAMING_EDIT_PREVIEW_WIDTH));
-		text += "\n";
-		if (formatted.dst === "") {
-			text += uiTheme.fg("dim", truncateToWidth("  (delete)", STREAMING_EDIT_PREVIEW_WIDTH));
-			text += "\n";
-			continue;
-		}
-		for (const dstLine of formatted.dst.split("\n")) {
-			shownDstLines++;
-			if (shownDstLines > STREAMING_EDIT_PREVIEW_DST_LINE_LIMIT) break;
-			text += uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(`+ ${dstLine}`), STREAMING_EDIT_PREVIEW_WIDTH));
-			text += "\n";
-		}
-		if (shownDstLines > STREAMING_EDIT_PREVIEW_DST_LINE_LIMIT) break;
-	}
-	if (edits.length > STREAMING_EDIT_PREVIEW_LIMIT) {
-		text += uiTheme.fg("dim", `\u2026 (${edits.length - STREAMING_EDIT_PREVIEW_LIMIT} more edits)`);
-	}
-	if (shownDstLines > STREAMING_EDIT_PREVIEW_DST_LINE_LIMIT) {
-		text += uiTheme.fg("dim", `\n\u2026 (${shownDstLines - STREAMING_EDIT_PREVIEW_DST_LINE_LIMIT} more dst lines)`);
-	}
-
-	return text.trimEnd();
-}
-
 function formatMetadataLine(lineCount: number | null, language: string | undefined, uiTheme: Theme): string {
 	const icon = uiTheme.getLangIcon(language);
 	if (lineCount !== null) {
@@ -347,19 +277,37 @@ function formatMetadataLine(lineCount: number | null, language: string | undefin
 	return uiTheme.fg("dim", `${icon}`);
 }
 
-function getCallPreview(args: EditRenderArgs, rawPath: string, uiTheme: Theme): string {
+function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: Theme): string {
+	const parts: string[] = [];
+	for (const preview of previews) {
+		if (!preview.diff && !preview.error) continue;
+		const header = uiTheme.fg("dim", `\n\n── ${shortenPath(preview.path)} ──`);
+		if (preview.error) {
+			parts.push(`${header}\n${uiTheme.fg("error", replaceTabs(preview.error))}`);
+			continue;
+		}
+		if (preview.diff) {
+			parts.push(`${header}${formatStreamingDiff(preview.diff, preview.path, uiTheme, "preview")}`);
+		}
+	}
+	return parts.join("");
+}
+
+function getCallPreview(
+	args: EditRenderArgs,
+	rawPath: string,
+	uiTheme: Theme,
+	renderContext: EditRenderContext | undefined,
+): string {
+	const multi = renderContext?.perFileDiffPreview;
+	if (multi && multi.length > 0 && multi.some(p => p.diff || p.error)) {
+		return formatMultiFileStreamingDiff(multi, uiTheme);
+	}
 	if (args.previewDiff) {
 		return formatStreamingDiff(args.previewDiff, rawPath, uiTheme, "preview");
 	}
 	if (args.diff && args.op) {
 		return formatStreamingDiff(args.diff, rawPath, uiTheme);
-	}
-	if (args.edits && args.edits.length > 0) {
-		// Only show hashline/chunk streaming edits — replace/patch use previewDiff above
-		const first = args.edits[0];
-		if (first && typeof first === "object" && ("loc" in first || isChunkStreamingEdit(first))) {
-			return formatStreamingHashlineEdits(args.edits, uiTheme);
-		}
 	}
 	if (args.diff) {
 		return renderPlainTextPreview(args.diff, uiTheme);
@@ -368,6 +316,24 @@ function getCallPreview(args: EditRenderArgs, rawPath: string, uiTheme: Theme): 
 		return renderPlainTextPreview(args.newText ?? args.patch ?? "", uiTheme);
 	}
 	return "";
+}
+
+const MISSING_APPLY_PATCH_END_ERROR = "The last line of the patch must be '*** End Patch'";
+
+function getApplyPatchRenderSummary(args: EditRenderArgs, isPartial: boolean): ApplyPatchRenderSummary | undefined {
+	if (typeof args.input !== "string") {
+		return undefined;
+	}
+
+	try {
+		return { entries: expandApplyPatchToEntries({ input: args.input }) };
+	} catch (err) {
+		const error = err instanceof Error ? err.message : String(err);
+		if (isPartial && error === MISSING_APPLY_PATCH_END_ERROR) {
+			return { entries: expandApplyPatchToPreviewEntries({ input: args.input }) };
+		}
+		return { entries: [], error };
+	}
 }
 
 function renderDiffSection(
@@ -432,26 +398,47 @@ function wrapEditRendererLine(line: string, width: number): string[] {
 export const editToolRenderer = {
 	mergeCallAndResult: true,
 
-	renderCall(args: EditRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
-		if (isVimRenderArgs(args)) {
-			return vimToolRenderer.renderCall(args, options, uiTheme);
+	renderCall(
+		args: EditRenderArgs | VimRenderArgs,
+		options: RenderResultOptions & { renderContext?: EditRenderContext },
+		uiTheme: Theme,
+	): Component {
+		const renderContext = options.renderContext;
+		// Dispatch on the explicit editMode when available; fall back to the
+		// shape probe for legacy call sites that don't thread renderContext.
+		if (renderContext?.editMode === "vim" || isVimRenderArgs(args)) {
+			return vimToolRenderer.renderCall(args as VimRenderArgs, options, uiTheme);
 		}
 
+		const editArgs = args as EditRenderArgs;
+		const applyPatchSummary = getApplyPatchRenderSummary(editArgs, options.isPartial);
+		const firstApplyPatchEntry = applyPatchSummary?.entries[0];
 		// Extract path from first edit entry when top-level path is absent (new schema)
-		const firstEdit = Array.isArray(args.edits) && args.edits.length > 0 ? args.edits[0] : undefined;
-		const rawPath = args.file_path || args.path || (firstEdit as any)?.path || "";
-		const rename = args.rename || (firstEdit as any)?.rename;
-		const op = args.op || (firstEdit as any)?.op;
+		const firstEdit = Array.isArray(editArgs.edits) && editArgs.edits.length > 0 ? editArgs.edits[0] : undefined;
+		const rawPath =
+			editArgs.file_path ||
+			editArgs.path ||
+			filePathFromEditEntry(firstEdit?.path) ||
+			getPartialJsonEditPath(editArgs) ||
+			firstApplyPatchEntry?.path ||
+			"";
+		const rename = editArgs.rename || firstEdit?.rename || firstEdit?.move || firstApplyPatchEntry?.rename;
+		const op = editArgs.op || firstEdit?.op || firstApplyPatchEntry?.op;
 		const { description } = formatEditDescription(rawPath, uiTheme, { rename });
 		const spinner =
 			options?.spinnerFrame !== undefined ? formatStatusIcon("running", uiTheme, options.spinnerFrame) : "";
 		let text = `${formatTitle(getOperationTitle(op), uiTheme)} ${spinner ? `${spinner} ` : ""}${description}`;
 		// Show file count hint for multi-file edits
-		const fileCount = Array.isArray(args.edits) ? countEditFiles(args.edits as any[]) : 0;
+		const fileCount = Array.isArray(editArgs.edits)
+			? countEditFiles(editArgs.edits)
+			: (applyPatchSummary?.entries.length ?? 0);
 		if (fileCount > 1) {
 			text += uiTheme.fg("dim", ` (+${fileCount - 1} more)`);
 		}
-		text += getCallPreview(args, rawPath, uiTheme);
+		text += getCallPreview(editArgs, rawPath, uiTheme, renderContext);
+		if (applyPatchSummary?.error) {
+			text += `\n\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error), CALL_TEXT_PREVIEW_WIDTH))}`;
+		}
 
 		return new Text(text, 0, 0);
 	},
@@ -462,7 +449,7 @@ export const editToolRenderer = {
 		uiTheme: Theme,
 		args?: EditRenderArgs,
 	): Component {
-		if (isVimToolDetails(result.details)) {
+		if (options.renderContext?.editMode === "vim" || isVimToolDetails(result.details)) {
 			return vimToolRenderer.renderResult(
 				result as { content: Array<{ type: string; text?: string }>; details?: VimToolDetails; isError?: boolean },
 				options,
@@ -471,7 +458,7 @@ export const editToolRenderer = {
 		}
 
 		const perFileResults = result.details?.perFileResults;
-		const totalFiles = Array.isArray(args?.edits) ? countEditFiles(args!.edits as any[]) : 0;
+		const totalFiles = args?.edits ? countEditFiles(args.edits) : 0;
 		if (perFileResults && (perFileResults.length > 1 || totalFiles > 1)) {
 			return renderMultiFileResult(perFileResults, totalFiles, options, uiTheme);
 		}
@@ -491,9 +478,15 @@ function renderSingleFileResult(
 ): Component {
 	const details = result.details;
 	const isError = result.isError ?? (details && "isError" in details ? details.isError : false);
-	const rawPath = args?.file_path || args?.path || (details && "path" in details ? details.path : "") || "";
-	const op = args?.op || details?.op;
-	const rename = args?.rename || details?.move;
+	const firstEdit = args?.edits?.[0];
+	const rawPath =
+		args?.file_path ||
+		args?.path ||
+		filePathFromEditEntry(firstEdit?.path) ||
+		(details && "path" in details ? details.path : "") ||
+		"";
+	const op = args?.op || firstEdit?.op || details?.op;
+	const rename = args?.rename || firstEdit?.rename || firstEdit?.move || details?.move;
 	const { language } = formatEditDescription(rawPath, uiTheme, { rename });
 
 	const metadataLine =

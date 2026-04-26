@@ -9,6 +9,7 @@ import { settings } from "../config/settings";
 import { dangerPiBundledBuiltinSlashCommands } from "../danger-pi/slash-commands";
 import {
 	clearClaudePluginRootsCache,
+	clearPluginRootsAndCaches,
 	resolveActiveProjectRegistryPath,
 	resolveOrDefaultProjectRegistryPath,
 } from "../discovery/helpers.js";
@@ -835,13 +836,7 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 				),
 				marketplacesCacheDir: getMarketplacesCacheDir(),
 				pluginsCacheDir: getPluginsCacheDir(),
-				clearPluginRootsCache: (extraPaths?: readonly string[]) => {
-					const home = os.homedir();
-					invalidateFsCache(path.join(home, ".claude", "plugins", "installed_plugins.json"));
-					invalidateFsCache(path.join(home, getConfigDirName(), "plugins", "installed_plugins.json"));
-					for (const p of extraPaths ?? []) invalidateFsCache(p);
-					clearClaudePluginRootsCache();
-				},
+				clearPluginRootsCache: clearPluginRootsAndCaches,
 			});
 
 			try {
@@ -1043,13 +1038,7 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 					),
 					marketplacesCacheDir: getMarketplacesCacheDir(),
 					pluginsCacheDir: getPluginsCacheDir(),
-					clearPluginRootsCache: (extraPaths?: readonly string[]) => {
-						const home = os.homedir();
-						invalidateFsCache(path.join(home, ".claude", "plugins", "installed_plugins.json"));
-						invalidateFsCache(path.join(home, getConfigDirName(), "plugins", "installed_plugins.json"));
-						for (const p of extraPaths ?? []) invalidateFsCache(p);
-						clearClaudePluginRootsCache();
-					},
+					clearPluginRootsCache: clearPluginRootsAndCaches,
 				});
 
 				switch (sub) {

@@ -20,15 +20,15 @@ import type {
 	WriteArgs,
 	WriteResult,
 } from "./providers/cursor/gen/agent_pb";
-import type { DevinOptions } from "./providers/devin";
 import type { GoogleOptions } from "./providers/google";
-import type { AcpAgentOptions } from "./providers/acp";
 import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
 import type { GoogleVertexOptions } from "./providers/google-vertex";
 import type { OpenAICodexResponsesOptions } from "./providers/openai-codex-responses";
 import type { OpenAICompletionsOptions } from "./providers/openai-completions";
 import type { OpenAIResponsesOptions } from "./providers/openai-responses";
+import type { DevinOptions } from "./providers/devin";
 import type { WarpOptions } from "./providers/warp";
+import type { AcpAgentOptions } from "./providers/acp";
 import type { AssistantMessageEventStream } from "./utils/event-stream";
 
 export type { AssistantMessageEventStream } from "./utils/event-stream";
@@ -277,6 +277,7 @@ export interface ThinkingContent {
 	type: "thinking";
 	thinking: string;
 	thinkingSignature?: string; // e.g., for OpenAI responses, the reasoning item ID
+	itemId?: string; // item.id from output_item.added, used to match output_item.done
 }
 
 export interface RedactedThinkingContent {
@@ -297,6 +298,14 @@ export interface ToolCall {
 	arguments: Record<string, any>;
 	thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
 	intent?: string; // Harness-level intent metadata extracted from traced tool arguments
+	/**
+	 * Original wire-level name when the tool was invoked via OpenAI's custom-tool
+	 * mechanism (e.g., `apply_patch`). Set by `openai-responses` on receive so
+	 * the history-replay path can re-emit the call as `custom_tool_call` with
+	 * its paired tool-result as `custom_tool_call_output`. Absent for regular
+	 * JSON function tools.
+	 */
+	customWireName?: string;
 }
 
 export interface Usage {
@@ -423,6 +432,23 @@ export interface Tool<TParameters extends TSchema = TSchema> {
 	parameters: TParameters;
 	/** If true, tool is strictly typed and validated against the parameters schema before execution */
 	strict?: boolean;
+	/**
+	 * Optional grammar constraint for OpenAI custom-tool emission.
+	 * When set, providers that support grammar-constrained tools (currently only
+	 * `openai-responses` against models with the right capability flag) may emit
+	 * this tool as `{type: "custom", format: {type: "grammar", …}}` instead of a
+	 * JSON function tool. Other providers ignore the field.
+	 */
+	customFormat?: { syntax: "lark" | "regex"; definition: string };
+	/**
+	 * Optional wire-level name used when this tool is emitted as a custom tool
+	 * (e.g. OpenAI's `{type: "custom"}` shape). Models trained on specific tool
+	 * names — like GPT-5 on `apply_patch` — need to see that exact name on the
+	 * wire, but it may differ from the harness-internal `name`. The agent-loop
+	 * dispatcher matches both `name` and `customWireName` so returned tool
+	 * calls route correctly. Absent for regular JSON function tools.
+	 */
+	customWireName?: string;
 }
 
 export interface Context {
@@ -556,4 +582,12 @@ export interface Model<TApi extends Api = any> {
 	thinking?: ThinkingConfig;
 	/** Compatibility overrides for openai-completions API. If not set, auto-detected from baseUrl. */
 	compat?: TApi extends "openai-completions" ? OpenAICompat : never;
+	/**
+	 * Which shape to use when exposing the Codex `apply_patch` tool to this model.
+	 * Generated catalog policy sets `"freeform"` for first-party GPT-5 Responses
+	 * models that support OpenAI custom tools with a Lark grammar. The freeform
+	 * variant sends a raw patch string with no JSON envelope.
+	 * - `"function"` or undefined: JSON function-tool with `{input: string}` (spec §1.2).
+	 */
+	applyPatchToolType?: "freeform" | "function";
 }

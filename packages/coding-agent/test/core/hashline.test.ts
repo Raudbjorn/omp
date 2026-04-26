@@ -9,6 +9,7 @@ import {
 	parseTag,
 	streamHashLinesFromLines,
 	streamHashLinesFromUtf8,
+	stripHashlinePrefixes,
 	stripNewLinePrefixes,
 	validateLineRef,
 } from "@oh-my-pi/pi-coding-agent/edit";
@@ -237,7 +238,7 @@ describe("validateLineRef", () => {
 
 	it("rejects mismatched hash", () => {
 		const lines = ["hello", "world"];
-		expect(() => validateLineRef({ line: 1, hash: "0000" }, lines)).toThrow(/has changed since last read/);
+		expect(() => validateLineRef({ line: 1, hash: "0000" }, lines)).toThrow(/Edit rejected:.*has changed/);
 	});
 
 	it("validates last line correctly", () => {
@@ -946,6 +947,72 @@ describe("stripNewLinePrefixes", () => {
 	it("does NOT strip '+' when line starts with '++'", () => {
 		const lines = ["++conflict marker", "++another"];
 		expect(stripNewLinePrefixes(lines)).toEqual(["++conflict marker", "++another"]);
+	});
+
+	it("strips hashline prefixes when truncation marker is present (anchor corruption bug)", () => {
+		const lines = [
+			"1#BQ:---",
+			"2#XS:title: example",
+			"3#BQ:---",
+			"",
+			"[Showing lines 1-300 of 332. Use sel=L301 to continue]",
+		];
+		const result = stripNewLinePrefixes(lines);
+		expect(result).not.toContain("[Showing lines 1-300 of 332. Use sel=L301 to continue]");
+		expect(result[0]).toBe("---");
+		expect(result[1]).toBe("title: example");
+	});
+
+	it("strips hashline prefixes when generic read truncation notice is present", () => {
+		const lines = ["1#BQ:line one", "2#XS:line two", "", "[42 more lines in file. Use sel=L3 to continue]"];
+		const result = stripNewLinePrefixes(lines);
+		expect(result[0]).toBe("line one");
+		expect(result[1]).toBe("line two");
+	});
+
+	it("strips nested hashline prefixes (already-corrupted content re-read)", () => {
+		const lines = ["1#NX:1#BQ:---", "2#TY:2#XS:title: example", "3#JZ:3#BQ:---"];
+		const result = stripNewLinePrefixes(lines);
+		expect(result[0]).toBe("---");
+		expect(result[1]).toBe("title: example");
+		expect(result[2]).toBe("---");
+	});
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// stripHashlinePrefixes — used by Write tool
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("stripHashlinePrefixes", () => {
+	it("strips when all non-empty lines have hashline prefixes", () => {
+		const lines = ["1#BQ:---", "2#XS:title", "", "4#VV:content"];
+		expect(stripHashlinePrefixes(lines)).toEqual(["---", "title", "", "content"]);
+	});
+
+	it("does NOT strip when lines are plain content", () => {
+		const lines = ["hello", "world"];
+		expect(stripHashlinePrefixes(lines)).toBe(lines);
+	});
+
+	it("strips hashline prefixes even when truncation marker is present (anchor corruption bug)", () => {
+		const lines = [
+			"1#BQ:---",
+			"2#XS:title: example",
+			"3#BQ:---",
+			"",
+			"[Showing lines 1-300 of 332. Use sel=L301 to continue]",
+		];
+		const result = stripHashlinePrefixes(lines);
+		expect(result).not.toContain("[Showing lines 1-300 of 332. Use sel=L301 to continue]");
+		expect(result[0]).toBe("---");
+		expect(result[1]).toBe("title: example");
+	});
+
+	it("strips nested hashline prefixes from already-corrupted content", () => {
+		const lines = ["1#NX:1#BQ:---", "2#TY:2#XS:title"];
+		const result = stripHashlinePrefixes(lines);
+		expect(result[0]).toBe("---");
+		expect(result[1]).toBe("title");
 	});
 });
 

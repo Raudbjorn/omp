@@ -213,6 +213,10 @@ function getOpenAICodexPlanPriority(report: UsageReport | null): number {
 	return planType.includes("pro") ? 0 : 2;
 }
 
+function hasOpenAICodexProPlan(report: UsageReport | null): boolean {
+	return getUsagePlanType(report)?.includes("pro") === true;
+}
+
 function resolveDefaultUsageProvider(provider: Provider): UsageProvider | undefined {
 	return DEFAULT_USAGE_PROVIDER_MAP.get(provider);
 }
@@ -1839,7 +1843,8 @@ export class AuthStorage {
 		const providerKey = this.#getProviderTypeKey(provider, "oauth");
 		const order = this.#getCredentialOrder(providerKey, sessionId, credentials.length);
 		const strategy = this.#rankingStrategyResolver?.(provider);
-		const checkUsage = strategy !== undefined && credentials.length > 1;
+		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
+		const checkUsage = strategy !== undefined && (credentials.length > 1 || requiresProModel);
 		const previousSessionCredential = this.#getSessionCredential(provider, sessionId);
 		const previousCodexIdentity =
 			provider === CODEX_PROVIDER && previousSessionCredential?.type === "oauth"
@@ -1847,11 +1852,10 @@ export class AuthStorage {
 				: undefined;
 		const sessionPreferredIndex =
 			previousSessionCredential?.type === "oauth" ? previousSessionCredential.index : undefined;
-		// Skip ranking only when the session already has a working preferred credential - re-ranking
+		// Skip ranking only when the session already has a working preferred credential — re-ranking
 		// mid-session causes account switches that cold-start the server-side prompt cache. New sessions
 		// (no preference) and sessions whose preferred is blocked still rank, so we pick the account
 		// with the most headroom proactively and fall back intelligently when rate-limited.
-		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
 		const sessionPreferredIsAvailable =
 			sessionPreferredIndex !== undefined && !this.#isCredentialBlocked(providerKey, sessionPreferredIndex);
 		const shouldRank = checkUsage && (!sessionPreferredIsAvailable || requiresProModel);
@@ -2014,10 +2018,11 @@ export class AuthStorage {
 			return undefined;
 		}
 
+		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
 		let usage: UsageReport | null = null;
 		let usageChecked = false;
 
-		if (checkUsage && !allowBlocked) {
+		if ((checkUsage && !allowBlocked) || requiresProModel) {
 			if (usagePrechecked) {
 				usage = prefetchedUsage;
 				usageChecked = true;
@@ -2028,7 +2033,10 @@ export class AuthStorage {
 				});
 				usageChecked = true;
 			}
-			if (usage && this.#isUsageLimitReached(usage)) {
+			if (requiresProModel && !hasOpenAICodexProPlan(usage)) {
+				return undefined;
+			}
+			if (checkUsage && !allowBlocked && usage && this.#isUsageLimitReached(usage)) {
 				const resetAtMs = this.#getUsageResetAtMs(usage, Date.now());
 				this.#markCredentialBlocked(
 					providerKey,
@@ -2066,15 +2074,19 @@ export class AuthStorage {
 				enterpriseUrl: result.newCredentials.enterpriseUrl ?? selection.credential.enterpriseUrl,
 			};
 			this.#replaceCredentialAt(provider, selection.index, updated);
-			if (checkUsage && !allowBlocked) {
+			if ((checkUsage && !allowBlocked) || requiresProModel) {
 				const sameAccount = selection.credential.accountId === updated.accountId;
 				if (!usageChecked || !sameAccount) {
 					usage = await this.#getUsageReport(provider, updated, {
 						...options,
 						timeoutMs: this.#usageRequestTimeoutMs,
 					});
+					usageChecked = true;
 				}
-				if (usage && this.#isUsageLimitReached(usage)) {
+				if (requiresProModel && !hasOpenAICodexProPlan(usage)) {
+					return undefined;
+				}
+				if (checkUsage && !allowBlocked && usage && this.#isUsageLimitReached(usage)) {
 					const resetAtMs = this.#getUsageResetAtMs(usage, Date.now());
 					this.#markCredentialBlocked(
 						providerKey,

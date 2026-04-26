@@ -222,6 +222,8 @@ export interface CreateAgentSessionOptions {
 
 	/** Enable MCP server discovery from .mcp.json files. Default: true */
 	enableMCP?: boolean;
+	/** Existing MCP manager to reuse (skips discovery, propagates to toolSession). */
+	mcpManager?: MCPManager;
 
 	/** Enable LSP integration (tool, formatting, diagnostics, warmup). Default: true */
 	enableLsp?: boolean;
@@ -1111,10 +1113,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const builtinTools = await logger.time("createAllTools", createTools, toolSession, options.toolNames);
 
 		// Discover MCP tools from .mcp.json files
-		let mcpManager: MCPManager | undefined;
+		let mcpManager: MCPManager | undefined = options.mcpManager;
 		const enableMCP = options.enableMCP ?? true;
 		const customTools: CustomTool[] = [];
-		if (enableMCP) {
+		if (enableMCP && !mcpManager) {
 			const mcpResult = await logger.time("discoverAndLoadMCPTools", discoverAndLoadMCPTools, cwd, {
 				onConnecting: serverNames => {
 					if (options.hasUI && serverNames.length > 0) {
@@ -1130,7 +1132,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				authStorage,
 			});
 			mcpManager = mcpResult.manager;
-			toolSession.mcpManager = mcpManager;
 
 			if (settings.get("mcp.notifications")) {
 				mcpManager.setNotificationsEnabled(true);
@@ -1150,6 +1151,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				customTools.push(...mcpResult.tools.map(loaded => loaded.tool));
 			}
 		}
+		toolSession.mcpManager = mcpManager;
 
 		// Add Gemini image tools if GEMINI_API_KEY (or GOOGLE_API_KEY) is available
 		const geminiImageTools = await logger.time("getGeminiImageTools", getGeminiImageTools);
@@ -2135,8 +2137,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}),
 		);
 
-		// Wire MCP manager callbacks to session for reactive tool updates
-		if (mcpManager) {
+		// Wire MCP manager callbacks to session for reactive tool updates.
+		// Skip when reusing a parent's manager — the parent owns the callbacks.
+		if (mcpManager && !options.mcpManager) {
 			mcpManager.setOnToolsChanged(tools => {
 				void session.refreshMCPTools(tools);
 			});

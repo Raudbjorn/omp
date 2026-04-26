@@ -37,9 +37,19 @@ pub fn split_region_suffix(selector: &str) -> (&str, bool, Option<ChunkRegion>) 
 }
 
 pub struct ParsedSelector {
-	pub selector: Option<String>,
-	pub crc:      Option<String>,
-	pub region:   Option<ChunkRegion>,
+	pub selector:         Option<String>,
+	pub crc:              Option<String>,
+	pub region:           Option<ChunkRegion>,
+	/// All checksum tokens discovered in the selector (trailing and
+	/// per-segment), in the order they appeared. Used for lenient multi-CRC
+	/// matching where at least one CRC in the resolved ancestor chain must
+	/// match.
+	pub all_crcs:         Vec<String>,
+	/// `true` when the resolved primary CRC targets the trailing (leaf)
+	/// segment — either because the last path segment had `#XXXX` or the
+	/// caller passed `crc` explicitly. `false` when CRCs only appeared on
+	/// intermediate ancestor segments.
+	pub has_trailing_crc: bool,
 }
 
 pub fn split_selector_crc_and_region(
@@ -72,45 +82,98 @@ pub fn split_selector_crc_and_region(
 		}
 	};
 
-	let mut selector_part = without_region.trim();
-	let embedded_crc = if let Some((prefix, suffix)) = selector_part.rsplit_once('#') {
-		if is_checksum_token(suffix.trim()) {
-			selector_part = prefix.trim_end();
-			sanitize_crc(Some(suffix))
-		} else {
-			None
+	let mut selector_part = without_region.trim().to_owned();
+	let mut collected_crcs: Vec<String> = Vec::new();
+	let mut has_trailing_crc = false;
+
+	// Whole-selector bare-CRC forms ("#XXXX" or "XXXX") take precedence so
+	// the rest of the logic can treat the selector as a dotted name path.
+	if let Some(suffix) = selector_part.strip_prefix('#')
+		&& is_checksum_token(suffix.trim())
+	{
+		if let Some(c) = sanitize_crc(Some(suffix)) {
+			collected_crcs.push(c);
 		}
-	} else if let Some(suffix) = selector_part.strip_prefix('#') {
-		if is_checksum_token(suffix.trim()) {
-			selector_part = "";
-			sanitize_crc(Some(suffix))
-		} else {
-			None
+		selector_part.clear();
+		has_trailing_crc = true;
+	} else if is_checksum_token(selector_part.as_str()) {
+		if let Some(c) = sanitize_crc(Some(selector_part.as_str())) {
+			collected_crcs.push(c);
 		}
-	} else if is_checksum_token(selector_part) {
-		let cleaned = sanitize_crc(Some(selector_part));
-		selector_part = "";
-		cleaned
-	} else {
-		None
-	};
+		selector_part.clear();
+		has_trailing_crc = true;
+	} else if !selector_part.is_empty() {
+		// Strip per-segment `#XXXX` checksums while traversing. Record whether
+		// the trailing (last) segment carried its own CRC so callers can keep
+		// legacy strict-matching behavior for `name#CRC` forms.
+		let segments: Vec<&str> = selector_part.split('.').collect();
+		let last_idx = segments.len().saturating_sub(1);
+		let cleaned_segments: Vec<String> = segments
+			.iter()
+			.enumerate()
+			.map(|(idx, seg)| {
+				let seg = seg.trim();
+				if let Some((prefix, suffix)) = seg.rsplit_once('#')
+					&& is_checksum_token(suffix.trim())
+				{
+					if let Some(c) = sanitize_crc(Some(suffix)) {
+						collected_crcs.push(c);
+					}
+					if idx == last_idx {
+						has_trailing_crc = true;
+					}
+					prefix.trim_end().to_owned()
+				} else {
+					seg.to_owned()
+				}
+			})
+			.collect();
+		selector_part = cleaned_segments.join(".");
+	}
 
 	let cleaned_selector = if selector_part.is_empty() {
 		None
 	} else {
-		Some(selector_part.to_owned())
+		Some(selector_part)
 	};
-	let cleaned_crc = sanitize_crc(crc).or(embedded_crc);
+	let explicit_crc = sanitize_crc(crc);
+	if let Some(explicit) = explicit_crc.as_deref() {
+		if !collected_crcs.iter().any(|c| c == explicit) {
+			collected_crcs.push(explicit.to_owned());
+		}
+		// An explicit `crc` parameter always targets the resolved chunk (the
+		// leaf), so it counts as a trailing CRC for legacy matching purposes.
+		has_trailing_crc = true;
+	}
+	let cleaned_crc = explicit_crc.or_else(|| {
+		if has_trailing_crc {
+			collected_crcs.last().cloned()
+		} else {
+			None
+		}
+	});
 	let region = region.or(parsed_region);
 
 	if let Some(cleaned_selector) = cleaned_selector.as_deref()
 		&& cleaned_crc.is_some()
 		&& looks_like_file_target(cleaned_selector)
 	{
-		return Ok(ParsedSelector { selector: None, crc: cleaned_crc, region });
+		return Ok(ParsedSelector {
+			selector: None,
+			crc: cleaned_crc,
+			region,
+			all_crcs: collected_crcs,
+			has_trailing_crc,
+		});
 	}
 
-	Ok(ParsedSelector { selector: cleaned_selector, crc: cleaned_crc, region })
+	Ok(ParsedSelector {
+		selector: cleaned_selector,
+		crc: cleaned_crc,
+		region,
+		all_crcs: collected_crcs,
+		has_trailing_crc,
+	})
 }
 
 pub fn sanitize_chunk_selector(selector: Option<&str>) -> Option<String> {
@@ -133,8 +196,26 @@ pub fn resolve_chunk_selector<'a>(
 	selector: Option<&str>,
 	warnings: &mut Vec<String>,
 ) -> Result<&'a ChunkNode, String> {
-	let ParsedSelector { selector: cleaned_selector, crc: cleaned_crc, .. } =
+	let ParsedSelector { crc: cleaned_crc, .. } =
 		split_selector_crc_and_region(selector, None, None)?;
+	let cleaned_selector = sanitize_chunk_selector(selector);
+	resolve_chunk_selector_impl(state, cleaned_selector.as_deref(), cleaned_crc.as_deref(), warnings)
+}
+
+pub fn resolve_chunk_selector_with_crc_filter<'a>(
+	state: &'a ChunkStateInner,
+	selector: Option<&str>,
+	crc: Option<&str>,
+	warnings: &mut Vec<String>,
+) -> Result<&'a ChunkNode, String> {
+	let ParsedSelector { selector: cleaned_selector, .. } =
+		split_selector_crc_and_region(selector, None, None)?;
+	let cleaned_crc = sanitize_crc(crc);
+	if cleaned_selector.is_none()
+		&& let Some(cleaned_crc) = cleaned_crc.as_deref()
+	{
+		return resolve_chunk_by_checksum(state, cleaned_crc);
+	}
 	resolve_chunk_selector_impl(state, cleaned_selector.as_deref(), cleaned_crc.as_deref(), warnings)
 }
 
@@ -165,6 +246,52 @@ pub fn resolve_chunk_with_crc<'a>(
 
 	let chunk = resolve_chunk_selector_impl(state, cleaned_selector.as_deref(), None, warnings)?;
 	Ok(ResolvedChunk { chunk, crc: cleaned_crc })
+}
+
+/// Return `Ok(Some(matching_crc))` when at least one of `provided_crcs`
+/// equals the checksum of `chunk` or any of its ancestors (including the
+/// root). Return `Ok(None)` when `provided_crcs` is empty (nothing to
+/// verify). Return an error listing the fresh ancestor CRCs when
+/// `provided_crcs` is non-empty but none match.
+pub fn verify_any_ancestor_crc_match(
+	state: &ChunkStateInner,
+	chunk: &ChunkNode,
+	provided_crcs: &[String],
+) -> Result<Option<String>, String> {
+	if provided_crcs.is_empty() {
+		return Ok(None);
+	}
+	let mut ancestors: Vec<&ChunkNode> = Vec::new();
+	let mut cursor: Option<&ChunkNode> = Some(chunk);
+	while let Some(node) = cursor {
+		ancestors.push(node);
+		cursor = match node.parent_path.as_deref() {
+			Some(parent_path) => state.chunk(parent_path),
+			None => None,
+		};
+	}
+	for ancestor in &ancestors {
+		for crc in provided_crcs {
+			if ancestor.checksum.as_str() == crc.as_str() {
+				return Ok(Some(crc.clone()));
+			}
+		}
+	}
+	let fresh = ancestors
+		.iter()
+		.map(|node| format_node_ref(node))
+		.collect::<Vec<_>>()
+		.join(", ");
+	Err(format!(
+		"None of the provided checksums [{}] match any ancestor of \"{}\". Fresh chain: {fresh}. \
+		 Re-read the file to get current checksums.",
+		provided_crcs.join(", "),
+		if chunk.path.is_empty() {
+			"<root>"
+		} else {
+			chunk.path.as_str()
+		},
+	))
 }
 
 fn resolve_same_parent_crc_fallback<'a>(
@@ -716,7 +843,7 @@ fn build_not_found_error(tree: &ChunkTree, cleaned: &str) -> String {
 	} else {
 		let tree_lines = format_selector_tree(tree, &tree.root_children, false);
 		if tree_lines.is_empty() {
-			" Re-read the file to see available chunk paths.".to_owned()
+			" Use sel=\"?\" to see available chunk paths.".to_owned()
 		} else {
 			format!(" Available top-level chunks:\n{}", tree_lines.join("\n"))
 		}
@@ -724,13 +851,13 @@ fn build_not_found_error(tree: &ChunkTree, cleaned: &str) -> String {
 
 	if hint.contains('\n') {
 		format!(
-			"Chunk path not found: \"{cleaned}\".{hint}\nRe-read the file to see the full chunk tree \
-			 with paths and checksums."
+			"Chunk path not found: \"{cleaned}\".{hint}\nUse sel=\"?\" if you need the full chunk \
+			 tree with paths and checksums."
 		)
 	} else {
 		format!(
-			"Chunk path not found: \"{cleaned}\".{hint} Re-read the file to see the full chunk tree \
-			 with paths and checksums."
+			"Chunk path not found: \"{cleaned}\".{hint} Use sel=\"?\" if you need the full chunk \
+			 tree with paths and checksums."
 		)
 	}
 }
@@ -929,28 +1056,16 @@ mod tests {
 			parse_error_lines: Vec::new(),
 			fallback:          false,
 			root_path:         String::new(),
-			root_children:     vec!["fn_handleTerraform".to_owned()],
+			root_children:     vec!["fn_han".to_owned()],
 			chunks:            vec![
-				chunk("", "ROOT", None, vec!["fn_handleTerraform"]),
-				chunk("fn_handleTerraform", "HVJB", Some(""), vec!["fn_handleTerraform.try"]),
-				chunk("fn_handleTerraform.try", "RQPB", Some("fn_handleTerraform"), vec![
-					"fn_handleTerraform.try.if_2",
+				chunk("", "ROOT", None, vec!["fn_han"]),
+				chunk("fn_han", "HVJB", Some(""), vec!["fn_han.try"]),
+				chunk("fn_han.try", "RQPB", Some("fn_han"), vec!["fn_han.try.if_2"]),
+				chunk("fn_han.try.if_2", "PKPV", Some("fn_han.try"), vec!["fn_han.try.if_2.loop"]),
+				chunk("fn_han.try.if_2.loop", "MZRS", Some("fn_han.try.if_2"), vec![
+					"fn_han.try.if_2.loop.if_2",
 				]),
-				chunk("fn_handleTerraform.try.if_2", "PKPV", Some("fn_handleTerraform.try"), vec![
-					"fn_handleTerraform.try.if_2.loop",
-				]),
-				chunk(
-					"fn_handleTerraform.try.if_2.loop",
-					"MZRS",
-					Some("fn_handleTerraform.try.if_2"),
-					vec!["fn_handleTerraform.try.if_2.loop.if_2"],
-				),
-				chunk(
-					"fn_handleTerraform.try.if_2.loop.if_2",
-					"QKJY",
-					Some("fn_handleTerraform.try.if_2.loop"),
-					vec![],
-				),
+				chunk("fn_han.try.if_2.loop.if_2", "QKJY", Some("fn_han.try.if_2.loop"), vec![]),
 			],
 		})
 	}
@@ -959,8 +1074,8 @@ mod tests {
 	fn resolves_requested_chunk_selector_forms() {
 		let state = state_for_resolution();
 		let selectors = [
-			"fn_handleTerraform.try.if_2#PKPV",
-			"fn_handleTerraform.try.if_2",
+			"fn_han.try.if_2#PKPV",
+			"fn_han.try.if_2",
 			"handleTerraform.try.if_2",
 			"if_2",
 			"if_2#PKPV",
@@ -972,7 +1087,7 @@ mod tests {
 			let mut warnings = Vec::new();
 			let resolved = resolve_chunk_with_crc(&state, Some(selector), None, &mut warnings)
 				.unwrap_or_else(|err| panic!("selector {selector} should resolve: {err}"));
-			assert_eq!(resolved.chunk.path, "fn_handleTerraform.try.if_2");
+			assert_eq!(resolved.chunk.path, "fn_han.try.if_2");
 		}
 	}
 
@@ -989,16 +1104,16 @@ mod tests {
 			root_children:     vec!["fn_run".to_owned()],
 			chunks:            vec![
 				chunk("", "ROOT", None, vec!["fn_run"]),
-				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_effect_1", "fn_run.var_effect_2"]),
-				chunk("fn_run.var_effect_1", "AAAA", Some("fn_run"), vec![]),
-				chunk("fn_run.var_effect_2", "BBBB", Some("fn_run"), vec![]),
+				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_eff_1", "fn_run.var_eff_2"]),
+				chunk("fn_run.var_eff_1", "AAAA", Some("fn_run"), vec![]),
+				chunk("fn_run.var_eff_2", "BBBB", Some("fn_run"), vec![]),
 			],
 		});
 		let mut warnings = Vec::new();
 		let resolved =
-			resolve_chunk_with_crc(&state, Some("fn_run.var_effect"), Some("BBBB"), &mut warnings)
+			resolve_chunk_with_crc(&state, Some("fn_run.var_eff"), Some("BBBB"), &mut warnings)
 				.expect("stale selector should resolve to same-parent checksum match");
-		assert_eq!(resolved.chunk.path, "fn_run.var_effect_2");
+		assert_eq!(resolved.chunk.path, "fn_run.var_eff_2");
 		assert!(
 			warnings
 				.iter()
@@ -1019,16 +1134,16 @@ mod tests {
 			root_children:     vec!["fn_run".to_owned()],
 			chunks:            vec![
 				chunk("", "ROOT", None, vec!["fn_run"]),
-				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_other", "fn_run.var_effect_1"]),
-				chunk("fn_run.var_other", "BBBB", Some("fn_run"), vec![]),
-				chunk("fn_run.var_effect_1", "BBBB", Some("fn_run"), vec![]),
+				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_oth", "fn_run.var_eff_1"]),
+				chunk("fn_run.var_oth", "BBBB", Some("fn_run"), vec![]),
+				chunk("fn_run.var_eff_1", "BBBB", Some("fn_run"), vec![]),
 			],
 		});
 		let mut warnings = Vec::new();
 		let resolved =
-			resolve_chunk_with_crc(&state, Some("fn_run.var_effect"), Some("BBBB"), &mut warnings)
+			resolve_chunk_with_crc(&state, Some("fn_run.var_eff"), Some("BBBB"), &mut warnings)
 				.expect("best name match should disambiguate same-parent checksum siblings");
-		assert_eq!(resolved.chunk.path, "fn_run.var_effect_1");
+		assert_eq!(resolved.chunk.path, "fn_run.var_eff_1");
 	}
 
 	#[test]
@@ -1044,14 +1159,14 @@ mod tests {
 			root_children:     vec!["fn_run".to_owned()],
 			chunks:            vec![
 				chunk("", "ROOT", None, vec!["fn_run"]),
-				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_effect_1", "fn_run.var_effect_2"]),
-				chunk("fn_run.var_effect_1", "BBBB", Some("fn_run"), vec![]),
-				chunk("fn_run.var_effect_2", "BBBB", Some("fn_run"), vec![]),
+				chunk("fn_run", "RUNN", Some(""), vec!["fn_run.var_eff_1", "fn_run.var_eff_2"]),
+				chunk("fn_run.var_eff_1", "BBBB", Some("fn_run"), vec![]),
+				chunk("fn_run.var_eff_2", "BBBB", Some("fn_run"), vec![]),
 			],
 		});
 		let mut warnings = Vec::new();
 		let Err(err) =
-			resolve_chunk_with_crc(&state, Some("fn_run.var_effect"), Some("BBBB"), &mut warnings)
+			resolve_chunk_with_crc(&state, Some("fn_run.var_eff"), Some("BBBB"), &mut warnings)
 		else {
 			panic!("ambiguous stale selector should fail closed");
 		};
@@ -1068,26 +1183,75 @@ mod tests {
 			parse_error_lines: Vec::new(),
 			fallback:          false,
 			root_path:         String::new(),
-			root_children:     vec!["class_Server".to_owned()],
+			root_children:     vec!["cls_Ser".to_owned()],
 			chunks:            vec![
-				chunk("", "ROOT", None, vec!["class_Server"]),
-				chunk("class_Server", "CLSS", Some(""), vec!["class_Server.fn_handle"]),
-				chunk("class_Server.fn_handle", "ABCD", Some("class_Server"), vec![]),
+				chunk("", "ROOT", None, vec!["cls_Ser"]),
+				chunk("cls_Ser", "CLSS", Some(""), vec!["cls_Ser.fn_han"]),
+				chunk("cls_Ser.fn_han", "ABCD", Some("cls_Ser"), vec![]),
 			],
 		});
 		let mut warnings = Vec::new();
 		let resolved = resolve_chunk_with_crc(
 			&state,
-			Some("class_Server.fn_handleRequest"),
+			Some("cls_Server.fn_handleRequest"),
 			Some("ABCD"),
 			&mut warnings,
 		)
 		.expect("full untruncated selector should resolve to truncated chunk path");
-		assert_eq!(resolved.chunk.path, "class_Server.fn_handle");
+		assert_eq!(resolved.chunk.path, "cls_Ser.fn_han");
 		assert!(
 			warnings
 				.iter()
 				.any(|warning| warning.contains("Auto-resolved"))
 		);
+	}
+
+	#[test]
+	fn split_selector_strips_inline_per_segment_crcs() {
+		let parsed =
+			split_selector_crc_and_region(Some("fn_han#HVJB.try#RQPB.if_2"), None, None).unwrap();
+		assert_eq!(parsed.selector.as_deref(), Some("fn_han.try.if_2"));
+		assert_eq!(parsed.all_crcs, vec!["HVJB".to_owned(), "RQPB".to_owned()]);
+		assert!(!parsed.has_trailing_crc);
+		// No trailing CRC → primary crc field stays empty so legacy strict
+		// matching doesn't fire on an ancestor CRC.
+		assert!(parsed.crc.is_none());
+	}
+
+	#[test]
+	fn split_selector_retains_trailing_crc_as_primary() {
+		let parsed =
+			split_selector_crc_and_region(Some("fn_han#HVJB.try.if_2#PKPV"), None, None).unwrap();
+		assert_eq!(parsed.selector.as_deref(), Some("fn_han.try.if_2"));
+		assert_eq!(parsed.all_crcs, vec!["HVJB".to_owned(), "PKPV".to_owned()]);
+		assert_eq!(parsed.crc.as_deref(), Some("PKPV"));
+		assert!(parsed.has_trailing_crc);
+	}
+
+	#[test]
+	fn verify_any_ancestor_crc_match_accepts_single_fresh() {
+		let state = state_for_resolution();
+		let chunk = state.chunk("fn_han.try.if_2").unwrap();
+		let stale_and_fresh = vec!["WRONG".to_owned(), "HVJB".to_owned()];
+		let matched = verify_any_ancestor_crc_match(&state, chunk, &stale_and_fresh).unwrap();
+		assert_eq!(matched.as_deref(), Some("HVJB"));
+	}
+
+	#[test]
+	fn verify_any_ancestor_crc_match_rejects_all_stale() {
+		let state = state_for_resolution();
+		let chunk = state.chunk("fn_han.try.if_2").unwrap();
+		let all_stale = vec!["WRONG".to_owned(), "BADB".to_owned()];
+		let err = verify_any_ancestor_crc_match(&state, chunk, &all_stale).unwrap_err();
+		assert!(err.contains("None of the provided checksums"), "{err}");
+		assert!(err.contains("HVJB") || err.contains("RQPB") || err.contains("PKPV"), "{err}");
+	}
+
+	#[test]
+	fn verify_any_ancestor_crc_match_no_crcs_is_noop() {
+		let state = state_for_resolution();
+		let chunk = state.chunk("fn_han.try.if_2").unwrap();
+		let matched = verify_any_ancestor_crc_match(&state, chunk, &[]).unwrap();
+		assert!(matched.is_none());
 	}
 }

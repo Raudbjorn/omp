@@ -120,6 +120,25 @@ describe("ModelRegistry", () => {
 		});
 	}
 
+	function mockOllamaDiscovery(modelNames: string[]) {
+		return hookFetch(input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:11434/api/tags") {
+				return new Response(JSON.stringify({ models: modelNames.map(name => ({ name })) }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			if (url === "http://127.0.0.1:11434/api/show") {
+				return new Response(JSON.stringify({ capabilities: ["completion"] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		});
+	}
+
 	describe("canonical equivalence", () => {
 		test("groups dotted provider variants under the bundled canonical id", () => {
 			writeRawModelsJson({
@@ -1372,22 +1391,7 @@ describe("ModelRegistry", () => {
 	});
 	describe("runtime discovery", () => {
 		test("auto-discovers ollama models without provider config", async () => {
-			using _hook = hookFetch(input => {
-				const url = String(input);
-				if (url === "http://127.0.0.1:11434/api/tags") {
-					return new Response(JSON.stringify({ models: [{ name: "phi4-mini" }] }), {
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					});
-				}
-				if (url === "http://127.0.0.1:11434/api/show") {
-					return new Response(JSON.stringify({ capabilities: ["completion"] }), {
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					});
-				}
-				throw new Error(`Unexpected URL: ${url}`);
-			});
+			using _hook = mockOllamaDiscovery(["phi4-mini"]);
 
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 			await registry.refresh();
@@ -1591,22 +1595,7 @@ describe("ModelRegistry", () => {
 			});
 
 			{
-				using _hook = hookFetch(input => {
-					const url = String(input);
-					if (url === "http://127.0.0.1:11434/api/tags") {
-						return new Response(JSON.stringify({ models: [{ name: "phi4-mini" }] }), {
-							status: 200,
-							headers: { "Content-Type": "application/json" },
-						});
-					}
-					if (url === "http://127.0.0.1:11434/api/show") {
-						return new Response(JSON.stringify({ capabilities: ["completion"] }), {
-							status: 200,
-							headers: { "Content-Type": "application/json" },
-						});
-					}
-					throw new Error(`Unexpected URL: ${url}`);
-				});
+				using _hook = mockOllamaDiscovery(["phi4-mini"]);
 				const primedRegistry = new ModelRegistry(authStorage, modelsJsonPath);
 				await primedRegistry.refresh();
 			}
@@ -1790,6 +1779,18 @@ describe("ModelRegistry", () => {
 			expect(llama?.contextWindow).toBe(262144);
 			expect(llama?.maxTokens).toBe(8192);
 			expect(llama?.input).toEqual(["text", "image"]);
+		});
+	});
+	describe("bundled Anthropic catalog availability", () => {
+		test("includes native Opus 4.7 in available models when Anthropic auth exists", async () => {
+			await authStorage.set("anthropic", [{ type: "api_key", key: "sk-ant-api-test" }]);
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh("offline");
+
+			expect(
+				registry.getAvailable().some(model => model.provider === "anthropic" && model.id === "claude-opus-4-7"),
+			).toBe(true);
 		});
 	});
 });

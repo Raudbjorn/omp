@@ -552,13 +552,19 @@ pub fn unquote_text(text: &str) -> String {
 }
 
 pub fn sanitize_node_kind(kind: &str) -> &str {
-	let kind_stripped = kind
-		.trim_suffix("_instruction")
-		.trim_suffix("_statement")
-		.trim_suffix("_declaration")
-		.trim_suffix("_definition")
-		.trim_suffix("_item")
-		.trim_suffix("ession"); // _expression -> _expr
+	let mut kind_stripped = kind;
+	for suffix in [
+		"_instruction",
+		"_statement",
+		"_declaration",
+		"_definition",
+		"_item",
+		"ession", // _expression -> _expr
+	] {
+		if let Some(stripped) = kind_stripped.strip_suffix(suffix) {
+			kind_stripped = stripped;
+		}
+	}
 	if kind_stripped.is_empty() {
 		kind
 	} else {
@@ -648,7 +654,8 @@ fn summarize_function_node(
 	raw_signature: &str,
 ) -> String {
 	let name = identifier.unwrap_or_else(|| kind.prefix());
-	let tail = function_signature(raw_signature)
+	let tail = go_method_signature(raw_signature, identifier)
+		.or_else(|| function_signature(raw_signature))
 		.or_else(|| python_function_signature(raw_signature))
 		.or_else(|| rust_function_signature(raw_signature))
 		.unwrap_or_else(|| raw_signature.to_string());
@@ -719,6 +726,46 @@ fn function_signature(header: &str) -> Option<String> {
 	} else {
 		Some(signature.to_string())
 	}
+}
+
+fn go_method_signature(header: &str, identifier: Option<&str>) -> Option<String> {
+	let name = identifier?;
+	let declaration = header
+		.trim()
+		.trim_end_matches('{')
+		.trim_end_matches(';')
+		.trim();
+	let rest = declaration.strip_prefix("func")?.trim_start();
+	if !rest.starts_with('(') {
+		return None;
+	}
+	let receiver_end = find_matching_paren(rest, 0)?;
+	let after_receiver = rest.get(receiver_end + 1..)?.trim_start();
+	let after_name = after_receiver.strip_prefix(name)?.trim_start();
+	if !after_name.starts_with('(') {
+		return None;
+	}
+	Some(after_name.to_string())
+}
+
+fn find_matching_paren(text: &str, open_index: usize) -> Option<usize> {
+	let mut depth = 0usize;
+	for (index, ch) in text
+		.char_indices()
+		.skip_while(|(index, _)| *index < open_index)
+	{
+		match ch {
+			'(' => depth = depth.saturating_add(1),
+			')' => {
+				depth = depth.checked_sub(1)?;
+				if depth == 0 {
+					return Some(index);
+				}
+			},
+			_ => {},
+		}
+	}
+	None
 }
 
 fn python_function_signature(header: &str) -> Option<String> {

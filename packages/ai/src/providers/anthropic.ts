@@ -8,7 +8,7 @@ import type {
 	MessageParam,
 } from "@anthropic-ai/sdk/resources/messages";
 import { $env, abortableSleep, isEnoent } from "@oh-my-pi/pi-utils";
-import { mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
+import { hasOpus47ApiRestrictions, mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
 import type {
@@ -34,6 +34,7 @@ import type {
 import { isAnthropicOAuthToken, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
+import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
 import {
 	createWatchdog,
@@ -43,7 +44,7 @@ import {
 } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
-import { isCopilotTransientModelError } from "../utils/retry";
+import { isCopilotRetryableError } from "../utils/retry";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -446,13 +447,6 @@ type FoundryTlsOptions = {
 	key?: string;
 };
 
-function isFoundryEnabled(): boolean {
-	const value = $env.CLAUDE_CODE_USE_FOUNDRY;
-	if (!value) return false;
-	const normalized = value.trim().toLowerCase();
-	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
 function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: string): string | undefined {
 	if (model.provider === "github-copilot") {
 		return normalizeAnthropicBaseUrl(resolveGitHubCopilotBaseUrl(model.baseUrl, apiKey) ?? model.baseUrl);
@@ -633,7 +627,7 @@ function isProviderRetryableStreamEnvelopeError(error: unknown): boolean {
 
 export function isProviderRetryableError(error: unknown, provider?: string): boolean {
 	if (!(error instanceof Error)) return false;
-	if (provider === "github-copilot" && isCopilotTransientModelError(error)) return true;
+	if (provider === "github-copilot" && isCopilotRetryableError(error)) return true;
 	const msg = error.message.toLowerCase();
 	return (
 		/rate.?limit|too many requests|overloaded|service.?unavailable|internal_error|stream error.*received from peer|1302|timed?\s*out while waiting for the first event|timeout waiting for first/i.test(
@@ -1096,9 +1090,6 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	if (model.provider === "github-copilot") {
 		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
 		const betaFeatures = [...extraBetas];
-		if (interleavedThinking) {
-			betaFeatures.push("interleaved-thinking-2025-05-14");
-		}
 		const defaultHeaders = mergeHeaders(
 			{
 				Accept: stream ? "text/event-stream" : "application/json",
@@ -1439,11 +1430,18 @@ function buildParams(
 		params.top_k = options.topK;
 	}
 
+	// Opus 4.7+ rejects non-default sampling parameters with 400 error.
+	if (hasOpus47ApiRestrictions(model.id)) {
+		delete params.temperature;
+		delete (params as AnthropicSamplingParams).top_p;
+		delete (params as AnthropicSamplingParams).top_k;
+	}
+
 	if (context.tools) {
 		params.tools = convertTools(context.tools, isOAuthToken);
 	}
 
-	if (options?.thinkingEnabled && model.reasoning) {
+	if (options?.thinkingEnabled && model.reasoning && model.provider !== "github-copilot") {
 		const mode = model.thinking?.mode;
 		const requestedEffort = options.reasoning;
 		const effort =

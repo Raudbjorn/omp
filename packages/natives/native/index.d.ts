@@ -1007,6 +1007,64 @@ export declare function matchesKittySequence(data: string, expectedCodepoint: nu
  */
 export declare function matchesLegacySequence(data: string, keyName: string): boolean
 
+/** N-API opt-in handle for the minimizer. */
+export interface MinimizerOptions {
+  /** Master switch. Absent / false = disabled. */
+  enabled?: boolean
+  /**
+   * Optional path to a TOML settings file whose values override
+   * field-level defaults. `~` is expanded.
+   */
+  settingsPath?: string
+  /**
+   * Optional xxHash64 digest (hex) of the settings file contents. When
+   * supplied, the engine refuses to honor a settings file whose hash does
+   * not match — a lightweight trust gate for agent-controllable paths.
+   */
+  settingsHash?: string
+  /**
+   * Opt-in allowlist of program names (e.g. `"git"`). When empty or
+   * absent, all built-in filters are active.
+   */
+  only?: Array<string>
+  /** Program names explicitly excluded from minimization. */
+  except?: Array<string>
+  /**
+   * Maximum captured bytes per command before the engine falls back to
+   * the raw, un-minimized output. Default 4 MiB.
+   */
+  maxCaptureBytes?: number
+}
+
+/**
+ * Telemetry for a single minimization.
+ *
+ * Surfaced when the minimizer actually rewrote the command's output. The
+ * session layer is expected to persist `original_text` via its
+ * `ArtifactManager`, splice the resulting `artifact://<id>` reference
+ * into `text`, and replace any previously streamed raw output with the
+ * minimized text.
+ */
+export interface MinimizerResult {
+  /**
+   * Dispatch label produced by the minimizer (e.g. `"git"`,
+   * `"pipeline:gradle"`, `"pipeline+builtin"`).
+   */
+  filter: string
+  /**
+   * The minimized replacement text. Callers that streamed raw chunks
+   * during execution should clear and replace their accumulated output
+   * with this text.
+   */
+  text: string
+  /** The full original capture, before minimization. */
+  originalText: string
+  /** Captured byte length before minimization. */
+  inputBytes: number
+  /** Byte length of the minimized text the consumer received. */
+  outputBytes: number
+}
+
 /** Parsed Kitty keyboard protocol sequence result for a Kitty input sequence. */
 export interface ParsedKittyResult {
   /** Primary codepoint associated with the key. */
@@ -1247,6 +1305,8 @@ export interface ShellExecuteOptions {
   timeoutMs?: number
   /** Optional snapshot file to source on session creation. */
   snapshotPath?: string
+  /** Optional per-command output minimizer configuration. */
+  minimizer?: MinimizerOptions
   /** Abort signal for cancelling the operation. */
   signal?: unknown
 }
@@ -1259,6 +1319,8 @@ export interface ShellExecuteResult {
   cancelled: boolean
   /** Whether the command timed out before completion. */
   timedOut: boolean
+  /** See [`ShellRunResult::minimized`]. */
+  minimized?: MinimizerResult
 }
 
 /** Options for configuring a persistent shell session. */
@@ -1267,6 +1329,8 @@ export interface ShellOptions {
   sessionEnv?: Record<string, string>
   /** Optional snapshot file to source on session creation. */
   snapshotPath?: string
+  /** Optional per-command output minimizer configuration. */
+  minimizer?: MinimizerOptions
 }
 
 /** Options for running a shell command. */
@@ -1291,6 +1355,13 @@ export interface ShellRunResult {
   cancelled: boolean
   /** Whether the command timed out before completion. */
   timedOut: boolean
+  /**
+   * When the minimizer rewrote the captured output, this carries the
+   * original buffer + telemetry so the session layer can persist it as
+   * an artifact and splice an `artifact://<id>` reference into the
+   * minimized text shown to the agent. `None` when nothing was rewritten.
+   */
+  minimized?: MinimizerResult
 }
 
 /**

@@ -72,7 +72,6 @@ import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { OmpLiveReloadController, type OmpLiveReloadMode } from "./omp-live-reload";
 import { SessionObserverRegistry } from "./session-observer-registry";
-import { setMermaidRenderCallback } from "./theme/mermaid-cache";
 import type { Theme } from "./theme/theme";
 import {
 	getEditorTheme,
@@ -235,7 +234,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui = new TUI(terminal, settings.get("showHardwareCursor"));
 		setActiveWebTerminalBridge(createWebTerminalBridge(this.ui, terminal));
 		this.ui.setClearOnShrink(settings.get("clearOnShrink"));
-		setMermaidRenderCallback(() => this.ui.requestRender());
 		this.chatContainer = new Container();
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
