@@ -110,6 +110,7 @@ export type KnownProvider =
 	| "minimax-code"
 	| "minimax-code-cn"
 	| "github-copilot"
+	| "fireworks"
 	| "gitlab-duo"
 	| "cursor"
 	| "deepseek"
