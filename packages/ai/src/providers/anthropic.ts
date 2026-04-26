@@ -1592,13 +1592,8 @@ function buildParams(
 		params.system = systemBlocks;
 	}
 	disableThinkingIfToolChoiceForced(params);
-	// GitHub Copilot's Anthropic proxy does not support prompt caching or thinking.
-	// Both cause a misleading model_not_supported 400. Strip all unsupported fields.
-	if (model.provider === "github-copilot") {
-		delete params.thinking;
-		delete params.output_config;
-	} else {
-		ensureMaxTokensForThinking(params, model);
+	ensureMaxTokensForThinking(params, model);
+	if (model.provider !== "github-copilot") {
 		applyPromptCaching(params, cacheControl);
 		enforceCacheControlLimit(params, 4);
 		normalizeCacheControlTtlOrdering(params);
