@@ -15,7 +15,6 @@ import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from ".
 import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
 import type { ToolSession } from ".";
 import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
-import { resolveToCwd } from "./path-utils";
 import { formatTimeoutLine, formatTitle, replaceTabs, shortenPath, truncateToWidth } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
