@@ -802,6 +802,14 @@ export function applyAtomEdits(
 		(e): e is Extract<AtomEdit, { op: "splice_block" }> => e.op === "splice_block",
 	);
 	if (spliceBlockEdits.length > 0) {
+		const otherAnchorOps = effective.filter(e => e.op !== "splice_block" && "pos" in e);
+		if (otherAnchorOps.length > 0) {
+			const otherOps = [...new Set(otherAnchorOps.map(e => e.op))].sort().join("/");
+			throw new Error(
+				`splice_block cannot be combined with other anchor-scoped ops (${otherOps}) in the same call: ` +
+					`block expansions shift line numbers and would silently misapply line-scoped edits. Split into separate calls.`,
+			);
+		}
 		const result = applySpliceBlockEdits(text, spliceBlockEdits, warnings);
 		if (result.firstChangedLine !== undefined) {
 			if (firstChangedLine === undefined || result.firstChangedLine < firstChangedLine) {

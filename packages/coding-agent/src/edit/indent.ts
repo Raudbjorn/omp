@@ -42,8 +42,10 @@ export function detectIndentStyle(text: string): IndentStyle {
 	if (spaceIndented === 0) return { kind: "tab", width: 1 };
 
 	// Pick the most common nonzero indent width that divides the others well.
-	const candidates = [2, 4, 8];
-	let bestCandidate = 4;
+	// Iterate descending so the largest divisor wins ties (a file whose only
+	// observed widths are {4} or {4, 8} should be detected as 4-space, not 2-space).
+	const candidates = [8, 4, 2];
+	let bestCandidate = 2;
 	let bestScore = -1;
 	for (const cand of candidates) {
 		let score = 0;

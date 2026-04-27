@@ -562,8 +562,16 @@ export function fireworksModelManagerOptions(
 						toBoolean(entry.supports_chat) === true && toBoolean(entry.supports_tools) === true,
 					mapModel: (entry, defaults) => {
 						const publicModelId = toFireworksPublicModelId(defaults.id);
-						const reference = modelsDevReferences.get(publicModelId) ?? bundledReferences(publicModelId);
+						// Prefer bundled references over models.dev. Both reference sources
+						// dedupe by model id across all providers, so a shared id like `glm-5`
+						// could resolve to another provider's entry — pulling in its
+						// `compat`/`cost`/`headers`/`reasoning` fields and silently routing
+						// Z.ai-style thinking format or MiniMax pricing into Fireworks requests.
+						// Strip provider-scoped fields when the reference isn't actually a
+						// Fireworks entry.
+						const reference = bundledReferences(publicModelId) ?? modelsDevReferences.get(publicModelId);
 						const model = mapWithBundledReference(entry, defaults, reference);
+						const isFireworksReference = reference?.provider === "fireworks";
 						return {
 							...model,
 							id: publicModelId,
@@ -574,6 +582,9 @@ export function fireworksModelManagerOptions(
 							input: toBoolean(entry.supports_image_input) === true ? ["text", "image"] : ["text"],
 							contextWindow: toPositiveNumber(entry.context_length, model.contextWindow),
 							maxTokens: toPositiveNumber(entry.max_completion_tokens, model.maxTokens),
+							compat: isFireworksReference ? model.compat : undefined,
+							cost: isFireworksReference ? model.cost : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							headers: isFireworksReference ? model.headers : undefined,
 						};
 					},
 				});

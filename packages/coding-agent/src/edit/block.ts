@@ -56,15 +56,35 @@ const CLOSERS: Record<DelimiterKind, string> = { "{": "}", "(": ")", "[": "]" };
  * Walk `text` and emit positions of opening and closing delimiters that lie
  * outside strings and comments.
  */
-export function scanDelimiters(text: string): BraceEvent[] {
+export interface ScanDelimitersOptions {
+	/**
+	 * Treat `;` as a line comment (Lisp/Clojure/Scheme convention). Defaults to
+	 * `false` because `;` is a statement terminator in C-family languages.
+	 * Callers that have inferred a Lisp-family file (e.g. via `(` block kind)
+	 * should set this so `(`/`)` inside `; …` comments are not treated as real
+	 * delimiters.
+	 */
+	semicolonComment?: boolean;
+}
+
+export function scanDelimiters(text: string, options: ScanDelimitersOptions = {}): BraceEvent[] {
 	const out: BraceEvent[] = [];
 	const len = text.length;
+	const semicolonComment = options.semicolonComment === true;
 	let i = 0;
 	while (i < len) {
 		const ch = text[i]!;
 		// Line comment `// …` to end of line.
 		if (ch === "/" && text[i + 1] === "/") {
 			i += 2;
+			while (i < len && text[i] !== "\n") i++;
+			continue;
+		}
+		// Lisp-family line comment `; …` to end of line. Only enabled when the
+		// caller signals a Lisp-family source — `;` is a statement terminator in
+		// C/Java/etc. and must not be treated as a comment there.
+		if (ch === ";" && semicolonComment) {
+			i++;
 			while (i < len && text[i] !== "\n") i++;
 			continue;
 		}
@@ -202,7 +222,10 @@ export function findEnclosingBlock(
 	const kind: DelimiterKind = options.kind ?? "{";
 	const depth = Math.max(0, Math.floor(options.depth ?? 0));
 
-	const events = scanDelimiters(text);
+	// `(` blocks imply Lisp-family input where `;` starts a line comment.
+	// Scanning with that option set keeps `(`/`)` inside Lisp comments from
+	// being counted as real delimiters.
+	const events = scanDelimiters(text, { semicolonComment: kind === "(" });
 	const pairs = pairBlocks(events);
 
 	// Lines (1-indexed) that bracket the target are considered to contain it.
@@ -292,7 +315,7 @@ function computeBodyLineIndent(text: string, bodyStart: number, bodyEnd: number)
  * error message when unbalanced, or `null` when fine.
  */
 export function checkBodyBraceBalance(body: string, kind: DelimiterKind): string | null {
-	const events = scanDelimiters(body);
+	const events = scanDelimiters(body, { semicolonComment: kind === "(" });
 	let opens = 0;
 	let closes = 0;
 	const opener = OPENERS[kind];
