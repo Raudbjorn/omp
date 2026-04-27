@@ -4,6 +4,30 @@
 
 ### Added
 
+- Added bracketed `loc` forms `(anchor)`, `[anchor]`, `[anchor`, `(anchor`, `anchor]`, and `anchor)` to `atom` `splice` editing so a single anchor can target a block body, whole node, or partial node region
+- Added automatic block-delimiter inference for block splices using file extension, defaulting to `{` and using `(` for Lisp-family files
+- Added optional `pre`/`post` arguments to the `href` prompt helper so hashline references can be wrapped as bracketed or parenthesized anchors
+- Added destination-aware indent handling for block replacements by detecting file indent style and reapplying tabs/spaces to spliced body text
+
+### Changed
+
+- Changed bracketed atom locators to be `splice`-only and reject `pre`, `post`, or `sed` on region locators
+- Changed `applyAtomEdits` to forbid mixing `splice_block` with other anchor-scoped edit verbs in one call
+- Changed `splice_block` resolution behavior to include selected block range and enclosing-count context in warning output
+- Changed balanced-block parsing to support `kind` selection (`{`, `(`, `[`), nesting depth, and safer same-line enclosing selection
+
+### Removed
+
+- Removed the `sed` `F` option for literal matching; `sed` now accepts only `pat`, `rep`, and optional `g`, with `F`-style literal matching no longer supported
+
+### Fixed
+
+- Fixed `splice_block` multi-line replacements to replace the exact target region and avoid duplicate braces or duplicated signature lines from bare-anchor `splice` attempts
+- Fixed false-positive “unbalanced” replacement-body warnings caused by braces in regex/string/comment text by skipping those constructs during block scanning
+- Fixed `splice_block` for same-line `(` bodies so inline call sites like `int(port)` can be replaced correctly
+
+### Added
+
 - Added `script` tool for programmatic multi-tool orchestration: write Python that calls registered tools as functions, with subprocess isolation, timeout control, and support for dynamically loaded MCP tools via the `tools` proxy (from [beeemT/oh-my-pi#feat/programmatic-tool-calling](https://github.com/beeemT/oh-my-pi/tree/feat/programmatic-tool-calling) by [@beeemT](https://github.com/beeemT))
 - Added local web terminal access (from [nnk97/oh-my-pi#feat/webterminal](https://github.com/nnk97/oh-my-pi/tree/feat/webterminal) by [@nnk97](https://github.com/nnk97)). `omp --web-terminal` or `/web_terminal` starts a local HTTP/WebSocket server that mirrors the TUI to a browser-based xterm.js client; a QR code is printed so a phone on the same LAN can scan to connect. Configurable via the new Web Terminal settings tab: bind-interface selection, mobile control bar (toggle + height), selectable extra control keys (esc/enter/arrows/ctrl+c).
 

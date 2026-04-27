@@ -37,6 +37,7 @@ import { loginCerebras } from "./utils/oauth/cerebras";
 import { loginCloudflareAiGateway } from "./utils/oauth/cloudflare-ai-gateway";
 import { loginCursor } from "./utils/oauth/cursor";
 import { loginDevin } from "./utils/oauth/devin";
+import { loginFireworks } from "./utils/oauth/fireworks";
 import { loginGitHubCopilot } from "./utils/oauth/github-copilot";
 import { loginGitLabDuo } from "./utils/oauth/gitlab-duo";
 import { loginAntigravity } from "./utils/oauth/google-antigravity";
@@ -951,6 +952,11 @@ export class AuthStorage {
 			}
 			case "cerebras": {
 				const apiKey = await loginCerebras(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "fireworks": {
+				const apiKey = await loginFireworks(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
