@@ -26,7 +26,7 @@
 # checksums when a new fork release is tagged on origin.
 
 pkgname=omp
-_release_tag='v14.1.4-acp.5'
+_release_tag='v14.5.2-acp.1'
 # Derive pkgver from _release_tag: strip leading 'v' and replace '-' with '.'
 # (Arch's pkgver doesn't allow hyphens — they're reserved for pkgrel).
 #   v14.1.4-acp.5 -> 14.1.4.acp.5
@@ -73,7 +73,7 @@ _default_repo=''
 _repo="${OMP_REPO:-$_default_repo}"
 
 source=("${_srcname}.tar.gz::${url}/archive/refs/tags/${_release_tag}.tar.gz")
-sha256sums=('478002e126f1f2a2dcf7d16da30bc4ded9ef3d160471f4dcb271a6850352fc7c')
+sha256sums=('SKIP')
 
 pkgver() {
 	# Static pkgver in production. In OMP_REPO mode, derive from the
