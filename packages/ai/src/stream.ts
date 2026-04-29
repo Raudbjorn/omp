@@ -146,6 +146,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	"cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
 	huggingface: () => $pickenv("HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"),
 	litellm: "LITELLM_API_KEY",
+	upb: "UPB_API_KEY",
 	moonshot: "MOONSHOT_API_KEY",
 	nvidia: "NVIDIA_API_KEY",
 	nanogpt: "NANO_GPT_API_KEY",
