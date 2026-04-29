@@ -27,6 +27,7 @@ export type OAuthProvider =
 	| "lm-studio"
 	| "minimax-code"
 	| "minimax-code-cn"
+	| "mimo-code"
 	| "moonshot"
 	| "nvidia"
 	| "nanogpt"
