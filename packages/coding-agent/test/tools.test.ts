@@ -384,8 +384,9 @@ describe("Coding Agent Tools", () => {
 
 		it("should truncate when byte limit exceeded", async () => {
 			const testFile = path.join(testDir, "large-bytes.txt");
-			// Create file with long lines so the byte budget triggers before the line limit.
-			const lines = Array.from({ length: 1000 }, (_, i) => `Line ${i + 1}: ${"x".repeat(600)}`);
+			// Keep the file under the default line limit while making each line large enough
+			// that the scaled byte budget truncates before 500 lines are collected.
+			const lines = Array.from({ length: 1000 }, (_, i) => `Line ${i + 1}: ${"x".repeat(800)}`);
 			fs.writeFileSync(testFile, lines.join("\n"));
 
 			const result = await readTool.execute("test-call-4", { path: testFile });
@@ -721,7 +722,7 @@ describe("Coding Agent Tools", () => {
 			const result = await writeTool.execute("test-call-4-local", { path: localPath, content });
 
 			expect(getTextOutput(result)).toContain(
-				`Successfully wrote ${content.length} bytes to session/local/handoffs/new-output.json`,
+				`Successfully wrote ${content.length} bytes to ${path.relative(testDir, expectedPath)}`,
 			);
 			expect(fs.existsSync(expectedPath)).toBe(true);
 			expect(fs.readFileSync(expectedPath, "utf-8")).toBe(content);
@@ -762,7 +763,7 @@ describe("Coding Agent Tools", () => {
 			});
 
 			expect(getTextOutput(result)).toContain(
-				`Successfully wrote ${content.length} bytes to nested/${path.basename(archivePath)}:pkg/new.txt`,
+				`Successfully wrote ${content.length} bytes to ${path.relative(testDir, archivePath)}:pkg/new.txt`,
 			);
 			expect(fs.existsSync(archivePath)).toBe(true);
 
