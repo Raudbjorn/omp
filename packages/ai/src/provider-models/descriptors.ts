@@ -5,6 +5,7 @@
  */
 import type { ModelManagerOptions } from "../model-manager";
 import type { Api, KnownProvider } from "../types";
+import { getOAuthProviders } from "../utils/oauth";
 import type { OAuthProvider } from "../utils/oauth/types";
 import { googleModelManagerOptions } from "./google";
 import { ollamaCloudModelManagerOptions } from "./ollama";
@@ -304,3 +305,27 @@ export const DEFAULT_MODEL_PER_PROVIDER: Record<KnownProvider, string> = {
 	"openai-codex": "gpt-5.4",
 	"gitlab-duo": "duo-chat-sonnet-4-5",
 } as Record<KnownProvider, string>;
+
+export interface ApiKeyLoginProviderInfo {
+	id: string;
+	name: string;
+	envVarHint?: string;
+}
+
+export const API_KEY_LOGIN_PROVIDERS: readonly ApiKeyLoginProviderInfo[] = [
+	{ id: "openai", name: "OpenAI", envVarHint: "OPENAI_API_KEY" },
+	{ id: "groq", name: "Groq", envVarHint: "GROQ_API_KEY" },
+	{ id: "xai", name: "xAI (Grok)", envVarHint: "XAI_API_KEY" },
+	{ id: "mistral", name: "Mistral", envVarHint: "MISTRAL_API_KEY" },
+	{ id: "openrouter", name: "OpenRouter", envVarHint: "OPENROUTER_API_KEY" },
+	{ id: "deepseek", name: "DeepSeek", envVarHint: "DEEPSEEK_API_KEY" },
+	{ id: "google", name: "Google AI Studio", envVarHint: "GOOGLE_API_KEY" },
+	{ id: "google-vertex", name: "Google Vertex AI", envVarHint: "GOOGLE_CLOUD_ACCESS_TOKEN" },
+	{ id: "amazon-bedrock", name: "Amazon Bedrock", envVarHint: "AWS_ACCESS_KEY_ID" },
+	{ id: "minimax", name: "MiniMax", envVarHint: "MINIMAX_API_KEY" },
+];
+/** Return API-key login providers that are NOT already registered as OAuth providers. */
+export function getApiKeyLoginProviders(): ApiKeyLoginProviderInfo[] {
+	const oauthIds = new Set(getOAuthProviders().map(p => p.id));
+	return API_KEY_LOGIN_PROVIDERS.filter(p => !oauthIds.has(p.id));
+}

@@ -1,4 +1,4 @@
-import { getOAuthProviders, type OAuthProviderInfo } from "@oh-my-pi/pi-ai";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai";
 import { Container, Input, matchesKey, Spacer, TruncatedText } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import { matchesSelectCancel } from "../../modes/utils/keybinding-matchers";
@@ -7,23 +7,36 @@ import { DynamicBorder } from "./dynamic-border";
 
 const MAX_VISIBLE = 10;
 
+type ProviderType = "oauth" | "apiKey";
+
+interface ProviderItem {
+	id: string;
+	name: string;
+	type: ProviderType;
+	available: boolean;
+	envVarHint?: string;
+}
+
 /**
- * Component that renders an OAuth provider selector.
+ * Component that renders an OAuth/API-key provider selector.
  */
 export class OAuthSelectorComponent extends Container {
 	#listContainer: Container;
 	#searchInput: Input;
-	#allProviders: OAuthProviderInfo[] = [];
-	#filteredProviders: OAuthProviderInfo[] = [];
+	#allProviders: ProviderItem[] = [];
+	#filteredProviders: ProviderItem[] = [];
 	#selectedIndex: number = 0;
 	#mode: "login" | "logout";
 	#authStorage: AuthStorage;
 	#onSelectCallback: (providerId: string) => void;
+	#onApiKeySelectCallback: (providerId: string) => void;
 	#onCancelCallback: () => void;
 	#statusMessage: string | undefined;
 	#validateAuthCallback?: (providerId: string) => Promise<boolean>;
+	#apiKeyStatusCallback?: (providerId: string) => Promise<boolean>;
 	#requestRenderCallback?: () => void;
 	#authState: Map<string, "checking" | "valid" | "invalid"> = new Map();
+	#apiKeyState: Map<string, boolean> = new Map();
 	#spinnerFrame: number = 0;
 	#spinnerInterval?: NodeJS.Timeout;
 	#validationGeneration: number = 0;
@@ -33,7 +46,10 @@ export class OAuthSelectorComponent extends Container {
 		onSelect: (providerId: string) => void,
 		onCancel: () => void,
 		options?: {
+			apiKeyProviders?: Array<{ id: string; name: string; envVarHint?: string }>;
+			onApiKeySelect?: (providerId: string) => void;
 			validateAuth?: (providerId: string) => Promise<boolean>;
+			apiKeyStatus?: (providerId: string) => Promise<boolean>;
 			requestRender?: () => void;
 		},
 	) {
@@ -41,11 +57,13 @@ export class OAuthSelectorComponent extends Container {
 		this.#mode = mode;
 		this.#authStorage = authStorage;
 		this.#onSelectCallback = onSelect;
+		this.#onApiKeySelectCallback = options?.onApiKeySelect ?? onSelect;
 		this.#onCancelCallback = onCancel;
 		this.#validateAuthCallback = options?.validateAuth;
+		this.#apiKeyStatusCallback = options?.apiKeyStatus;
 		this.#requestRenderCallback = options?.requestRender;
-		// Load all OAuth providers
-		this.#loadProviders();
+		// Load all providers
+		this.#loadProviders(options?.apiKeyProviders ?? []);
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 		// Add title
@@ -71,25 +89,38 @@ export class OAuthSelectorComponent extends Container {
 		this.#validationGeneration += 1;
 		this.#stopSpinner();
 	}
-	#loadProviders(): void {
-		this.#allProviders = getOAuthProviders();
+	#loadProviders(apiKeyProviders: Array<{ id: string; name: string; envVarHint?: string }>): void {
+		const oauthItems: ProviderItem[] = getOAuthProviders().map(p => ({
+			...p,
+			type: "oauth" as const,
+		}));
+		const apiKeyItems: ProviderItem[] = apiKeyProviders.map(p => ({
+			...p,
+			type: "apiKey" as const,
+			available: true,
+		}));
+		this.#allProviders = [...oauthItems, ...apiKeyItems];
 		this.#filteredProviders = this.#allProviders;
 	}
 
 	#startValidation(): void {
-		if (!this.#validateAuthCallback) return;
 		const generation = this.#validationGeneration + 1;
 		this.#validationGeneration = generation;
 
 		let pending = 0;
 		for (const provider of this.#allProviders) {
-			if (!this.#authStorage.hasAuth(provider.id)) {
-				this.#authState.delete(provider.id);
-				continue;
+			if (provider.type === "oauth") {
+				if (!this.#authStorage.hasAuth(provider.id)) {
+					this.#authState.delete(provider.id);
+					continue;
+				}
+				this.#authState.set(provider.id, "checking");
+				pending += 1;
+				void this.#validateProvider(provider.id, generation);
+			} else if (provider.type === "apiKey" && this.#apiKeyStatusCallback) {
+				pending += 1;
+				void this.#checkApiKeyStatus(provider.id, generation);
 			}
-			this.#authState.set(provider.id, "checking");
-			pending += 1;
-			void this.#validateProvider(provider.id, generation);
 		}
 
 		if (pending > 0) {
@@ -117,6 +148,23 @@ export class OAuthSelectorComponent extends Container {
 		this.#requestRenderCallback?.();
 	}
 
+	async #checkApiKeyStatus(providerId: string, generation: number): Promise<void> {
+		if (!this.#apiKeyStatusCallback) return;
+		let hasKey = false;
+		try {
+			hasKey = await this.#apiKeyStatusCallback(providerId);
+		} catch {
+			hasKey = false;
+		}
+		if (generation !== this.#validationGeneration) return;
+		this.#apiKeyState.set(providerId, hasKey);
+		if (![...this.#authState.values()].includes("checking")) {
+			this.#stopSpinner();
+		}
+		this.#updateList();
+		this.#requestRenderCallback?.();
+	}
+
 	#startSpinner(): void {
 		if (this.#spinnerInterval) return;
 		this.#spinnerInterval = setInterval(() => {
@@ -136,8 +184,15 @@ export class OAuthSelectorComponent extends Container {
 		}
 	}
 
-	#getStatusIndicator(providerId: string): string {
-		const state = this.#authState.get(providerId);
+	#getStatusIndicator(provider: ProviderItem): string {
+		if (provider.type === "apiKey") {
+			const hasKey = this.#apiKeyState.get(provider.id);
+			if (hasKey) {
+				return theme.fg("success", ` ${theme.status.success} API key set`);
+			}
+			return "";
+		}
+		const state = this.#authState.get(provider.id);
 		if (state === "checking") {
 			const frameCount = theme.spinnerFrames.length;
 			const spinner = frameCount > 0 ? theme.spinnerFrames[this.#spinnerFrame % frameCount] : theme.status.pending;
@@ -149,7 +204,13 @@ export class OAuthSelectorComponent extends Container {
 		if (state === "valid") {
 			return theme.fg("success", ` ${theme.status.success} logged in`);
 		}
-		return this.#authStorage.hasAuth(providerId) ? theme.fg("success", ` ${theme.status.success} logged in`) : "";
+		return this.#authStorage.hasAuth(provider.id) ? theme.fg("success", ` ${theme.status.success} logged in`) : "";
+	}
+	#getTypeLabel(provider: ProviderItem): string {
+		if (provider.type === "apiKey") {
+			return theme.fg("dim", " [API Key]");
+		}
+		return theme.fg("dim", " [OAuth]");
 	}
 	#updateList(): void {
 		this.#listContainer.clear();
@@ -167,16 +228,17 @@ export class OAuthSelectorComponent extends Container {
 			if (!provider) continue;
 			const isSelected = i === this.#selectedIndex;
 			const isAvailable = provider.available;
-			const statusIndicator = this.#getStatusIndicator(provider.id);
+			const statusIndicator = this.#getStatusIndicator(provider);
+			const typeLabel = this.#getTypeLabel(provider);
 
 			let line = "";
 			if (isSelected) {
 				const prefix = theme.fg("accent", `${theme.nav.cursor} `);
 				const text = isAvailable ? theme.fg("accent", provider.name) : theme.fg("dim", provider.name);
-				line = prefix + text + statusIndicator;
+				line = prefix + text + typeLabel + statusIndicator;
 			} else {
 				const text = isAvailable ? `  ${provider.name}` : theme.fg("dim", `  ${provider.name}`);
-				line = text + statusIndicator;
+				line = text + typeLabel + statusIndicator;
 			}
 			this.#listContainer.addChild(new TruncatedText(line, 0, 0));
 		}
@@ -194,9 +256,9 @@ export class OAuthSelectorComponent extends Container {
 			if (searchQuery) {
 				message = `No providers match "${searchQuery}"`;
 			} else if (this.#mode === "login") {
-				message = "No OAuth providers available";
+				message = "No providers available";
 			} else {
-				message = "No OAuth providers logged in. Use /login first.";
+				message = "No providers logged in. Use /login first.";
 			}
 			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", `  ${message}`), 0, 0));
 		}
@@ -246,7 +308,11 @@ export class OAuthSelectorComponent extends Container {
 			if (selectedProvider?.available) {
 				this.#statusMessage = undefined;
 				this.stopValidation();
-				this.#onSelectCallback(selectedProvider.id);
+				if (selectedProvider.type === "apiKey") {
+					this.#onApiKeySelectCallback(selectedProvider.id);
+				} else {
+					this.#onSelectCallback(selectedProvider.id);
+				}
 			} else if (selectedProvider) {
 				this.#statusMessage = "Provider unavailable in this environment.";
 				this.#updateList();
