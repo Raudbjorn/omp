@@ -108,6 +108,7 @@ export type KnownProvider =
 	| "kimi-code"
 	| "minimax-code"
 	| "minimax-code-cn"
+	| "mimo-code"
 	| "github-copilot"
 	| "fireworks"
 	| "gitlab-duo"
@@ -140,6 +141,7 @@ export type KnownProvider =
 	| "vllm"
 	| "xiaomi"
 	| "zenmux"
+	| "upb"
 	| "lm-studio";
 export type Provider = KnownProvider | string;
 
@@ -601,8 +603,8 @@ export interface OpenAICompat {
 	requiresThinkingAsText?: boolean;
 	/** Whether tool call IDs must be normalized to Mistral format (exactly 9 alphanumeric chars). Default: auto-detected from URL. */
 	requiresMistralToolIds?: boolean;
-	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "zai" uses thinking: { type: "enabled" }, "qwen" uses top-level enable_thinking, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking. Default: "openai". */
-	thinkingFormat?: "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template";
+	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "zai" uses thinking: { type: "enabled" }, "qwen" uses top-level enable_thinking, "qwen-chat-template" uses chat_template_kwargs.enable_thinking, and "litellm" uses reasoning: { summary: "detailed" } for reasoning token passthrough via LiteLLM proxied endpoints. Default: "openai". */
+	thinkingFormat?: "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template" | "litellm";
 	/** Which reasoning content field to emit on assistant messages. Default: auto-detected. */
 	reasoningContentField?: "reasoning_content" | "reasoning" | "reasoning_text";
 	/** Whether assistant tool-call messages must include reasoning content. Default: false. */
