@@ -1,4 +1,5 @@
 import { getKeybindings } from "../keybindings";
+import { isKeyRelease } from "../keys";
 import type { SymbolTheme } from "../symbols";
 import type { Component } from "../tui";
 import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth } from "../utils";
@@ -117,6 +118,8 @@ export class SelectList implements Component {
 	}
 
 	handleInput(keyData: string): void {
+		// Ignore key-release events to prevent focus-shift ghost input.
+		if (isKeyRelease(keyData)) return;
 		if (this.#filteredItems.length === 0) return;
 		const kb = getKeybindings();
 		// Up arrow - wrap to bottom when at top

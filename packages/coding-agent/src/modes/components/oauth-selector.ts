@@ -1,6 +1,6 @@
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/utils/oauth/types";
-import { Container, matchesKey, Spacer, TruncatedText } from "@oh-my-pi/pi-tui";
+import { Container, isKeyRelease, matchesKey, Spacer, TruncatedText } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import { matchesSelectCancel } from "../../modes/utils/keybinding-matchers";
 import type { AuthStorage } from "../../session/auth-storage";
@@ -175,6 +175,9 @@ export class OAuthSelectorComponent extends Container {
 		}
 	}
 	handleInput(keyData: string): void {
+		// Ignore Kitty key-release events: the Enter release from the /login
+		// submission can arrive after focus shifts here, causing immediate selection.
+		if (isKeyRelease(keyData)) return;
 		// Up arrow
 		if (matchesKey(keyData, "up")) {
 			if (this.#allProviders.length > 0) {

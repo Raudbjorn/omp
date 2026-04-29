@@ -22,6 +22,7 @@ import {
 	Container,
 	extractPrintableText,
 	Input,
+	isKeyRelease,
 	matchesKey,
 	padding,
 	replaceTabs,
@@ -987,6 +988,8 @@ export class AgentDashboard extends Container {
 	}
 
 	handleInput(data: string): void {
+		// Ignore key-release events to prevent focus-shift ghost input.
+		if (isKeyRelease(data)) return;
 		if (matchesKey(data, "ctrl+c")) {
 			this.onClose?.();
 			return;
