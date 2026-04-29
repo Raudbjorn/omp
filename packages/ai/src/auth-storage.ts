@@ -964,6 +964,12 @@ export class AuthStorage {
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
+			case "mimo-code": {
+				const { loginMimoCode } = await import("./utils/oauth/mimo-code");
+				const apiKey = await loginMimoCode(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
 			case "zenmux": {
 				const { loginZenMux } = await import("./utils/oauth/zenmux");
 				const apiKey = await loginZenMux(ctrl);
