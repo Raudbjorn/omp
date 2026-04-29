@@ -42,10 +42,13 @@ import { parallelProvider } from "./parallel";
 import { perplexityProvider } from "./perplexity";
 import { qianfanProvider } from "./qianfan";
 import { qwenPortalProvider } from "./qwen-portal";
+import { skvaiderProvider } from "./skvaider";
 import { syntheticProvider } from "./synthetic";
 import { tavilyProvider } from "./tavily";
 import { togetherProvider } from "./together";
 import type { ProviderDefinition } from "./types";
+import { upbProvider } from "./upb";
+import { upbGatewayProvider } from "./upb-gateway";
 import { veniceProvider } from "./venice";
 import { vercelAiGatewayProvider } from "./vercel-ai-gateway";
 import { vllmProvider } from "./vllm";
@@ -112,6 +115,8 @@ const ALL = [
 	litellmProvider,
 	kiloProvider,
 	zenmuxProvider,
+	upbProvider,
+	upbGatewayProvider,
 	opencodeZenProvider,
 	opencodeGoProvider,
 	tavilyProvider,

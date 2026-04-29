@@ -414,11 +414,17 @@ async function generateModels() {
 			).map(descriptor => fetchProviderModelsFromCatalog(descriptor as CatalogProviderDescriptor)),
 		)
 	).flat();
-	// getGitLabDuoModels returns built models; project back to spec stage for the bundle.
+// getGitLabDuoModels returns built models; project back to spec stage for the bundle.
 	const gitLabDuoModels = getGitLabDuoModels().map(model => toModelSpec(model));
-	// Combine models (models.dev has priority)
+	// Combine models (models.dev generally has priority; UPB is an exception because
+	// ai-chat exposes its catalog dynamically and models.dev does not know UPB's dot-prefixed IDs).
 	let allModels = applyGlobalModelsDevFallback(
-		[...modelsDevModels, ...catalogProviderModels, ...gitLabDuoModels],
+		[
+			...catalogProviderModels.filter(model => model.provider === "upb"),
+			...modelsDevModels,
+			...catalogProviderModels.filter(model => model.provider !== "upb"),
+			...gitLabDuoModels,
+		],
 		modelsDevModels,
 	);
 
@@ -513,6 +519,14 @@ async function generateModels() {
 	// reference. Runs last so canonical ids and explicit policy limits are final.
 	applyCanonicalLimitFallback(allModels);
 
+	// UPB AI Gateway and AI-Chat portal (both LiteLLM proxies) require reasoning.summary to surface reasoning tokens.
+	// Apply thinkingFormat compat to all UPB models since the proxy handles the parameter.
+	for (const model of allModels) {
+		if ((model.provider === "upb" || model.provider === "upb-gateway") && model.api === "openai-completions") {
+			model.compat = { ...model.compat, thinkingFormat: "litellm" };
+		}
+	}
+
 	// Group by provider and sort each provider's models
 	const providers: Record<string, Record<string, ModelSpec>> = {};
 	for (const model of allModels) {
@@ -542,7 +556,7 @@ async function generateModels() {
 	}
 
 	// Generate JSON file
-	await Bun.write(path.join(packageRoot, "src/models.json"), JSON.stringify(MODELS, null, "	"));
+	await Bun.write(path.join(packageRoot, "src/models.json"), JSON.stringify(MODELS, null, "\t"));
 	console.log("Generated src/models.json");
 
 	// Print statistics

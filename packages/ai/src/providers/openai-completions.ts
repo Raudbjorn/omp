@@ -1402,6 +1402,11 @@ function buildParams(
 					options.reasoning,
 			};
 		}
+	} else if (supportsReasoningParams && compat.thinkingFormat === "litellm" && options?.reasoning && model.reasoning) {
+		// LiteLLM proxied endpoints (e.g. UPB AI-Chat) use reasoning: { summary } to surface reasoning tokens.
+		// Without this parameter the proxy strips reasoning_content from responses.
+		const litellmParams = params as typeof params & { reasoning?: { summary?: string } };
+		litellmParams.reasoning = { summary: "detailed" };
 	} else if (
 		supportsReasoningParams &&
 		options?.reasoning &&
