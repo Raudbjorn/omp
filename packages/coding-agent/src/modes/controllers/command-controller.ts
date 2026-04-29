@@ -2,10 +2,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	type AssistantMessage,
 	getEnvApiKey,
 	getProviderDetails,
 	type ProviderDetails,
 	type ToolCall,
+	type ToolResultMessage,
 	type UsageLimit,
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
@@ -55,6 +57,33 @@ function showMarkdownPanel(ctx: InteractiveModeContext, title: string, markdown:
 	ctx.chatContainer.addChild(new Markdown(markdown.trim(), 1, 1, getMarkdownTheme()));
 	ctx.chatContainer.addChild(new DynamicBorder());
 	ctx.ui.requestRender();
+}
+
+export interface CopyableToolResult {
+	toolName: string;
+	text: string;
+}
+
+function isTextToolResultMessage(message: unknown): message is ToolResultMessage {
+	if (!message || typeof message !== "object") return false;
+	const candidate = message as Partial<ToolResultMessage>;
+	return candidate.role === "toolResult" && Array.isArray(candidate.content);
+}
+
+export function findLastTextToolResultForCopy(messages: readonly unknown[]): CopyableToolResult | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (!isTextToolResultMessage(msg)) continue;
+		const toolResult = msg;
+		const text = toolResult.content
+			.filter(content => content.type === "text")
+			.map(content => content.text)
+			.join("\n");
+		if (text.length > 0) {
+			return { toolName: toolResult.toolName, text };
+		}
+	}
+	return undefined;
 }
 
 export class CommandController {
@@ -242,34 +271,36 @@ export class CommandController {
 	handleCopyCommand(sub?: string) {
 		switch (sub) {
 			case "code":
-				return this.#copyCode();
+				return this.#copyLastAssistantCodeBlock();
 			case "all":
-				return this.#copyAllCode();
+				return this.#copyAllAssistantCodeBlocks();
 			case "cmd":
 				return this.#copyLastCommand();
+			case "tool":
+				return this.#copyLastToolResult();
 			case "last":
 			case undefined:
-				return this.#copyLastMessage();
+				return this.#copyLastAssistantMessage();
 			default:
-				this.ctx.showError(`Unknown subcommand: ${sub}. Use code, all, cmd, or last.`);
+				this.ctx.showError(`Unknown subcommand: ${sub}. Use code, all, cmd, tool, or last.`);
 		}
 	}
 
-	#copyLastMessage() {
-		const text = this.ctx.session.getLastAssistantText();
+	#copyLastAssistantMessage() {
+		const message = this.ctx.findLastAssistantMessage();
+		const text = message ? this.ctx.extractAssistantText(message) : undefined;
 		if (!text) {
 			this.ctx.showError("No agent messages to copy yet.");
 			return;
 		}
+
 		this.#doCopy(text, "Copied last agent message to clipboard");
 	}
 
-	#copyCode() {
-		const text = this.ctx.session.getLastAssistantText();
-		if (!text) {
-			this.ctx.showError("No agent messages to copy yet.");
-			return;
-		}
+	#copyLastAssistantCodeBlock() {
+		const text = this.#getLastAssistantText();
+		if (!text) return;
+
 		const matches = [...text.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gm)];
 		const lastMatch = matches.at(-1);
 		if (!lastMatch) {
@@ -279,12 +310,10 @@ export class CommandController {
 		this.#doCopy(lastMatch[1].replace(/\n$/, ""), "Copied last code block to clipboard");
 	}
 
-	#copyAllCode() {
-		const text = this.ctx.session.getLastAssistantText();
-		if (!text) {
-			this.ctx.showError("No agent messages to copy yet.");
-			return;
-		}
+	#copyAllAssistantCodeBlocks() {
+		const text = this.#getLastAssistantText();
+		if (!text) return;
+
 		const matches = [...text.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gm)];
 		if (matches.length === 0) {
 			this.ctx.showWarning("No code blocks found in the last agent message.");
@@ -311,13 +340,23 @@ export class CommandController {
 		return codeBlocks.length > 0 ? codeBlocks.join("\n\n") : undefined;
 	}
 
+	#copyLastToolResult() {
+		const result = findLastTextToolResultForCopy(this.ctx.session.messages);
+		if (!result) {
+			this.ctx.showWarning("No text tool result found in the conversation.");
+			return;
+		}
+
+		this.#doCopy(result.text, `Copied last ${result.toolName} result to clipboard`);
+	}
+
 	#copyLastCommand() {
 		const messages = this.ctx.session.messages;
 		// Walk backwards to find the last bash/eval tool call
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const msg = messages[i];
 			if (msg.role !== "assistant") continue;
-			const toolCalls = msg.content.filter((c): c is ToolCall => c.type === "toolCall");
+			const toolCalls = (msg as AssistantMessage).content.filter((c): c is ToolCall => c.type === "toolCall");
 			for (let j = toolCalls.length - 1; j >= 0; j--) {
 				const tc = toolCalls[j];
 				if (tc.name === "bash" && typeof tc.arguments.command === "string") {
@@ -336,13 +375,19 @@ export class CommandController {
 		this.ctx.showWarning("No bash or eval command found in the conversation.");
 	}
 
-	#doCopy(content: string, label: string) {
-		try {
-			copyToClipboard(content);
-			this.ctx.showStatus(label);
-		} catch (error) {
-			this.ctx.showError(error instanceof Error ? error.message : String(error));
+	#getLastAssistantText(): string | undefined {
+		const message = this.ctx.findLastAssistantMessage();
+		const text = message ? this.ctx.extractAssistantText(message) : undefined;
+		if (!text) {
+			this.ctx.showError("No agent messages to copy yet.");
+			return undefined;
 		}
+		return text;
+	}
+
+	#doCopy(content: string, label: string) {
+		void copyToClipboard(content);
+		this.ctx.showStatus(label);
 	}
 
 	async handleSessionCommand(): Promise<void> {
