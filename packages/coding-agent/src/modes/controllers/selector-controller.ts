@@ -1,6 +1,5 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
-import type { OAuthProvider } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import { getApiKeyLoginProviders, getOAuthProviders, type OAuthProvider } from "@oh-my-pi/pi-ai";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
@@ -926,6 +925,61 @@ export class SelectorController {
 		}
 	}
 
+	async #handleApiKeyLogin(providerId: string, providerName?: string): Promise<void> {
+		const displayName = providerName ?? providerId;
+		this.ctx.showStatus(`Enter API key for ${displayName}…`);
+		this.ctx.chatContainer.addChild(new Spacer(1));
+		this.ctx.chatContainer.addChild(new Text(theme.fg("warning", `Enter API key for ${displayName}:`), 1, 0));
+		this.ctx.ui.requestRender();
+
+		const { promise, resolve } = Promise.withResolvers<string>();
+		const codeInput = new Input();
+		codeInput.onSubmit = () => {
+			const code = codeInput.getValue();
+			this.ctx.editorContainer.clear();
+			this.ctx.editorContainer.addChild(this.ctx.editor);
+			this.ctx.ui.setFocus(this.ctx.editor);
+			resolve(code);
+		};
+		this.ctx.editorContainer.clear();
+		this.ctx.editorContainer.addChild(codeInput);
+		this.ctx.ui.setFocus(codeInput);
+		this.ctx.ui.requestRender();
+
+		try {
+			const apiKey = await promise;
+			if (!apiKey.trim()) {
+				this.ctx.showStatus("API key entry cancelled");
+				return;
+			}
+			await this.ctx.session.modelRegistry.saveProviderApiKey(providerId, apiKey.trim());
+			await this.ctx.session.modelRegistry.refresh();
+			this.ctx.chatContainer.addChild(new Spacer(1));
+			this.ctx.chatContainer.addChild(
+				new Text(theme.fg("success", `${theme.status.success} API key saved for ${displayName}`), 1, 0),
+			);
+			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", "Use /model to select a model."), 1, 0));
+			this.ctx.ui.requestRender();
+		} catch (error: unknown) {
+			this.ctx.showError(`Login failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	async #handleApiKeyLogout(providerId: string, providerName?: string): Promise<void> {
+		const displayName = providerName ?? providerId;
+		try {
+			await this.ctx.session.modelRegistry.removeProviderApiKey(providerId);
+			await this.ctx.session.modelRegistry.refresh();
+			this.ctx.chatContainer.addChild(new Spacer(1));
+			this.ctx.chatContainer.addChild(
+				new Text(theme.fg("success", `${theme.status.success} API key removed for ${displayName}`), 1, 0),
+			);
+			this.ctx.ui.requestRender();
+		} catch (error: unknown) {
+			this.ctx.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
 	async showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
 		if (providerId) {
 			if (mode === "login") {
@@ -936,16 +990,35 @@ export class SelectorController {
 			return;
 		}
 
+		const apiKeyProviders = getApiKeyLoginProviders();
+		let apiKeyStatuses: Map<string, boolean> = new Map();
 		if (mode === "logout") {
 			await this.#refreshOAuthProviderAuthState();
 			const oauthProviders = getOAuthProviders();
 			const loggedInProviders = oauthProviders.filter(provider =>
 				this.ctx.session.modelRegistry.authStorage.hasAuth(provider.id),
 			);
-			if (loggedInProviders.length === 0) {
-				this.ctx.showStatus("No OAuth providers logged in. Use /login first.");
+			const loggedInApiKeyProviders = apiKeyProviders.filter(provider =>
+				this.ctx.session.modelRegistry.hasConfigApiKey(provider.id),
+			);
+			if (loggedInProviders.length === 0 && loggedInApiKeyProviders.length === 0) {
+				this.ctx.showStatus("No providers logged in. Use /login first.");
 				return;
 			}
+			// Use only logged-in API key providers for logout mode
+			apiKeyProviders.length = 0;
+			apiKeyProviders.push(...loggedInApiKeyProviders);
+		} else {
+			// Pre-check API key statuses for login mode
+			const results = await Promise.all(
+				apiKeyProviders.map(async provider => {
+					const key = await this.ctx.session.modelRegistry
+						.getApiKeyForProvider(provider.id, this.ctx.session.sessionId)
+						.catch(() => undefined);
+					return [provider.id, !!key] as const;
+				}),
+			);
+			apiKeyStatuses = new Map(results);
 		}
 
 		this.showSelector(done => {
@@ -968,12 +1041,26 @@ export class SelectorController {
 					this.ctx.ui.requestRender();
 				},
 				{
+					apiKeyProviders,
+					onApiKeySelect: async (selectedProviderId: string) => {
+						selector.stopValidation();
+						done();
+						const providerName = apiKeyProviders.find(p => p.id === selectedProviderId)?.name;
+						if (mode === "login") {
+							await this.#handleApiKeyLogin(selectedProviderId, providerName);
+						} else {
+							await this.#handleApiKeyLogout(selectedProviderId, providerName);
+						}
+					},
 					validateAuth: async (selectedProviderId: string) => {
 						const apiKey = await this.ctx.session.modelRegistry.getApiKeyForProvider(
 							selectedProviderId,
 							this.ctx.session.sessionId,
 						);
 						return !!apiKey;
+					},
+					apiKeyStatus: async (selectedProviderId: string) => {
+						return apiKeyStatuses.get(selectedProviderId) ?? false;
 					},
 					requestRender: () => {
 						this.ctx.ui.requestRender();

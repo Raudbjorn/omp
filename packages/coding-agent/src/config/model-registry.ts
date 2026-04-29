@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
 	type Api,
@@ -20,15 +21,15 @@ import {
 	type ThinkingConfig,
 	unregisterCustomApis,
 } from "@oh-my-pi/pi-ai";
-
 // Sentinel for local-only OAuth token (LM Studio, vLLM) — declared inline to avoid loading
 // any provider module at startup. Must match `DEFAULT_LOCAL_TOKEN` in oauth/lm-studio.ts.
 const DEFAULT_LOCAL_TOKEN = "lm-studio-local";
 
 import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
-import { isRecord, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import { YAML } from "bun";
 import { type ConfigError, ConfigFile } from "../config";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import { isValidThemeColor, type ThemeColor } from "../modes/theme/theme";
@@ -347,10 +348,11 @@ function validateProviderConfiguration(
 				!config.compat &&
 				!config.disableStrictTools &&
 				!hasModelOverrides &&
-				!config.discovery
+				!config.discovery &&
+				!config.apiKey
 			) {
 				throw new Error(
-					`Provider ${providerName}: must specify "baseUrl", "headers", "compat", "disableStrictTools", "modelOverrides", "discovery", or "models"`,
+					`Provider ${providerName}: must specify "baseUrl", "headers", "compat", "disableStrictTools", "modelOverrides", "discovery", "apiKey", or "models"`,
 				);
 			}
 		}
@@ -2117,13 +2119,69 @@ export class ModelRegistry {
 		return this.authStorage.getApiKey(provider, sessionId, { baseUrl });
 	}
 
+	/**
+	 * Check if a provider has an API key configured in models.yml (not env var or auth store).
+	 */
+	hasConfigApiKey(provider: string): boolean {
+		return this.#customProviderApiKeys.has(provider);
+	}
+
+	/**
+	 * Save an API key for a provider to models.yml.
+	 */
+	async saveProviderApiKey(provider: string, apiKey: string): Promise<void> {
+		const configPath = this.#modelsConfigFile.path();
+		let config: Record<string, unknown> = {};
+		try {
+			const content = await fs.readFile(configPath, "utf-8");
+			config = YAML.parse(content) as Record<string, unknown>;
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+		}
+		const providers = (config.providers ?? {}) as Record<string, Record<string, unknown>>;
+		providers[provider] = { ...providers[provider], apiKey };
+		config.providers = providers;
+		await fs.mkdir(path.dirname(configPath), { recursive: true });
+		await fs.writeFile(configPath, YAML.stringify(config, null, 2));
+		this.#modelsConfigFile.invalidate();
+		this.#reloadStaticModels();
+	}
+
+	/**
+	 * Remove an API key for a provider from models.yml.
+	 */
+	async removeProviderApiKey(provider: string): Promise<void> {
+		const configPath = this.#modelsConfigFile.path();
+		let config: Record<string, unknown> = {};
+		try {
+			const content = await fs.readFile(configPath, "utf-8");
+			config = YAML.parse(content) as Record<string, unknown>;
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+			return;
+		}
+		const providers = (config.providers ?? {}) as Record<string, Record<string, unknown>>;
+		const entry = providers[provider];
+		if (!entry) return;
+		delete entry.apiKey;
+		// Remove provider entry if it has no other meaningful fields
+		if (Object.keys(entry).length === 0) {
+			delete providers[provider];
+		}
+		if (Object.keys(providers).length === 0) {
+			delete config.providers;
+		}
+		await fs.writeFile(configPath, YAML.stringify(config, null, 2));
+		this.#modelsConfigFile.invalidate();
+		this.#reloadStaticModels();
+	}
+
 	async #peekApiKeyForProvider(provider: string): Promise<string | undefined> {
 		if (this.#keylessProviders.has(provider) && !this.authStorage.hasAuth(provider)) {
 			return kNoAuth;
 		}
 		return this.authStorage.peekApiKey(provider);
 	}
-
 	/**
 	 * Check if a model is using OAuth credentials (subscription).
 	 */
