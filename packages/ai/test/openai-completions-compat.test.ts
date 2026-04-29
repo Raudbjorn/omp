@@ -368,7 +368,32 @@ describe("openai-completions compatibility", () => {
 		expect(getNestedBoolean(chatTemplateArgs, "enable_thinking")).toBe(true);
 	});
 
-	it("treats finish_reason end as stop", async () => {
+	it("requires reasoning_content for native DeepSeek V4 with reasoning", () => {
+			const model: Model<"openai-completions"> = {
+				...getBundledModel("openai", "gpt-4o-mini"),
+				api: "openai-completions",
+				provider: "deepseek",
+				baseUrl: "https://api.deepseek.com",
+				id: "deepseek-v4-flash",
+				reasoning: true,
+			};
+			const compat = detectCompat(model);
+			expect(compat.requiresReasoningContentForToolCalls).toBe(true);
+		});
+
+		it("does not require reasoning_content for native DeepSeek without reasoning", () => {
+			const model: Model<"openai-completions"> = {
+				...getBundledModel("openai", "gpt-4o-mini"),
+				api: "openai-completions",
+				provider: "deepseek",
+				baseUrl: "https://api.deepseek.com",
+				id: "deepseek-chat",
+			};
+			const compat = detectCompat(model);
+			expect(compat.requiresReasoningContentForToolCalls).toBe(false);
+		});
+
+		it("treats finish_reason end as stop", async () => {
 		const model: Model<"openai-completions"> = {
 			...getBundledModel("openai", "gpt-4o-mini"),
 			api: "openai-completions",
