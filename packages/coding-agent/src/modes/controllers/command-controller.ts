@@ -3,9 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { CompactionCancelledError, type CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import {
+	type AssistantMessage,
 	getEnvApiKey,
 	getProviderDetails,
 	type ProviderDetails,
+
 	type UsageLimit,
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
@@ -57,6 +59,33 @@ function showMarkdownPanel(ctx: InteractiveModeContext, title: string, markdown:
 	block.addChild(new Markdown(markdown.trim(), 1, 1, getMarkdownTheme()));
 	block.addChild(new DynamicBorder());
 	ctx.present(block);
+}
+
+export interface CopyableToolResult {
+	toolName: string;
+	text: string;
+}
+
+function isTextToolResultMessage(message: unknown): message is ToolResultMessage {
+	if (!message || typeof message !== "object") return false;
+	const candidate = message as Partial<ToolResultMessage>;
+	return candidate.role === "toolResult" && Array.isArray(candidate.content);
+}
+
+export function findLastTextToolResultForCopy(messages: readonly unknown[]): CopyableToolResult | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (!isTextToolResultMessage(msg)) continue;
+		const toolResult = msg;
+		const text = toolResult.content
+			.filter(content => content.type === "text")
+			.map(content => content.text)
+			.join("\n");
+		if (text.length > 0) {
+			return { toolName: toolResult.toolName, text };
+		}
+	}
+	return undefined;
 }
 
 export class CommandController {
@@ -219,6 +248,7 @@ export class CommandController {
 			}
 		}
 	}
+
 
 	async handleSessionCommand(): Promise<void> {
 		const stats = this.ctx.session.getSessionStats();

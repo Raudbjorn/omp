@@ -163,6 +163,27 @@ describe("Markdown component", () => {
 		});
 	});
 
+	describe("Code blocks", () => {
+		it("renders fenced code at the content left edge by default", () => {
+			const markdown = new Markdown(
+				`~~~typescript
+function example() {
+	return 1;
+}
+~~~`,
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+
+			const lines = markdown.render(80);
+			const plainLines = lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""));
+
+			expect(plainLines.some(line => line.startsWith("function example() {"))).toBeTruthy();
+			expect(plainLines.some(line => line.startsWith("   return 1;"))).toBeTruthy();
+		});
+	});
+
 	describe("Tables", () => {
 		it("should render simple table", () => {
 			const markdown = new Markdown(
@@ -654,7 +675,7 @@ code block
 
 more text`,
 			];
-			const expectedLines = ["hello this is text", "", "```", "  code block", "```", "", "more text"];
+			const expectedLines = ["hello this is text", "", "```", "code block", "```", "", "more text"];
 
 			for (const text of cases) {
 				const markdown = new Markdown(text, 0, 0, defaultMarkdownTheme);
@@ -711,7 +732,7 @@ more text`,
 			});
 
 			expect(seenSources).toEqual([invalidSource]);
-			expect(plainLines).toEqual(["```mermaid", "  flowchart TD", "    A --", "```"]);
+			expect(plainLines).toEqual(["```mermaid", "flowchart TD", "  A --", "```"]);
 		});
 	});
 
