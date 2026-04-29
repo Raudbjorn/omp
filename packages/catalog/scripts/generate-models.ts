@@ -529,7 +529,7 @@ async function fetchCodexDiscoveryModels(): Promise<ModelSpec<"openai-codex-resp
 async function generateModels() {
 	// Fetch models from dynamic sources.
 	const modelsDevModels = await loadModelsDevData();
-	const catalogProviderDescriptors = PROVIDER_DESCRIPTORS.filter(
+const catalogProviderDescriptors = PROVIDER_DESCRIPTORS.filter(
 		(descriptor): descriptor is CatalogProviderDescriptor =>
 			isCatalogDescriptor(descriptor) &&
 			!DISCOVERY_ONLY_PROVIDERS.has(descriptor.providerId) &&
@@ -560,13 +560,21 @@ async function generateModels() {
 	const bundledModelsDevModels = modelsDevModels.filter(model => !authoritativeCatalogProviders.has(model.provider));
 	// getGitLabDuoModels returns built models; project back to spec stage for the bundle.
 	const gitLabDuoModels = getGitLabDuoModels().map(model => toModelSpec(model));
-	// Combine models. stencil.so has priority unless a provider's successful endpoint
+	// Combine models (models.dev generally has priority; UPB is an exception because
+	// ai-chat exposes its catalog dynamically and models.dev does not know UPB's
+	// dot-prefixed IDs). stencil.so has priority unless a provider's successful endpoint
 	// discovery is authoritative; those endpoint snapshots replace stencil.so rows.
 	// Meta's reviewed first-party seed goes first: it carries the documented
 	// Responses capabilities and display names, and keeps first-run selection
 	// independent of credentials or live discovery.
 	let allModels = applyGlobalModelsDevFallback(
-		[...META_MUSE_STATIC_MODELS, ...bundledModelsDevModels, ...catalogProviderModels, ...gitLabDuoModels],
+		[
+			...META_MUSE_STATIC_MODELS,
+			...catalogProviderModels.filter(model => model.provider === "upb"),
+			...bundledModelsDevModels,
+			...catalogProviderModels.filter(model => model.provider !== "upb"),
+			...gitLabDuoModels,
+		],
 		modelsDevModels,
 	);
 
@@ -791,6 +799,14 @@ async function generateModels() {
 		canonicalizeModelCompat(model);
 	}
 
+	// UPB AI Gateway and AI-Chat portal (both LiteLLM proxies) require reasoning.summary to surface reasoning tokens.
+	// Apply thinkingFormat compat to all UPB models since the proxy handles the parameter.
+	for (const model of allModels) {
+		if ((model.provider === "upb" || model.provider === "upb-gateway") && model.api === "openai-completions") {
+			model.compat = { ...model.compat, thinkingFormat: "litellm" };
+		}
+	}
+
 	// Group by provider and sort each provider's models
 	const providers: Record<string, Record<string, ModelSpec>> = {};
 	for (const model of allModels) {
@@ -823,7 +839,7 @@ async function generateModels() {
 	}
 
 	// Generate JSON file
-	await Bun.write(path.join(packageRoot, "src/models.json"), JSON.stringify(MODELS, null, "	"));
+	await Bun.write(path.join(packageRoot, "src/models.json"), JSON.stringify(MODELS, null, "\t"));
 	console.log("Generated src/models.json");
 
 	// Print statistics

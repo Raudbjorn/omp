@@ -1,0 +1,12 @@
+// UPB AI Gateway is a LiteLLM-based proxy at https://ai-gateway.uni-paderborn.de/v1
+// that routes to OpenAI, GWDG, and UPB PC2 compute backends. Simple API-key
+// flow — keys are issued via the UPB AI-Chat portal.
+auth "upb-gateway" {
+	name "UPB AI Gateway"
+	env "UPB_GATEWAY_API_KEY"
+	login "api-key" {
+		auth-url "https://ai-chat.uni-paderborn.de"
+		instructions "Log in to the UPB AI-Chat portal, go to Settings → Account → API Keys, and create or copy your key"
+		prompt "Paste your UPB AI Gateway API key" placeholder="sk-..."
+	}
+}

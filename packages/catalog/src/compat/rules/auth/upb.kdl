@@ -1,0 +1,5 @@
+auth "upb" {
+	name "UPB AI-Chat"
+	env "UPB_API_KEY"
+	login "custom" hook="upb"
+}

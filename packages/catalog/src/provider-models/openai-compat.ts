@@ -382,6 +382,9 @@ function mapWithBundledReference<TApi extends Api>(
 		api: defaults.api,
 		provider: defaults.provider,
 		baseUrl: defaults.baseUrl,
+		// Endpoint discovery often omits capability metadata for proxied models. Keep the
+		// stronger bundled reference capabilities while still allowing explicit endpoint
+		// limits to override when provided.
 		contextWindow: toPositiveNumber(entry.context_length, reference.contextWindow),
 		maxTokens: toPositiveNumber(entry.max_completion_tokens, reference.maxTokens),
 	};
@@ -5957,6 +5960,80 @@ export function litellmModelManagerOptions(config?: LiteLLMModelManagerConfig): 
 				fetch: config?.fetch,
 			});
 		},
+	};
+}
+
+// ---------------------------------------------------------------------------
+// UPB AI Gateway (Universität Paderborn — LiteLLM proxy, direct API key)
+// ---------------------------------------------------------------------------
+
+export interface UPBGatewayModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function upbGatewayModelManagerOptions(
+	config?: UPBGatewayModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://ai-gateway.uni-paderborn.de/v1";
+	const references = createBundledReferenceMap<"openai-completions">("upb" as Parameters<typeof getBundledModels>[0]);
+	return {
+		providerId: "upb-gateway",
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "upb-gateway",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						return mapWithBundledReference(entry, defaults, reference);
+					},
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// UPB AI-Chat portal (Universität Paderborn — Open WebUI proxy with central funding)
+// ---------------------------------------------------------------------------
+
+export interface UPBModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function upbModelManagerOptions(config?: UPBModelManagerConfig): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://ai-chat.uni-paderborn.de/api/v1";
+	const references = createBundledReferenceMap<"openai-completions">("upb" as Parameters<typeof getBundledModels>[0]);
+	return {
+		providerId: "upb",
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "upb",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						const mapped = mapWithBundledReference(entry, defaults, reference);
+						if (defaults.id === "openai.gpt-5.5") {
+							mapped.contextWindow = 1_050_000;
+							mapped.maxTokens = 128_000;
+							mapped.reasoning = true;
+							mapped.input = ["text", "image"];
+						}
+						// LiteLLM proxy (UPB AI-Chat) requires reasoning.summary to surface reasoning tokens.
+						// Apply to all models since the proxy handles the parameter for any model.
+						mapped.compat = { ...mapped.compat, thinkingFormat: "litellm" };
+						return mapped;
+					},
+				}),
+		}),
 	};
 }
 
