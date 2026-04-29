@@ -1,4 +1,4 @@
-import { type Component, Container, matchesKey, Spacer, Text, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { type Component, Container, isKeyRelease, matchesKey, Spacer, Text, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import { matchesSelectCancel } from "../../modes/utils/keybinding-matchers";
 import { DynamicBorder } from "./dynamic-border";
@@ -77,6 +77,8 @@ class UserMessageList implements Component {
 	}
 
 	handleInput(keyData: string): void {
+		// Ignore key-release events to prevent focus-shift ghost input.
+		if (isKeyRelease(keyData)) return;
 		// Up arrow - go to previous (older) message, wrap to bottom when at top
 		if (matchesKey(keyData, "up")) {
 			this.#selectedIndex = this.#selectedIndex === 0 ? this.messages.length - 1 : this.#selectedIndex - 1;
