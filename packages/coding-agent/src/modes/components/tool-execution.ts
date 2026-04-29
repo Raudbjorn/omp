@@ -143,6 +143,7 @@ export interface ToolExecutionHandle {
 		toolCallId?: string,
 	): void;
 	setArgsComplete(toolCallId?: string): void;
+	notifyExecutionStarted(): void;
 	setExpanded(expanded: boolean): void;
 }
 
@@ -241,6 +242,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	// history, so progress renders static gray and further partial snapshots are
 	// dropped (see #maybeFreezeBackgroundTask).
 	#backgroundTaskFrozen = false;
+	#executionStartTime: number | undefined;
 	#renderState: {
 		spinnerFrame?: number;
 		expanded: boolean;
@@ -328,6 +330,14 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	 */
 	async whenPreviewSettled(): Promise<void> {
 		await this.#editDiffInFlight;
+	}
+
+	/**
+	 * Called when the tool has actually started executing (tool_execution_start event).
+	 * More accurate than setArgsComplete() which fires at end of arg streaming.
+	 */
+	notifyExecutionStarted(): void {
+		this.#executionStartTime = Date.now();
 	}
 
 	async #runPreviewDiff(): Promise<void> {
@@ -1009,11 +1019,13 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			context.expanded = this.#expanded;
 			context.previewLines = BASH_DEFAULT_PREVIEW_LINES;
 			context.timeout = normalizeTimeoutSeconds(this.#args?.timeout, 3600);
+			context.executionStartMs = this.#executionStartTime;
 		} else if (this.#toolName === "eval" && this.#result) {
 			const output = this.#getTextOutput().trimEnd();
 			context.output = output;
 			context.expanded = this.#expanded;
 			context.previewLines = EVAL_DEFAULT_PREVIEW_LINES;
+			context.executionStartMs = this.#executionStartTime;
 		} else if (this.#toolName === "task") {
 			// Once a result snapshot exists the task renderer's `renderResult`
 			// draws every dispatched agent as a progress/result line, so tell

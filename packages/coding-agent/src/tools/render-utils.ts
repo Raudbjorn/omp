@@ -706,6 +706,31 @@ export function wrapBrackets(text: string, theme: Theme): string {
 	return `${theme.format.bracketLeft}${text}${theme.format.bracketRight}`;
 }
 
+const LONG_TIMEOUT_THRESHOLD_SECONDS = 30;
+
+/**
+ * Format the timeout info line for bash/python renderers.
+ * While the command is running and the timeout is long (>= 30s), shows the wall-clock
+ * time the command will expire rather than just the raw duration.
+ */
+export function formatTimeoutLine(
+	timeoutSeconds: number | undefined,
+	executionStartMs: number | undefined,
+	isPartial: boolean,
+	uiTheme: Theme,
+): string | undefined {
+	if (typeof timeoutSeconds !== "number") return undefined;
+	if (isPartial && executionStartMs !== undefined && timeoutSeconds >= LONG_TIMEOUT_THRESHOLD_SECONDS) {
+		const expiryMs = executionStartMs + timeoutSeconds * 1000;
+		const d = new Date(expiryMs);
+		const hh = d.getHours().toString().padStart(2, "0");
+		const mm = d.getMinutes().toString().padStart(2, "0");
+		const ss = d.getSeconds().toString().padStart(2, "0");
+		return uiTheme.fg("dim", wrapBrackets(`Times out at ${hh}:${mm}:${ss}`, uiTheme));
+	}
+	return uiTheme.fg("dim", wrapBrackets(`Timeout: ${timeoutSeconds}s`, uiTheme));
+}
+
 export const PARSE_ERRORS_LIMIT = 20;
 
 export function dedupeParseErrors(errors: string[] | undefined): string[] {
