@@ -145,25 +145,23 @@ export function isJTDSchema(schema: unknown): boolean {
 		return false;
 	}
 
-	const obj = schema as Record<string, unknown>;
-
-	// JTD-specific keywords
-	if ("elements" in obj) return true;
-	if ("values" in obj) return true;
-	if ("optionalProperties" in obj) return true;
-	if ("discriminator" in obj) return true;
-	if ("ref" in obj) return true;
+	// JTD-specific keywords — use strict type guards to avoid matching JSON Schema properties maps
+	if (isJTDElements(schema)) return true;
+	if (isJTDValues(schema)) return true;
+	if (isJTDRef(schema)) return true;
+	if ("optionalProperties" in schema) return true;
+	if (isJTDDiscriminator(schema)) return true;
 
 	// JTD type primitives (JSON Schema doesn't have int32, float64, etc.)
-	if ("type" in obj) {
+	if (isJTDType(schema)) {
 		const jtdPrimitives = ["timestamp", "float32", "float64", "int8", "uint8", "int16", "uint16", "int32", "uint32"];
-		if (jtdPrimitives.includes(obj.type as string)) {
+		if (jtdPrimitives.includes(schema.type)) {
 			return true;
 		}
 	}
 
 	// JTD properties form without type: "object" (JSON Schema requires it)
-	if ("properties" in obj && !("type" in obj)) {
+	if (isJTDProperties(schema) && !("type" in schema)) {
 		return true;
 	}
 
