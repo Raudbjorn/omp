@@ -281,6 +281,24 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 	let abortedViaYield = false;
 	const hasYield = Array.isArray(yieldItems) && yieldItems.length > 0;
 
+	logger.debug("finalizeSubprocessOutput: yield tracing", {
+		hasYield,
+		yieldCount: yieldItems?.length ?? 0,
+		yieldKeys: hasYield
+			? yieldItems.map((y, i) => ({
+					index: i,
+					status: y.status,
+					dataType: y.data === null ? "null" : y.data === undefined ? "undefined" : typeof y.data,
+					dataKeys:
+						y.data && typeof y.data === "object" && !Array.isArray(y.data) ? Object.keys(y.data) : undefined,
+				}))
+			: undefined,
+		rawOutputPreview: rawOutput.slice(0, 200),
+		exitCode,
+		doneAborted,
+		signalAborted,
+	});
+
 	if (hasYield) {
 		const lastYield = yieldItems[yieldItems.length - 1];
 		if (lastYield?.status === "aborted") {
@@ -313,6 +331,15 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		const { normalized: normalizedSchema, error: schemaError } = normalizeSchema(outputSchema);
 		const hasOutputSchema = normalizedSchema !== undefined && !schemaError;
 		const fallback = allowFallback ? resolveFallbackCompletion(rawOutput, outputSchema) : null;
+		logger.debug("finalizeSubprocessOutput: fallback path", {
+			allowFallback,
+			hasOutputSchema,
+			fallbackHit: !!fallback,
+			fallbackKeys:
+				fallback?.data && typeof fallback.data === "object" && !Array.isArray(fallback.data)
+					? Object.keys(fallback.data)
+					: undefined,
+		});
 		if (fallback) {
 			const completeData = normalizeCompleteData(fallback.data, reportFindings);
 			try {
