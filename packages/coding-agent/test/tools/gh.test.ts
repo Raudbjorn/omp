@@ -9,7 +9,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { GithubTool } from "@oh-my-pi/pi-coding-agent/tools/gh";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
-import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir, getWorktreesDir, setAgentDir } from "@oh-my-pi/pi-utils";
 
 function createSession(
 	cwd: string = "/tmp/test",
@@ -117,13 +117,21 @@ async function createPrFixture(): Promise<{
 }
 
 /**
- * Stub `os.homedir()` AND rebuild the cached `dirs` resolver in pi-utils so
- * `getWorktreesDir()` resolves under an isolated temp home instead of the
- * user's real `~/.omp/wt`. Returns the temp home and a cleanup hook.
+ * Stub `os.homedir()`, isolate XDG data/state dirs, and rebuild the cached
+ * `dirs` resolver in pi-utils so `getWorktreesDir()` resolves into temp-owned
+ * paths instead of the user's real config roots.
  */
 async function setupTempHome(): Promise<{ home: string; cleanup: () => Promise<void> }> {
 	const home = await fs.mkdtemp(path.join(os.tmpdir(), "gh-pr-tool-home-"));
+	const xdgDataHome = path.join(home, ".local", "share");
+	const xdgStateHome = path.join(home, ".local", "state");
+	await fs.mkdir(path.join(xdgDataHome, "omp"), { recursive: true });
+	await fs.mkdir(path.join(xdgStateHome, "omp"), { recursive: true });
 	vi.spyOn(os, "homedir").mockReturnValue(home);
+	const originalXdgDataHome = process.env.XDG_DATA_HOME;
+	const originalXdgStateHome = process.env.XDG_STATE_HOME;
+	process.env.XDG_DATA_HOME = xdgDataHome;
+	process.env.XDG_STATE_HOME = xdgStateHome;
 	// `dirs.configRoot` is computed at constructor time from `os.homedir()`, so
 	// we must rebuild the resolver after the spy is in place. `setAgentDir`
 	// recreates it; we point it at the temp home's default agent dir.
@@ -132,6 +140,16 @@ async function setupTempHome(): Promise<{ home: string; cleanup: () => Promise<v
 	return {
 		home,
 		cleanup: async () => {
+			if (originalXdgDataHome === undefined) {
+				delete process.env.XDG_DATA_HOME;
+			} else {
+				process.env.XDG_DATA_HOME = originalXdgDataHome;
+			}
+			if (originalXdgStateHome === undefined) {
+				delete process.env.XDG_STATE_HOME;
+			} else {
+				process.env.XDG_STATE_HOME = originalXdgStateHome;
+			}
 			setAgentDir(originalAgentDir);
 			await fs.rm(home, { recursive: true, force: true });
 		},
@@ -144,12 +162,12 @@ async function setupTempHome(): Promise<{ home: string; cleanup: () => Promise<v
  * symlinks (matches the production `fs.realpath` step) so assertions match
  * the value rendered into the tool result.
  */
-async function expectedWorktreePath(home: string, primaryRoot: string, localBranch: string): Promise<string> {
+async function expectedWorktreePath(primaryRoot: string, localBranch: string): Promise<string> {
 	const encoded = path
 		.resolve(primaryRoot)
 		.replace(/^[/\\]/, "")
 		.replace(/[/\\:]/g, "-");
-	return fs.realpath(path.join(home, ".omp", "wt", encoded, localBranch));
+	return fs.realpath(path.join(getWorktreesDir(), encoded, localBranch));
 }
 
 describe("github tool", () => {
@@ -624,7 +642,7 @@ describe("github tool", () => {
 			const result = await tool.execute("pr-checkout", { op: "pr_checkout", pr: "123" });
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 			const primaryRoot = (await git.repo.primaryRoot(fixture.repoRoot)) ?? fixture.repoRoot;
-			const worktreePath = await expectedWorktreePath(tempHome.home, primaryRoot, "pr-123");
+			const worktreePath = await expectedWorktreePath(primaryRoot, "pr-123");
 
 			expect(text).toContain("Checked Out Pull Request #123");
 			expect(text).toContain(`Worktree: ${worktreePath}`);
@@ -731,8 +749,8 @@ describe("github tool", () => {
 			const result = await tool.execute("pr-checkout", { op: "pr_checkout", pr: ["100", "200"] });
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 			const primaryRoot = (await git.repo.primaryRoot(fixture.repoRoot)) ?? fixture.repoRoot;
-			const wt100 = await expectedWorktreePath(tempHome.home, primaryRoot, "pr-100");
-			const wt200 = await expectedWorktreePath(tempHome.home, primaryRoot, "pr-200");
+			const wt100 = await expectedWorktreePath(primaryRoot, "pr-100");
+			const wt200 = await expectedWorktreePath(primaryRoot, "pr-200");
 
 			expect(text).toContain("# 2 Pull Request Worktrees");
 			expect(text).toContain("Checked Out Pull Request #100");
