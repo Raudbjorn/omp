@@ -22,8 +22,10 @@ import { type SlashCommand, slashCommandCapability } from "../capability/slash-c
 import { type SystemPrompt, systemPromptCapability } from "../capability/system-prompt";
 import { type CustomTool, toolCapability } from "../capability/tool";
 import type { LoadContext, LoadResult } from "../capability/types";
+import { getPackageDir } from "../config";
 import { loadCommandChainFilesFromDir } from "../danger-pi/command-chain-files/load";
 import { expandTilde } from "../tools/path-utils";
+import { loadEmbeddedSkills } from "./embedded-skills";
 import {
 	buildRuleFromMarkdown,
 	createSourceMeta,
@@ -283,10 +285,18 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 		requireDescription: true,
 	});
 
-	const results = await Promise.all([...projectScans, userScan]);
+	const packageSkillsScan = scanSkillsFromDir(ctx, {
+		dir: path.join(getPackageDir(), "skills"),
+		providerId: PROVIDER_ID,
+		level: "user",
+		requireDescription: true,
+	});
+
+	const results = await Promise.all([...projectScans, userScan, packageSkillsScan]);
+	const embeddedSkills = loadEmbeddedSkills();
 
 	return {
-		items: results.flatMap(r => r.items),
+		items: [...results.flatMap(r => r.items), ...embeddedSkills],
 		warnings: results.flatMap(r => r.warnings ?? []),
 	};
 }
