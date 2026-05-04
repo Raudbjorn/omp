@@ -14,6 +14,8 @@ export interface Skill {
 	filePath: string;
 	baseDir: string;
 	source: string;
+	/** In-memory content for build-embedded skills */
+	embeddedContent?: string;
 	/** Source metadata for display */
 	_source?: SourceMeta;
 }
@@ -170,6 +172,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 				filePath: capSkill.path,
 				baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 				source: `${capSkill._source.provider}:${capSkill.level}`,
+				embeddedContent: capSkill.path.startsWith("embedded:") ? capSkill.content : undefined,
 				_source: capSkill._source,
 			});
 			realPathSet.add(resolvedPath);
@@ -206,6 +209,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 					filePath: capSkill.path,
 					baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 					source: "custom:user",
+					embeddedContent: capSkill.path.startsWith("embedded:") ? capSkill.content : undefined,
 					_source: { ...capSkill._source, providerName: "Custom" },
 				},
 				path: capSkill.path,

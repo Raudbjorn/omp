@@ -78,6 +78,13 @@ export class SkillProtocolHandler implements ProtocolHandler {
 			// Read relative path within skill's baseDir
 			const relativePath = decodeURIComponent(urlPath.slice(1)); // Remove leading /
 			validateRelativePath(relativePath);
+
+			if (skill.embeddedContent) {
+				throw new Error(
+					`Embedded skill "${skill.name}" does not support relative paths — only skill://${skill.name} is available`,
+				);
+			}
+
 			targetPath = path.join(skill.baseDir, relativePath);
 
 			// Verify the resolved path is still within baseDir
@@ -88,6 +95,17 @@ export class SkillProtocolHandler implements ProtocolHandler {
 			}
 		} else {
 			// Read SKILL.md
+			// For embedded skills, return content from memory
+			if (skill.embeddedContent) {
+				return {
+					url: url.href,
+					content: skill.embeddedContent,
+					contentType: "text/markdown",
+					size: Buffer.byteLength(skill.embeddedContent, "utf-8"),
+					sourcePath: skill.filePath,
+					notes: [],
+				};
+			}
 			targetPath = skill.filePath;
 		}
 
