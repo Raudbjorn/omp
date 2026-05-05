@@ -110,11 +110,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		// Start first prompt (don't await, it will block until abort)
 		const firstPrompt = session.prompt("First message");
 
-		// Wait a tick for isStreaming to be set
-		await Bun.sleep(10);
-
-		// Verify we're streaming
-		expect(session.isStreaming).toBe(true);
+		await waitFor(() => session.isStreaming);
 
 		// Second prompt should reject
 		await expect(session.prompt("Second message")).rejects.toBeInstanceOf(AgentBusyError);
@@ -129,7 +125,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		// Start first prompt
 		const firstPrompt = session.prompt("First message");
-		await Bun.sleep(10);
+		await waitFor(() => session.isStreaming);
 
 		// steer should work while streaming
 		expect(() => session.steer("Steering message")).not.toThrow();
@@ -145,7 +141,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		// Start first prompt
 		const firstPrompt = session.prompt("First message");
-		await Bun.sleep(10);
+		await waitFor(() => session.isStreaming);
 
 		// followUp should work while streaming
 		expect(() => session.followUp("Follow-up message")).not.toThrow();
