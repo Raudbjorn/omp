@@ -169,6 +169,8 @@
 ### Fixed
 
 - Fixed hashline edit streaming preview collapsing to a header-only "opaque box" when a second `@PATH` section header arrived mid-stream — earlier completed sections now stay rendered while the trailing section is still being typed.
+- Fixed type error in readthedocs scraper by removing unresolvable `Element` annotation (linkedom does not expose `Element` as a class type)
+- Fixed flaky `agent-session-concurrent.test.ts` timing by using `waitFor(() => session.isStreaming)` instead of `Bun.sleep(10)`
 
 ## [14.7.2] - 2026-05-06
 ### Breaking Changes

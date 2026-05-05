@@ -60,7 +60,7 @@ export const handleReadTheDocs: SpecialHandler = async (
 		?.querySelectorAll(
 			".headerlink, .viewcode-link, nav, .sidebar, footer, .related, .sphinxsidebar, .toctree-wrapper",
 		)
-		.forEach((el: Element) => {
+		.forEach((el: any) => {
 			el.remove();
 		});
 
