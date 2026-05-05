@@ -8,6 +8,7 @@
  * - skill://<name>/<path> - Reads relative path within skill's baseDir
  */
 import * as path from "node:path";
+import { getEmbeddedFileContent } from "../discovery/embedded-skills";
 import type { Skill } from "../extensibility/skills";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
@@ -80,9 +81,18 @@ export class SkillProtocolHandler implements ProtocolHandler {
 			validateRelativePath(relativePath);
 
 			if (skill.embeddedContent) {
-				throw new Error(
-					`Embedded skill "${skill.name}" does not support relative paths — only skill://${skill.name} is available`,
-				);
+				const embeddedFile = getEmbeddedFileContent(skill.name, relativePath);
+				if (!embeddedFile) {
+					throw new Error(`File not found in embedded skill "${skill.name}": ${relativePath}`);
+				}
+				return {
+					url: url.href,
+					content: embeddedFile,
+					contentType: getContentType(relativePath),
+					size: Buffer.byteLength(embeddedFile, "utf-8"),
+					sourcePath: `embedded:${skill.name}/${relativePath}`,
+					notes: [],
+				};
 			}
 
 			targetPath = path.join(skill.baseDir, relativePath);
