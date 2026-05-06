@@ -12,6 +12,10 @@ target/
 *.node
 *.b64.js
 
+# Generated JS from TS scripts (Bun runs .ts directly)
+packages/*/scripts/*.js
+scripts/*.js
+
 # Environment
 .env
 
