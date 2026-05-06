@@ -91,6 +91,128 @@ describe("imageGenTool", () => {
 		expect(result.content[0].type).toBe("text");
 		expect(_getHeaderValue(requestHeaders, "X-OpenRouter-Title")).toBe("Oh-My-Pi");
 	});
+
+	it("uses the configured OpenRouter image model and forwards image request settings", async () => {
+		let requestBody: Record<string, unknown> | undefined;
+		Bun.env.OPENROUTER_API_KEY = "test-openrouter-key";
+
+		const fetchMock: typeof fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+			requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+			return new Response(
+				JSON.stringify({
+					choices: [
+						{
+							message: {
+								role: "assistant",
+								content: "",
+								images: [{ image_url: { url: `data:image/png;base64,${TINY_PNG_BASE64}` } }],
+							},
+						},
+					],
+				}),
+				{
+					status: 200,
+					headers: { "content-type": "application/json" },
+				},
+			);
+		}) as unknown as typeof fetch;
+		fetchMock.preconnect = originalFetch.preconnect;
+		global.fetch = fetchMock;
+
+		const ctx: CustomToolContext = {
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKeyForProvider: async () => undefined,
+			} as unknown as ModelRegistry,
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+			settings: {
+				get: (key: string) => (key === "providers.imageOpenRouterModel" ? "openai/gpt-5.4-image-2" : undefined),
+			} as unknown as NonNullable<CustomToolContext["settings"]>,
+		};
+
+		const result = await imageGenTool.execute(
+			"call-1",
+			{ subject: "a cat", aspect_ratio: "16:9", image_size: "2K" },
+			undefined,
+			ctx,
+		);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestBody).toMatchObject({
+			model: "openai/gpt-5.4-image-2",
+			modalities: ["image", "text"],
+			image_config: {
+				aspect_ratio: "16:9",
+				image_size: "2K",
+			},
+		});
+		expect(result.details?.provider).toBe("openrouter");
+		expect(result.details?.model).toBe("openai/gpt-5.4-image-2");
+		expect(result.details?.imageCount).toBe(1);
+		expect(result.details?.imagePaths).toHaveLength(1);
+		const savedPath = result.details?.imagePaths[0];
+		if (!savedPath) throw new Error("Expected generated image path");
+		expect(savedPath.endsWith(".png")).toBe(true);
+		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from(TINY_PNG_BASE64, "base64"));
+	});
+
+	it("defaults OpenRouter image generation to ChatGPT Images 2 when not configured", async () => {
+		let requestBody: Record<string, unknown> | undefined;
+		Bun.env.OPENROUTER_API_KEY = "test-openrouter-key";
+
+		const fetchMock: typeof fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+			requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+			return new Response(
+				JSON.stringify({
+					choices: [
+						{
+							message: {
+								role: "assistant",
+								content: "",
+								images: [{ image_url: { url: `data:image/png;base64,${TINY_PNG_BASE64}` } }],
+							},
+						},
+					],
+				}),
+				{
+					status: 200,
+					headers: { "content-type": "application/json" },
+				},
+			);
+		}) as unknown as typeof fetch;
+		fetchMock.preconnect = originalFetch.preconnect;
+		global.fetch = fetchMock;
+
+		const ctx: CustomToolContext = {
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKeyForProvider: async () => undefined,
+			} as unknown as ModelRegistry,
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-1", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestBody).toMatchObject({
+			model: "openai/gpt-5.4-image-2",
+			modalities: ["image", "text"],
+		});
+		expect(result.details?.model).toBe("openai/gpt-5.4-image-2");
+	});
+
 	it("e2e writes OpenAI Responses image_generation WebP output to a temp file", async () => {
 		let requestUrl: string | undefined;
 		let requestBody: unknown;
@@ -148,7 +270,7 @@ describe("imageGenTool", () => {
 				{
 					type: "image_generation",
 					output_format: "webp",
-					size: "1536x1024",
+					size: "1280x720",
 					action: "generate",
 				},
 			],
@@ -164,6 +286,95 @@ describe("imageGenTool", () => {
 		if (!savedPath) throw new Error("Expected generated image path");
 		expect(savedPath.endsWith(".webp")).toBe(true);
 		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from("fake-webp"));
+	});
+
+	it("derives OpenAI image_generation sizes from aliases and aspect ratios before sending the request", async () => {
+		let requestBody: unknown;
+
+		const fetchMock: typeof fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+			requestBody = JSON.parse(String(init?.body));
+			return new Response(
+				JSON.stringify({
+					output: [
+						{
+							type: "image_generation_call",
+							result: Buffer.from("fake-webp").toString("base64"),
+							status: "completed",
+						},
+					],
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			);
+		}) as unknown as typeof fetch;
+		fetchMock.preconnect = originalFetch.preconnect;
+		global.fetch = fetchMock;
+
+		const model = {
+			api: "openai-responses",
+			provider: "openai",
+			id: "gpt-5.5",
+			name: "GPT 5.5",
+			baseUrl: "https://api.openai.com/v1",
+		} as Model;
+		const ctx: CustomToolContext = {
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => "test-openai-key",
+				getApiKeyForProvider: async () => undefined,
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute(
+			"call-1",
+			{ subject: "a cat", aspect_ratio: "4:3", image_size: "4K" },
+			undefined,
+			ctx,
+		);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestBody).toMatchObject({
+			tools: [
+				{
+					type: "image_generation",
+					size: "3264x2448",
+				},
+			],
+		});
+	});
+
+	it("rejects the unsupported 512 OpenAI image_size alias", async () => {
+		const model = {
+			api: "openai-responses",
+			provider: "openai",
+			id: "gpt-5.5",
+			name: "GPT 5.5",
+			baseUrl: "https://api.openai.com/v1",
+		} as Model;
+		const ctx: CustomToolContext = {
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => "test-openai-key",
+				getApiKeyForProvider: async () => undefined,
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		await expect(
+			imageGenTool.execute("call-1", { subject: "a cat", image_size: "512" }, undefined, ctx),
+		).rejects.toThrow('OpenAI-hosted image generation does not support image_size "512". Use "1K" or larger.');
 	});
 
 	it("accepts only backend-valid aspect ratios and image sizes", () => {
