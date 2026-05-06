@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+- Changed CI native addon profile to strip debug symbols, reducing release binary size by ~60% (484MB → ~170MB for linux-x64)
 
 ### Fixed
 
