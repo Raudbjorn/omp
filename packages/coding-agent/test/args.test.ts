@@ -58,6 +58,13 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--list-recent flag", () => {
+		test("parses --list-recent flag", () => {
+			const result = parseArgs(["--list-recent"]);
+			expect(result.listRecent).toBe(true);
+		});
+	});
+
 	describe("--resume flag", () => {
 		test("parses --resume flag", () => {
 			const result = parseArgs(["--resume"]);
