@@ -14,7 +14,6 @@ import type {
 import { getTerminalId } from "@oh-my-pi/pi-tui";
 import {
 	getBlobsDir,
-	getAgentDir as getDefaultAgentDir,
 	getProjectDir,
 	getSessionsDir,
 	getTerminalSessionsDir,
@@ -255,6 +254,8 @@ export interface SessionInfo {
 	id: string;
 	/** Working directory where the session was started. Empty string for old sessions. */
 	cwd: string;
+	/** Stored session header title, if one exists. */
+	headerTitle?: string;
 	title?: string;
 	/** Path to the parent session (if this session was forked). */
 	parentSessionPath?: string;
@@ -976,7 +977,7 @@ export async function findMostRecentSession(
 }
 
 /** Format a time difference as a human-readable string */
-function formatTimeAgo(date: Date): string {
+export function formatTimeAgo(date: Date): string {
 	const now = Date.now();
 	const diffMs = now - date.getTime();
 	const diffMins = Math.floor(diffMs / 60000);
@@ -1486,6 +1487,7 @@ async function collectSessionFromFile(
 			path: file,
 			id: header.id,
 			cwd: header.cwd ?? "",
+			headerTitle: header.title,
 			title: header.title ?? shortSummary,
 			parentSessionPath: header.parentSession,
 			created: new Date(header.timestamp ?? ""),
@@ -3034,7 +3036,7 @@ export class SessionManager {
 	 * List all sessions across all project directories.
 	 */
 	static async listAll(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
-		const sessionsRoot = path.join(getDefaultAgentDir(), "sessions");
+		const sessionsRoot = getSessionsDir();
 		try {
 			const files = await Array.fromAsync(new Bun.Glob("*/*.jsonl").scan(sessionsRoot), name =>
 				path.join(sessionsRoot, name),

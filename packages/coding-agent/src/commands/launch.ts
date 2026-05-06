@@ -113,6 +113,9 @@ export default class Index extends Command {
 		export: Flags.string({
 			description: "Export session file to HTML and exit",
 		}),
+		"list-recent": Flags.boolean({
+			description: "List the 10 most recent sessions across all directories and exit",
+		}),
 		"list-models": Flags.string({
 			description: "List available models (with optional fuzzy search)",
 		}),
@@ -127,6 +130,7 @@ export default class Index extends Command {
 		`# Include files in initial message\n  ${APP_NAME} @prompt.md @image.png "What color is the sky?"`,
 		`# Non-interactive mode (process and exit)\n  ${APP_NAME} -p "List all .ts files in src/"`,
 		`# Continue previous session\n  ${APP_NAME} --continue "What did we discuss?"`,
+		`# List recent sessions across all directories\n  ${APP_NAME} --list-recent`,
 		`# Use different model (fuzzy matching)\n  ${APP_NAME} --model opus "Help me refactor this code"`,
 		`# Limit model cycling to specific models\n  ${APP_NAME} --models claude-sonnet,claude-haiku,gpt-4o`,
 		`# Export a session file to HTML\n  ${APP_NAME} --export ~/.omp/agent/sessions/--path--/session.jsonl`,
