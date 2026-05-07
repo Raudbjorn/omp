@@ -1041,6 +1041,41 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		toolResultStore = undefined;
 	}
 
+	// Initialize recall store early so the recall tool can be created during tool setup.
+	// Both the recall tool and ingest pipeline share the same store instance.
+	let recallStore: RecallStore | undefined;
+	let memexLicense: string | undefined;
+	try {
+		memexLicense = await resolveMemexLicense();
+		recallStore = await RecallStore.open({
+			agentDir,
+			sessionId: sessionManager.getSessionId(),
+		});
+		postmortem.register("recall-store-close", () => recallStore?.close());
+		logger.debug("RecallStore initialized for recall tool + ingest pipeline");
+	} catch (err) {
+		// No memex license or LanceDB init failure — recall is optional.
+		logger.debug("Recall infrastructure not available", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+		recallStore = undefined;
+		memexLicense = undefined;
+	}
+
+	// Initialize FTS5 tool result store for keyword search over past tool results.
+	let toolResultStore: ToolResultStore | undefined;
+	try {
+		toolResultStore = ToolResultStore.open(path.join(agentDir, "tool-results.db"));
+		toolResultStore.cleanup(30 * 24 * 60 * 60 * 1000); // 30 days
+		postmortem.register("tool-result-store-close", () => toolResultStore?.close());
+		logger.debug("ToolResultStore initialized");
+	} catch (err) {
+		logger.debug("ToolResultStore not available", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+		toolResultStore = undefined;
+	}
+
 	try {
 		const getActiveModelString = (): string | undefined => {
 			const activeModel = agent?.state.model;

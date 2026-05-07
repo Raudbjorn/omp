@@ -15,18 +15,38 @@ describe("AuthStorage account rotation", () => {
 
 	const usageProvider: UsageProvider = {
 		id: "openai-codex",
-		async fetchUsage(params) {
+		async fetchUsage(params, _ctx): Promise<UsageReport> {
 			const accountId = params.credential.accountId ?? "unknown";
+			const now = Date.now();
 			return {
 				provider: "openai-codex",
-				fetchedAt: Date.now(),
+				fetchedAt: now,
 				limits: [
 					{
-						id: `requests-${accountId}`,
-						label: "Requests",
-						scope: { provider: "openai-codex", accountId },
+						id: "openai-codex:primary",
+						label: "1 Hour",
+						scope: { provider: "openai-codex", accountId, windowId: "1h" },
 						amount: { unit: "requests", used: usageExhausted ? 100 : 10, limit: 100 },
 						status: usageExhausted ? "exhausted" : "ok",
+						window: {
+							id: "1h",
+							label: "1 Hour",
+							durationMs: 60 * 60 * 1000,
+							resetsAt: now + 60 * 60 * 1000,
+						},
+					},
+					{
+						id: "openai-codex:secondary",
+						label: "7 Day",
+						scope: { provider: "openai-codex", accountId, windowId: "7d" },
+						amount: { unit: "requests", used: usageExhausted ? 100 : 10, limit: 100 },
+						status: usageExhausted ? "exhausted" : "ok",
+						window: {
+							id: "7d",
+							label: "7 Day",
+							durationMs: 7 * 24 * 60 * 60 * 1000,
+							resetsAt: now + 7 * 24 * 60 * 60 * 1000,
+						},
 					},
 				],
 			};

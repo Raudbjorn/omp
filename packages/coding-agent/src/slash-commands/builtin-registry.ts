@@ -118,6 +118,7 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		description: "Toggle plan mode (agent plans before executing)",
 		inlineHint: "[prompt]",
 		allowArgs: true,
+		allowBatch: true,
 		handle: async (command, runtime) => {
 			await runtime.ctx.handlePlanModeCommand(command.args || undefined);
 			runtime.ctx.editor.setText("");
@@ -393,7 +394,10 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		description: "Session management commands",
 		subcommands: [
 			{ name: "info", description: "Show session info and stats" },
-			{ name: "delete", description: "Delete current session and return to selector" },
+			{
+				name: "delete",
+				description: "Delete current session and return to selector",
+			},
 		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
@@ -570,24 +574,63 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 				usage: "<name> [--scope project|user] [--url <url>] [-- <command...>]",
 			},
 			{ name: "list", description: "List all configured MCP servers" },
-			{ name: "remove", description: "Remove an MCP server", usage: "<name> [--scope project|user]" },
-			{ name: "test", description: "Test connection to a server", usage: "<name>" },
-			{ name: "reauth", description: "Reauthorize OAuth for a server", usage: "<name>" },
-			{ name: "unauth", description: "Remove OAuth auth from a server", usage: "<name>" },
+			{
+				name: "remove",
+				description: "Remove an MCP server",
+				usage: "<name> [--scope project|user]",
+			},
+			{
+				name: "test",
+				description: "Test connection to a server",
+				usage: "<name>",
+			},
+			{
+				name: "reauth",
+				description: "Reauthorize OAuth for a server",
+				usage: "<name>",
+			},
+			{
+				name: "unauth",
+				description: "Remove OAuth auth from a server",
+				usage: "<name>",
+			},
 			{ name: "enable", description: "Enable an MCP server", usage: "<name>" },
-			{ name: "disable", description: "Disable an MCP server", usage: "<name>" },
+			{
+				name: "disable",
+				description: "Disable an MCP server",
+				usage: "<name>",
+			},
 			{
 				name: "smithery-search",
 				description: "Search Smithery registry and deploy an MCP server",
 				usage: "<keyword> [--scope project|user] [--limit <1-100>] [--semantic]",
 			},
-			{ name: "smithery-login", description: "Login to Smithery and cache API key" },
-			{ name: "smithery-logout", description: "Remove cached Smithery API key" },
-			{ name: "reconnect", description: "Reconnect to a specific MCP server", usage: "<name>" },
+			{
+				name: "smithery-login",
+				description: "Login to Smithery and cache API key",
+			},
+			{
+				name: "smithery-logout",
+				description: "Remove cached Smithery API key",
+			},
+			{
+				name: "reconnect",
+				description: "Reconnect to a specific MCP server",
+				usage: "<name>",
+			},
 			{ name: "reload", description: "Force reload MCP runtime tools" },
-			{ name: "resources", description: "List available resources from connected servers" },
-			{ name: "prompts", description: "List available prompts from connected servers" },
-			{ name: "notifications", description: "Show notification capabilities and subscriptions" },
+			{
+				name: "resources",
+				description: "List available resources from connected servers",
+			},
+			{
+				name: "prompts",
+				description: "List available prompts from connected servers",
+			},
+			{
+				name: "notifications",
+				description: "Show notification capabilities and subscriptions",
+			},
 			{ name: "help", description: "Show help message" },
 		],
 		allowArgs: true,
@@ -607,7 +650,11 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 				usage: "<name> --host <host> [--user <user>] [--port <port>] [--key <keyPath>]",
 			},
 			{ name: "list", description: "List all configured SSH hosts" },
-			{ name: "remove", description: "Remove an SSH host", usage: "<name> [--scope project|user]" },
+			{
+				name: "remove",
+				description: "Remove an SSH host",
+				usage: "<name> [--scope project|user]",
+			},
 			{ name: "help", description: "Show help message" },
 		],
 		allowArgs: true,
@@ -668,6 +715,7 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		description: "Ask an ephemeral side question using the current session context",
 		inlineHint: "<question>",
 		allowArgs: true,
+		allowBatch: true,
 		handle: async (command, runtime) => {
 			const question = command.text.slice(`/${command.name}`.length).trim();
 			runtime.ctx.editor.setText("");
@@ -696,9 +744,15 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		description: "Inspect and operate memory maintenance",
 		subcommands: [
 			{ name: "view", description: "Show current memory injection payload" },
-			{ name: "clear", description: "Clear persisted memory data and artifacts" },
+			{
+				name: "clear",
+				description: "Clear persisted memory data and artifacts",
+			},
 			{ name: "reset", description: "Alias for clear" },
-			{ name: "enqueue", description: "Enqueue memory consolidation maintenance" },
+			{
+				name: "enqueue",
+				description: "Enqueue memory consolidation maintenance",
+			},
 			{ name: "rebuild", description: "Alias for enqueue" },
 			{ name: "mm list", description: "List mental models on the active bank" },
 			{ name: "mm show", description: "Show one mental model (id required)" },
@@ -777,19 +831,43 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		name: "marketplace",
 		description: "Manage marketplace plugin sources and installed plugins",
 		subcommands: [
-			{ name: "add", description: "Add a marketplace source", usage: "<source>" },
-			{ name: "remove", description: "Remove a marketplace source", usage: "<name>" },
-			{ name: "update", description: "Update marketplace catalog(s)", usage: "[name]" },
+			{
+				name: "add",
+				description: "Add a marketplace source",
+				usage: "<source>",
+			},
+			{
+				name: "remove",
+				description: "Remove a marketplace source",
+				usage: "<name>",
+			},
+			{
+				name: "update",
+				description: "Update marketplace catalog(s)",
+				usage: "[name]",
+			},
 			{ name: "list", description: "List configured marketplaces" },
-			{ name: "discover", description: "Browse available plugins", usage: "[marketplace]" },
+			{
+				name: "discover",
+				description: "Browse available plugins",
+				usage: "[marketplace]",
+			},
 			{
 				name: "install",
 				description: "Install a plugin (interactive browser if no args)",
 				usage: "[--force] [name@marketplace]",
 			},
-			{ name: "uninstall", description: "Uninstall a plugin (selector if no args)", usage: "[name@marketplace]" },
+			{
+				name: "uninstall",
+				description: "Uninstall a plugin (selector if no args)",
+				usage: "[name@marketplace]",
+			},
 			{ name: "installed", description: "List installed marketplace plugins" },
-			{ name: "upgrade", description: "Upgrade outdated plugins", usage: "[name@marketplace]" },
+			{
+				name: "upgrade",
+				description: "Upgrade outdated plugins",
+				usage: "[name@marketplace]",
+			},
 			{ name: "help", description: "Show usage guide" },
 		],
 		allowArgs: true,
@@ -881,7 +959,10 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 						const atIdx = parsed.installSpec.lastIndexOf("@");
 						const name = parsed.installSpec.slice(0, atIdx);
 						const marketplace = parsed.installSpec.slice(atIdx + 1);
-						await mgr.installPlugin(name, marketplace, { force: parsed.force, scope: parsed.scope });
+						await mgr.installPlugin(name, marketplace, {
+							force: parsed.force,
+							scope: parsed.scope,
+						});
 						runtime.ctx.showStatus(`Installed ${name} from ${marketplace}`);
 						break;
 					}
@@ -985,9 +1066,20 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		name: "plugins",
 		description: "View and manage installed plugins",
 		subcommands: [
-			{ name: "list", description: "List all installed plugins (npm + marketplace)" },
-			{ name: "enable", description: "Enable a marketplace plugin", usage: "<name@marketplace>" },
-			{ name: "disable", description: "Disable a marketplace plugin", usage: "<name@marketplace>" },
+			{
+				name: "list",
+				description: "List all installed plugins (npm + marketplace)",
+			},
+			{
+				name: "enable",
+				description: "Enable a marketplace plugin",
+				usage: "<name@marketplace>",
+			},
+			{
+				name: "disable",
+				description: "Disable a marketplace plugin",
+				usage: "<name@marketplace>",
+			},
 		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
@@ -1139,6 +1231,11 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 		inlineHint: command.inlineHint,
 	}),
 );
+
+export function isBatchableBuiltinSlashCommand(name: string): boolean {
+	const command = BUILTIN_SLASH_COMMAND_LOOKUP.get(name);
+	return Boolean(command?.allowBatch);
+}
 
 /**
  * Execute a builtin slash command when it matches known command syntax.

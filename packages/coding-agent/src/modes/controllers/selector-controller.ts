@@ -1070,3 +1070,12 @@ export class SelectorController {
 		this.ctx.ui.requestRender();
 	}
 }
+
+function resolveActiveWebTerminalBindings(): ReturnType<typeof reconcileWebTerminalBindings>["active"] {
+	const bindingOptions = getWebTerminalBindingOptions();
+	const configured = settings.get("webTerminal.bindings");
+	if (configured.length === 0) {
+		return resolveWebTerminalBindingsWithFallback(configured, bindingOptions).active;
+	}
+	return reconcileWebTerminalBindings(configured, bindingOptions).active;
+}

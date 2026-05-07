@@ -1,3 +1,4 @@
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
 import { isExtensionDisabled } from "../capability";
@@ -12,6 +13,7 @@ import {
 } from "../slash-commands/builtin-registry";
 import { EMBEDDED_COMMAND_TEMPLATES } from "../task/commands";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
+import { interpolateShellExpressions } from "./shell-interpolation";
 
 export type SlashCommandSource = "extension" | "prompt" | "skill";
 
@@ -27,109 +29,107 @@ export interface SlashCommandInfo {
 
 export type { BuiltinSlashCommand, SubcommandDef } from "../slash-commands/builtin-registry";
 
-/**
- * Build getArgumentCompletions from declarative subcommand definitions.
- * Returns subcommand names filtered by prefix in the dropdown.
- */
 function buildArgumentCompletions(subcommands: SubcommandDef[]): (prefix: string) => AutocompleteItem[] | null {
 	return (argumentPrefix: string) => {
-		if (argumentPrefix.includes(" ")) return null; // past the subcommand
+		if (argumentPrefix.includes(" ")) return null;
 		const lower = argumentPrefix.toLowerCase();
 		const matches = subcommands
-			.filter(s => s.name.startsWith(lower))
-			.map(s => ({
-				value: `${s.name} `,
-				label: s.name,
-				description: s.description,
-				hint: s.usage,
+			.filter(subcommand => subcommand.name.startsWith(lower))
+			.map(subcommand => ({
+				value: `${subcommand.name} `,
+				label: subcommand.name,
+				description: subcommand.description,
+				hint: subcommand.usage,
 			}));
 		return matches.length > 0 ? matches : null;
 	};
 }
 
-/**
- * Build getInlineHint from declarative subcommand definitions.
- * Shows remaining completion + usage as dim ghost text after cursor.
- */
 function buildSubcommandInlineHint(subcommands: SubcommandDef[]): (argumentText: string) => string | null {
 	return (argumentText: string) => {
 		const trimmed = argumentText.trimStart();
 		const spaceIndex = trimmed.indexOf(" ");
 
 		if (spaceIndex === -1) {
-			// Still typing subcommand name — show remaining chars + usage
 			const prefix = trimmed.toLowerCase();
 			if (prefix.length === 0) return null;
-			const match = subcommands.find(s => s.name.startsWith(prefix));
+			const match = subcommands.find(subcommand => subcommand.name.startsWith(prefix));
 			if (!match) return null;
 			const remaining = match.name.slice(prefix.length);
 			return remaining + (match.usage ? ` ${match.usage}` : "");
 		}
 
-		// Subcommand typed — show remaining usage params
 		const subName = trimmed.slice(0, spaceIndex).toLowerCase();
 		const afterSub = trimmed.slice(spaceIndex + 1);
-		const sub = subcommands.find(s => s.name === subName);
-		if (!sub?.usage) return null;
+		const subcommand = subcommands.find(candidate => candidate.name === subName);
+		if (!subcommand?.usage) return null;
 
 		if (afterSub.length > 0) {
-			const usageParts = sub.usage.split(" ");
+			const usageParts = subcommand.usage.split(" ");
 			const inputParts = afterSub.trim().split(/\s+/);
 			const remaining = usageParts.slice(inputParts.length);
 			return remaining.length > 0 ? remaining.join(" ") : null;
 		}
 
-		return sub.usage;
+		return subcommand.usage;
 	};
 }
 
-/**
- * Build getInlineHint for commands with a simple static hint string.
- * Shows the hint only when no arguments have been typed yet.
- */
 function buildStaticInlineHint(hint: string): (argumentText: string) => string | null {
 	return (argumentText: string) => (argumentText.trim().length === 0 ? hint : null);
 }
 
-/**
- * Materialized builtin slash commands with completion functions derived from
- * declarative subcommand/hint definitions.
- */
 export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<
 	BuiltinSlashCommand & {
 		getArgumentCompletions?: (prefix: string) => AutocompleteItem[] | null;
 		getInlineHint?: (argumentText: string) => string | null;
 	}
-> = BUILTIN_SLASH_COMMAND_DEFS.map(cmd => {
-	if (cmd.subcommands) {
+> = BUILTIN_SLASH_COMMAND_DEFS.map(command => {
+	if (command.subcommands) {
 		return {
-			...cmd,
-			getArgumentCompletions: buildArgumentCompletions(cmd.subcommands),
-			getInlineHint: buildSubcommandInlineHint(cmd.subcommands),
+			...command,
+			getArgumentCompletions: buildArgumentCompletions(command.subcommands),
+			getInlineHint: buildSubcommandInlineHint(command.subcommands),
 		};
 	}
-	if (cmd.inlineHint) {
+	if (command.inlineHint) {
 		return {
-			...cmd,
-			getInlineHint: buildStaticInlineHint(cmd.inlineHint),
+			...command,
+			getInlineHint: buildStaticInlineHint(command.inlineHint),
 		};
 	}
-	return cmd;
+	return command;
 });
 
-/**
- * Represents a custom slash command loaded from a file
- */
-export interface FileSlashCommand {
+interface BaseFileSlashCommand {
 	name: string;
 	description: string;
+	source: string;
+	_source?: SlashCommand["_source"];
+}
+
+export interface TemplateFileSlashCommand extends BaseFileSlashCommand {
+	kind: "template";
 	content: string;
-	source: string; // e.g., "via Claude Code (User)"
-	/** Source metadata for display */
-	_source?: { providerName: string; level: "user" | "project" | "native" };
+}
+
+export interface PromptChainFileSlashCommand extends BaseFileSlashCommand {
+	kind: "prompt-chain";
+	stepTemplates: readonly string[];
+}
+
+export type FileSlashCommand = TemplateFileSlashCommand | PromptChainFileSlashCommand;
+
+export function isPromptChainFileSlashCommand(command: FileSlashCommand): command is PromptChainFileSlashCommand {
+	return command.kind === "prompt-chain";
+}
+
+export function isTemplateFileSlashCommand(command: FileSlashCommand): command is TemplateFileSlashCommand {
+	return command.kind === "template";
 }
 
 const EMBEDDED_SLASH_COMMANDS = EMBEDDED_COMMAND_TEMPLATES;
+const COMMAND_FILE_WARNING_PREFIX = "Command file errors:";
 
 function parseCommandTemplate(
 	content: string,
@@ -138,7 +138,6 @@ function parseCommandTemplate(
 	const { frontmatter, body } = parseFrontmatter(content, options);
 	const frontmatterDesc = typeof frontmatter.description === "string" ? frontmatter.description.trim() : "";
 
-	// Get description from frontmatter or first non-empty line
 	let description = frontmatterDesc;
 	if (!description) {
 		const firstLine = body.split("\n").find(line => line.trim());
@@ -152,15 +151,44 @@ function parseCommandTemplate(
 }
 
 export interface LoadSlashCommandsOptions {
-	/** Working directory for project-local commands. Default: getProjectDir() */
 	cwd?: string;
 }
 
-/**
- * Load all custom slash commands using the capability API.
- * Loads from all registered providers (builtin, user, project).
- */
-export async function loadSlashCommands(options: LoadSlashCommandsOptions = {}): Promise<FileSlashCommand[]> {
+export interface LoadSlashCommandSetResult {
+	commands: FileSlashCommand[];
+	warnings: string[];
+}
+
+function materializeCapabilityCommand(command: SlashCommand): FileSlashCommand {
+	const capitalizedLevel = command.level.charAt(0).toUpperCase() + command.level.slice(1);
+	const source = `via ${command._source.providerName} ${capitalizedLevel}`;
+
+	if (isPromptChainSlashCommand(command)) {
+		return {
+			kind: "prompt-chain",
+			name: command.name,
+			description: command.description,
+			stepTemplates: [...command.stepTemplates],
+			source,
+			_source: command._source,
+		};
+	}
+
+	const { description, body } = parseCommandTemplate(command.content, {
+		source: command.path ?? `slash-command:${command.name}`,
+		level: command.level === "native" ? "fatal" : "warn",
+	});
+	return {
+		kind: "template",
+		name: command.name,
+		description,
+		content: body,
+		source,
+		_source: command._source,
+	};
+}
+
+export async function loadSlashCommandSet(options: LoadSlashCommandsOptions = {}): Promise<LoadSlashCommandSetResult> {
 	const result = await loadCapability<SlashCommand>(slashCommandCapability.id, { cwd: options.cwd });
 
 	const fileCommands: FileSlashCommand[] = result.items
@@ -189,11 +217,12 @@ export async function loadSlashCommands(options: LoadSlashCommandsOptions = {}):
 		const name = cmd.name.replace(/\.md$/, "");
 		if (seenNames.has(name)) continue;
 
-		const { description, body } = parseCommandTemplate(cmd.content, {
-			source: `embedded:${cmd.name}`,
+		const { description, body } = parseCommandTemplate(command.content, {
+			source: `embedded:${command.name}`,
 			level: "fatal",
 		});
-		fileCommands.push({
+		commands.push({
+			kind: "template",
 			name,
 			description,
 			content: body,
@@ -202,29 +231,96 @@ export async function loadSlashCommands(options: LoadSlashCommandsOptions = {}):
 		seenNames.add(name);
 	}
 
-	return fileCommands;
+	return {
+		commands,
+		warnings: [...(result.warnings ?? [])],
+	};
 }
 
-/**
- * Expand a slash command if it matches a file-based command.
- * Returns the expanded content or the original text if not a slash command.
- */
-export function expandSlashCommand(text: string, fileCommands: FileSlashCommand[]): string {
+export async function loadSlashCommands(options: LoadSlashCommandsOptions = {}): Promise<FileSlashCommand[]> {
+	return (await loadSlashCommandSet(options)).commands;
+}
+
+export function renderSlashCommandWarnings(warnings: readonly string[]): string | undefined {
+	const bodies = warnings
+		.map(warning => {
+			if (warning.startsWith(`${COMMAND_FILE_WARNING_PREFIX}\n\n`)) {
+				return warning.slice(COMMAND_FILE_WARNING_PREFIX.length + 2).trim();
+			}
+			if (warning.startsWith(COMMAND_FILE_WARNING_PREFIX)) {
+				return warning.slice(COMMAND_FILE_WARNING_PREFIX.length).trim();
+			}
+			return warning.trim();
+		})
+		.filter(Boolean);
+	if (bodies.length === 0) {
+		return undefined;
+	}
+	return `${COMMAND_FILE_WARNING_PREFIX}\n\n${bodies.join("\n\n")}`;
+}
+
+export async function expandSlashCommand(
+	text: string,
+	fileCommands: readonly FileSlashCommand[],
+	options: { cwd: string },
+): Promise<string> {
 	if (!text.startsWith("/")) return text;
 
 	const spaceIndex = text.indexOf(" ");
 	const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 	const argsString = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
-
-	const fileCommand = fileCommands.find(cmd => cmd.name === commandName);
-	if (fileCommand) {
-		const args = parseCommandArgs(argsString);
-		const argsText = args.join(" ");
-		const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(fileCommand.content);
-		const substituted = substituteArgs(fileCommand.content, args);
-		const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
-		return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
+	const fileCommand = fileCommands.find(command => command.name === commandName);
+	if (!fileCommand || !isTemplateFileSlashCommand(fileCommand)) {
+		return text;
 	}
 
-	return text;
+	const args = parseCommandArgs(argsString);
+	const argsText = args.join(" ");
+	const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(fileCommand.content);
+	const substituted = substituteArgs(fileCommand.content, args);
+	const rendered = renderPromptTemplate(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
+	const expanded =
+		fileCommand._source?.provider === "native"
+			? await interpolateShellExpressions({
+					body: rendered,
+					cwd: options.cwd,
+					sourceLabel: `/${fileCommand.name}`,
+				})
+			: rendered;
+	return appendInlineArgsFallback(expanded, argsText, usesInlineArgPlaceholders);
+}
+
+export async function executeFileSlashCommand(
+	text: string,
+	fileCommands: readonly FileSlashCommand[],
+	options: {
+		cwd: string;
+		promptChainExecutor: PromptChainExecutor;
+		streamingBehavior?: PromptChainStreamingBehavior;
+		images?: readonly ImageContent[];
+	},
+): Promise<{ kind: "text"; text: string } | { kind: "handled" }> {
+	if (!text.startsWith("/")) {
+		return { kind: "text", text };
+	}
+
+	const spaceIndex = text.indexOf(" ");
+	const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+	const argsString = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
+	const fileCommand = fileCommands.find(command => command.name === commandName);
+	if (!fileCommand) {
+		return { kind: "text", text };
+	}
+	if (isTemplateFileSlashCommand(fileCommand)) {
+		return {
+			kind: "text",
+			text: await expandSlashCommand(text, fileCommands, { cwd: options.cwd }),
+		};
+	}
+
+	await options.promptChainExecutor.execute(fileCommand.name, fileCommand.stepTemplates, argsString, {
+		images: options.images,
+		streamingBehavior: options.streamingBehavior,
+	});
+	return { kind: "handled" };
 }

@@ -39,6 +39,7 @@ Notes:
 
 - Native auto-discovery is currently `.omp` based.
 - Legacy `.pi` is still accepted in `package.json` manifest keys (`pi.extensions`), but not as a native root here.
+- Native discovery treats directories placed directly under the native roots (`<cwd>/.omp/extensions` and `~/.omp/agent/extensions`) as candidates, so symlinked package directories in those locations are also auto-discovered (with no recursive traversal beyond that direct child level).
 
 ### 2) Installed plugin extension entries
 
@@ -148,7 +149,7 @@ Rules and constraints:
 
 ### Ignore behavior differs by source
 
-- Native auto-discovery (`discoverExtensionModulePaths` in discovery helpers) uses native glob with `gitignore: true` and `hidden: false`.
+- Native auto-discovery (`discoverExtensionModulePaths` in discovery helpers) uses a one-level directory scan over the native roots, skips dot-prefixed entries, and supports symlinked package directories found directly beneath those roots.
 - Explicit configured directory scanning in `loader.ts` uses `readdir` rules and does **not** apply gitignore filtering.
 
 ---

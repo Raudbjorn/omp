@@ -42,6 +42,7 @@ import { loginGitLabDuo } from "./utils/oauth/gitlab-duo";
 import { loginAntigravity } from "./utils/oauth/google-antigravity";
 import { loginGeminiCli } from "./utils/oauth/google-gemini-cli";
 import { loginHuggingface } from "./utils/oauth/huggingface";
+import { loginIpexLlm } from "./utils/oauth/ipex-llm";
 import { loginKagi } from "./utils/oauth/kagi";
 import { loginKilo } from "./utils/oauth/kilo";
 import { loginKimi } from "./utils/oauth/kimi";
@@ -52,8 +53,10 @@ import { loginMoonshot } from "./utils/oauth/moonshot";
 import { loginNanoGPT } from "./utils/oauth/nanogpt";
 import { loginNvidia } from "./utils/oauth/nvidia";
 import { loginOllama } from "./utils/oauth/ollama";
+import { loginOllamaCloud } from "./utils/oauth/ollama-cloud";
 import { loginOpenAICodex } from "./utils/oauth/openai-codex";
 import { loginOpenCode } from "./utils/oauth/opencode";
+import { loginOpenvino } from "./utils/oauth/openvino";
 import { loginParallel } from "./utils/oauth/parallel";
 import { loginPerplexity } from "./utils/oauth/perplexity";
 import { loginQianfan } from "./utils/oauth/qianfan";
@@ -944,6 +947,16 @@ export class AuthStorage {
 			case "lm-studio": {
 				const { loginLmStudio } = await import("./utils/oauth/lm-studio");
 				const apiKey = await loginLmStudio(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "ipex-llm": {
+				const apiKey = await loginIpexLlm(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "openvino": {
+				const apiKey = await loginOpenvino(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}

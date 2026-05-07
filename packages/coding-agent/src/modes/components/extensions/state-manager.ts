@@ -11,7 +11,7 @@ import type { MCPServer } from "../../../capability/mcp";
 import type { Prompt } from "../../../capability/prompt";
 import type { Rule } from "../../../capability/rule";
 import type { Skill } from "../../../capability/skill";
-import type { SlashCommand } from "../../../capability/slash-command";
+import { isTemplateSlashCommand, type SlashCommand } from "../../../capability/slash-command";
 import type { CustomTool } from "../../../capability/tool";
 import type { SourceMeta } from "../../../capability/types";
 import {

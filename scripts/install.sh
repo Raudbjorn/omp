@@ -1,14 +1,18 @@
 #!/bin/sh
 set -e
 
-# OMP Coding Agent Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/can1357/oh-my-pi/main/scripts/install.sh | sh
+# OMP Coding Agent Installer (Raudbjorn fork)
+# Usage: curl -fsSL https://raw.githubusercontent.com/Raudbjorn/omp/main/scripts/install.sh | sh
 #
 # Options:
-#   --source       Install via bun (installs bun if needed)
-#   --binary       Always install prebuilt binary
-#   --ref <ref>    Install specific tag/commit/branch
+#   --source       Install via bun by cloning this repo and running `bun install -g`
+#   --binary       Always install prebuilt binary from GitHub Releases
+#   --ref <ref>    Install specific tag/commit/branch (default: repo HEAD)
 #   -r <ref>       Shorthand for --ref
+#
+# Environment:
+#   PI_INSTALL_REPO   Override the source repo (default: Raudbjorn/omp)
+#   PI_INSTALL_DIR    Override install dir for --binary (default: ~/.local/bin)
 
 REPO="Raudbjorn/omp"
 PACKAGE="@oh-my-pi/pi-coding-agent"  # unused for fork; source install always clones REPO
@@ -324,10 +328,8 @@ WRAPPER_BODY
         mv "$WRAPPER_TMP" "$WRAPPER"
 
     else
-        bun install -g "$PACKAGE" || {
-            echo "Failed to install $PACKAGE"
-            exit 1
-        }
+        echo "This fork is not published to npm; --source requires a ref (a default of 'main' is applied automatically)."
+        exit 1
     fi
 
     echo ""

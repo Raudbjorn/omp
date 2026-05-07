@@ -1,6 +1,17 @@
 import type { AutocompleteProvider } from "./autocomplete";
 import type { Component } from "./tui";
 
+export type PasteIntent = "safe" | "exec";
+
+export interface SubmissionLineIntent {
+	line: number;
+	intent: PasteIntent;
+}
+
+export interface EditorSubmitMetadata {
+	lineIntents: SubmissionLineIntent[];
+}
+
 /**
  * Interface for custom editor components.
  *
@@ -27,7 +38,7 @@ export interface EditorComponent extends Component {
 	// =========================================================================
 
 	/** Called when user submits (e.g., Enter key) */
-	onSubmit?: (text: string) => void;
+	onSubmit?: (text: string, metadata?: EditorSubmitMetadata) => void;
 
 	/** Called when text changes */
 	onChange?: (text: string) => void;
@@ -45,6 +56,9 @@ export interface EditorComponent extends Component {
 
 	/** Insert text at current cursor position */
 	insertTextAtCursor?(text: string): void;
+
+	/** Insert pasted text with execution intent metadata. */
+	insertPastedText?(text: string, intent: PasteIntent): void;
 
 	/**
 	 * Get text with any markers expanded (e.g., paste markers).

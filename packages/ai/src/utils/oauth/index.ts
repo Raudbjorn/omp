@@ -22,6 +22,7 @@ import type {
  * - Kilo Gateway
  * - Kagi
  * - Cerebras
+ * - Fireworks
  * - Hugging Face Inference
  * - Synthetic
  * - Perplexity (Pro/Max — desktop app extraction or manual cookie)
@@ -65,6 +66,8 @@ export { loginAntigravity, refreshAntigravityToken } from "./google-antigravity"
 export { loginGeminiCli, refreshGoogleCloudToken } from "./google-gemini-cli";
 // Hugging Face Inference (API key)
 export { loginHuggingface } from "./huggingface";
+// IPEX-LLM (optional API key; Intel XPU local OpenAI-compatible)
+export { loginIpexLlm } from "./ipex-llm";
 // Kagi (API key)
 export { loginKagi } from "./kagi";
 // Kilo Gateway
@@ -85,11 +88,14 @@ export { loginNanoGPT } from "./nanogpt";
 export { loginNvidia } from "./nvidia";
 // Ollama (optional API key)
 export { loginOllama } from "./ollama";
+export { loginOllamaCloud } from "./ollama-cloud";
 export type { OpenAICodexLoginOptions } from "./openai-codex";
 // OpenAI Codex (ChatGPT OAuth)
 export { loginOpenAICodex, refreshOpenAICodexToken } from "./openai-codex";
 // OpenCode Zen / OpenCode Go (API key)
 export { loginOpenCode } from "./opencode";
+// OpenVINO (optional API key; OVMS / openvino-genai local OpenAI-compatible)
+export { loginOpenvino } from "./openvino";
 // Parallel (API key)
 export { loginParallel } from "./parallel";
 // Perplexity
@@ -175,6 +181,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "google-gemini-cli",
 		name: "Google Cloud Code Assist (Gemini CLI)",
+		available: true,
+	},
+	{
+		id: "gemini-cli-acp",
+		name: "Gemini CLI (ACP)",
 		available: true,
 	},
 	{
@@ -328,6 +339,16 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "ipex-llm",
+		name: "IPEX-LLM (Intel XPU Local OpenAI-compatible)",
+		available: true,
+	},
+	{
+		id: "openvino",
+		name: "OpenVINO (OVMS / openvino-genai Local OpenAI-compatible)",
+		available: true,
+	},
+	{
 		id: "cloudflare-ai-gateway",
 		name: "Cloudflare AI Gateway",
 		available: true,
@@ -439,6 +460,8 @@ export async function refreshOAuthToken(
 		case "together":
 		case "litellm":
 		case "lm-studio":
+		case "ipex-llm":
+		case "openvino":
 		case "ollama":
 		case "ollama-cloud":
 		case "xiaomi":

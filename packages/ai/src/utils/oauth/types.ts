@@ -26,6 +26,8 @@ export type OAuthProvider =
 	| "kagi"
 	| "litellm"
 	| "lm-studio"
+	| "ipex-llm"
+	| "openvino"
 	| "minimax-code"
 	| "minimax-code-cn"
 	| "mimo-code"

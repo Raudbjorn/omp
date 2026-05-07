@@ -232,6 +232,16 @@ describe("parseArgs", () => {
 			const result = parseArgs(["--tools=ask"]);
 			expect(result.tools).toEqual(["ask"]);
 		});
+
+		test("parses --tools=value with equals syntax", () => {
+			const result = parseArgs(["--tools=read,bash"]);
+			expect(result.tools).toEqual(["read", "bash"]);
+		});
+
+		test("parses --tools=value with single tool", () => {
+			const result = parseArgs(["--tools=ask"]);
+			expect(result.tools).toEqual(["ask"]);
+		});
 	});
 
 	describe("--no-lsp flag", () => {

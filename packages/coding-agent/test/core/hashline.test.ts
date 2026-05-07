@@ -633,3 +633,232 @@ describe("checkBoundariesForEdits", () => {
 		}
 	});
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// verifyTags (pre-flight tag verification)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("verifyTags", () => {
+	it("returns valid when all tags match", () => {
+		const text = "line one\nline two\nline three";
+		const edits: HashlineEdit[] = [
+			{ op: "replace_line", pos: makeTag(2, "line two"), lines: ["new two"] },
+		];
+		expect(verifyTags(text, edits)).toEqual({ valid: true });
+	});
+
+	it("returns invalid with HashlineMismatchError when a tag is stale", () => {
+		const text = "line one\nline two\nline three";
+		const edits: HashlineEdit[] = [
+			{ op: "replace_line", pos: { line: 2, hash: "AA" }, lines: ["new two"] },
+		];
+		const result = verifyTags(text, edits);
+		expect(result.valid).toBe(false);
+		expect(result.error).toBeInstanceOf(HashlineMismatchError);
+		expect(result.error?.mismatches).toHaveLength(1);
+		expect(result.error?.mismatches[0]?.line).toBe(2);
+	});
+
+	it("validates both pos and end for replace_range", () => {
+		const text = "a\nb\nc\nd";
+		const edits: HashlineEdit[] = [
+			{
+				op: "replace_range",
+				pos: { line: 1, hash: "XX" },
+				end: { line: 3, hash: "YY" },
+				lines: ["rewrite"],
+			},
+		];
+		const result = verifyTags(text, edits);
+		expect(result.valid).toBe(false);
+		expect(result.error?.mismatches).toHaveLength(2);
+	});
+
+	it("skips validation for append_file / prepend_file (no anchor)", () => {
+		const text = "a\nb\nc";
+		const edits: HashlineEdit[] = [
+			{ op: "append_file", lines: ["d"] },
+			{ op: "prepend_file", lines: ["z"] },
+		];
+		expect(verifyTags(text, edits)).toEqual({ valid: true });
+	});
+
+	it("skips out-of-range anchors without throwing", () => {
+		const text = "only line";
+		const edits: HashlineEdit[] = [
+			{ op: "replace_line", pos: { line: 99, hash: "AA" }, lines: ["x"] },
+		];
+		expect(verifyTags(text, edits)).toEqual({ valid: true });
+	});
+
+	it("enriched remaps cover every line in a failing replace_range", () => {
+		const text = "a\nb\nc\nd\ne";
+		const edits: HashlineEdit[] = [
+			{
+				op: "replace_range",
+				pos: { line: 2, hash: "WRONG" },
+				end: { line: 4, hash: computeLineHash(4, "d") },
+				lines: ["rewrite"],
+			},
+		];
+		const result = verifyTags(text, edits);
+		expect(result.valid).toBe(false);
+		const remaps = result.error?.remaps;
+		expect(remaps).toBeDefined();
+		// Every line 2..4 has an entry, regardless of whether it mismatched
+		for (const line of [2, 3, 4]) {
+			const hash = computeLineHash(line, text.split("\n")[line - 1]);
+			expect([...(remaps?.keys() ?? [])].some(k => k.startsWith(`${line}#`))).toBe(true);
+			// Valid lines map to themselves; invalid map from old → new
+			if (line !== 2) {
+				expect(remaps?.get(`${line}#${hash}`)).toBe(`${line}#${hash}`);
+			}
+		}
+	});
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// checkBoundariesForEdits (AST-guided shared-boundary rejection)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("checkBoundariesForEdits", () => {
+	const sym = (name: string, startLine: number, endLine: number, children?: DocSymbol[]): DocSymbol => ({
+		name,
+		range: { start: { line: startLine }, end: { line: endLine } },
+		...(children ? { children } : {}),
+	});
+
+	it("is a no-op when symbols is null", () => {
+		const edits: HashlineEdit[] = [
+			{
+				op: "replace_range",
+				pos: makeTag(3, "a"),
+				end: makeTag(5, "b"),
+				lines: ["x"],
+			},
+		];
+		expect(() => checkBoundariesForEdits(edits, null)).not.toThrow();
+	});
+
+	it("is a no-op when symbols is empty", () => {
+		const edits: HashlineEdit[] = [
+			{ op: "replace_range", pos: makeTag(3, "a"), end: makeTag(5, "b"), lines: ["x"] },
+		];
+		expect(() => checkBoundariesForEdits(edits, [])).not.toThrow();
+	});
+
+	it("is a no-op when no replace_range edits are present", () => {
+		// A single-line symbol at line 3 (LSP 0-indexed: line 2) — would be a
+		// false positive under the old naïve check, but replace_line is skipped.
+		const edits: HashlineEdit[] = [
+			{ op: "replace_line", pos: makeTag(3, "a"), lines: ["x"] },
+			{ op: "append_at", pos: makeTag(1, "b"), lines: ["y"] },
+		];
+		const symbols: DocSymbol[] = [sym("CONST", 2, 2)];
+		expect(() => checkBoundariesForEdits(edits, symbols)).not.toThrow();
+	});
+
+	it("throws SharedBoundaryError when replace_range starts on a shared boundary", () => {
+		// Simulate `} else {` pattern: if-block ends on line 4 (LSP 3),
+		// else-block starts on line 4 (LSP 3). Edit targets line 4.
+		const edits: HashlineEdit[] = [
+			{
+				op: "replace_range",
+				pos: makeTag(4, "} else {"),
+				end: makeTag(6, "}"),
+				lines: ["} else {", "  x;", "}"],
+			},
+		];
+		const symbols: DocSymbol[] = [
+			sym("if", 1, 3), // LSP 0-indexed: spans 0..3
+			sym("else", 3, 5), // 3..5 — both end-of-if AND start-of-else share line 3
+		];
+		expect(() => checkBoundariesForEdits(edits, symbols)).toThrow(SharedBoundaryError);
+	});
+
+	it("throws when replace_range ends on a shared boundary", () => {
+		const edits: HashlineEdit[] = [
+			{
+				op: "replace_range",
+				pos: makeTag(2, "body line"),
+				end: makeTag(4, "} catch {"),
+				lines: ["new body"],
+			},
+		];
+		const symbols: DocSymbol[] = [
+			sym("try", 0, 3), // ends at LSP line 3
+			sym("catch", 3, 5), // starts at LSP line 3
+		];
+		const thrown = (() => {
+			try {
+				checkBoundariesForEdits(edits, symbols);
+				return null;
+			} catch (e) {
+				return e;
+			}
+		})();
+		expect(thrown).toBeInstanceOf(SharedBoundaryError);
+		expect((thrown as SharedBoundaryError).role).toBe("end");
+		expect((thrown as SharedBoundaryError).editIndex).toBe(0);
+	});
+
+	it("does NOT flag a single-line symbol as a shared boundary (regression: self-match fix)", () => {
+		// A single-line `const FOO = 1` has start.line === end.line.
+		// The naïve "endsHere AND startsHere" check would false-positive; the fix
+		// requires two DIFFERENT symbols overlapping at the line.
+		const edits: HashlineEdit[] = [
+			{
+				op: "replace_range",
+				pos: makeTag(2, "const A = 1"),
+				end: makeTag(4, "const C = 3"),
+				lines: ["replaced"],
+			},
+		];
+		const symbols: DocSymbol[] = [
+			sym("A", 1, 1), // LSP 0-indexed: single-line symbol
+			sym("B", 2, 2),
+			sym("C", 3, 3),
+		];
+		expect(() => checkBoundariesForEdits(edits, symbols)).not.toThrow();
+	});
+
+	it("flattens nested symbols before checking", () => {
+		const edits: HashlineEdit[] = [
+			{
+				op: "replace_range",
+				pos: makeTag(5, "} else {"),
+				end: makeTag(7, "}"),
+				lines: ["x"],
+			},
+		];
+		const symbols: DocSymbol[] = [
+			sym("outerFn", 0, 10, [
+				sym("if", 2, 4), // ends at LSP line 4
+				sym("else", 4, 6), // starts at LSP line 4
+			]),
+		];
+		expect(() => checkBoundariesForEdits(edits, symbols)).toThrow(SharedBoundaryError);
+	});
+
+	it("error message names the construct when one is known", () => {
+		const edits: HashlineEdit[] = [
+			{
+				op: "replace_range",
+				pos: makeTag(4, "} else {"),
+				end: makeTag(5, "}"),
+				lines: ["x"],
+			},
+		];
+		const symbols: DocSymbol[] = [
+			sym("processRequest", 0, 3),
+			sym("handleError", 3, 5),
+		];
+		try {
+			checkBoundariesForEdits(edits, symbols);
+			throw new Error("should have thrown");
+		} catch (e) {
+			expect(e).toBeInstanceOf(SharedBoundaryError);
+			expect((e as Error).message).toContain("processRequest");
+		}
+	});
+});

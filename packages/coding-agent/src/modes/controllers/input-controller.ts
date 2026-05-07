@@ -1,20 +1,28 @@
 import * as fs from "node:fs/promises";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
-import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
-import { $env } from "@oh-my-pi/pi-utils";
+import type { AutocompleteProvider, EditorSubmitMetadata, SlashCommand } from "@oh-my-pi/pi-tui";
+import { $env, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
+import { interpolateShellExpressions } from "../../extensibility/shell-interpolation";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import { theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
-import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
+import {
+	MULTI_BLOCK_TEXT_MESSAGE_TYPE,
+	SKILL_PROMPT_MESSAGE_TYPE,
+	type SkillPromptDetails,
+} from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
-import { copyToClipboard, readImageFromClipboard } from "../../utils/clipboard";
+import { copyToClipboard, readImageFromClipboard, readTextFromClipboard } from "../../utils/clipboard";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { ensureSupportedImageInput } from "../../utils/image-loading";
 import { resizeImage } from "../../utils/image-resize";
 import { generateSessionTitle, setSessionTerminalTitle } from "../../utils/title-generator";
+import { syncMultiBlockLiveChat } from "./multi-block/live-chat-sync";
+import { runMultiBlockSubmission } from "./multi-block-runner";
+import { executeBashShortcut, executePythonShortcut } from "./shortcut-command-executor";
 
 interface Expandable {
 	setExpanded(expanded: boolean): void;
@@ -22,6 +30,13 @@ interface Expandable {
 
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
+}
+
+const EXECUTE_INTENT_PASTE_UNAVAILABLE_STATUS =
+	"Clipboard text unavailable for execute-intent paste (use terminal paste for safe text)";
+
+function startsWithSafePasteIntent(metadata?: EditorSubmitMetadata): boolean {
+	return metadata?.lineIntents.some(entry => entry.line === 0 && entry.intent === "safe") ?? false;
 }
 
 export class InputController {
@@ -162,6 +177,9 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("app.message.followUp")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleFollowUp());
 		}
+		for (const key of this.ctx.keybindings.getKeys("app.clipboard.pasteExec")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleExecuteIntentPaste());
+		}
 		for (const key of this.ctx.keybindings.getKeys("app.stt.toggle")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleSTTToggle());
 		}
@@ -185,8 +203,11 @@ export class InputController {
 	}
 
 	setupEditorSubmitHandler(): void {
-		this.ctx.editor.onSubmit = async (text: string) => {
+		this.ctx.editor.onSubmit = async (text: string, metadata) => {
 			text = text.trim();
+			const isSingleLineSubmission = !text.includes("\n");
+			const safePasteIntent = startsWithSafePasteIntent(metadata);
+			let historyText = text;
 
 			// Empty submit while streaming with queued messages: flush queues immediately
 			if (!text && this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount > 0) {
@@ -202,7 +223,11 @@ export class InputController {
 				if (this.ctx.onInputCallback) {
 					this.ctx.editor.setText("");
 					this.ctx.pendingImages = [];
-					this.ctx.onInputCallback({ text: "", cancelled: false, started: true });
+					this.ctx.onInputCallback({
+						text: "",
+						cancelled: false,
+						started: true,
+					});
 				}
 				return;
 			}
@@ -227,17 +252,71 @@ export class InputController {
 
 			if (!text) return;
 
-			// Handle built-in slash commands
-			const slashResult = await executeBuiltinSlashCommand(text, {
+			const multiBlockResult = await runMultiBlockSubmission({
 				ctx: this.ctx,
+				images: inputImages,
+				text,
+				lineIntents: metadata?.lineIntents,
+				handleSkillCommand: (commandText, options) => this.#handleSkillCommand(commandText, options),
 				handleBackgroundCommand: () => this.handleBackgroundCommand(),
+				handleBashShortcut: (command, excludeFromContext) =>
+					executeBashShortcut(this.ctx, command, excludeFromContext),
+				handlePythonShortcut: (code, excludeFromContext) =>
+					executePythonShortcut(this.ctx, code, excludeFromContext),
+				handleTextBlock: (blockText, blockOptions) => this.#dispatchMultiBlockText(blockText, blockOptions),
 			});
-			if (slashResult === true) {
-				return;
+			if (multiBlockResult.processed) {
+				if (!multiBlockResult.success) {
+					return;
+				}
+				const hasInputImages = Boolean(inputImages && inputImages.length > 0);
+				if (multiBlockResult.startedTurnDirectly) {
+					this.#maybeGenerateSessionTitle(multiBlockResult.fallbackPromptText ?? text);
+					this.ctx.editor.setText("");
+					this.ctx.pendingImages = [];
+					return;
+				}
+				if (multiBlockResult.continueFromContext && !hasInputImages) {
+					this.ctx.flushPendingBashComponents();
+					this.#maybeGenerateSessionTitle(multiBlockResult.fallbackPromptText ?? text);
+					this.ctx.editor.setText("");
+					this.ctx.pendingImages = [];
+					if (this.ctx.onInputCallback) {
+						this.ctx.onInputCallback({
+							text: "",
+							continueFromContext: true,
+							cancelled: false,
+							started: true,
+						});
+					}
+					return;
+				}
+				if (multiBlockResult.continueFromContext && hasInputImages && multiBlockResult.fallbackPromptText) {
+					historyText = multiBlockResult.fallbackPromptText;
+					text = multiBlockResult.fallbackPromptText;
+				} else if (!multiBlockResult.remainingText) {
+					this.ctx.editor.setText("");
+					this.ctx.pendingImages = [];
+					return;
+				} else {
+					historyText = multiBlockResult.remainingText;
+					text = multiBlockResult.remainingText;
+				}
 			}
-			if (typeof slashResult === "string") {
-				// Command handled but returned remaining text to use as prompt
-				text = slashResult;
+
+			// Handle built-in slash commands
+			if (isSingleLineSubmission && !safePasteIntent) {
+				const slashResult = await executeBuiltinSlashCommand(text, {
+					ctx: this.ctx,
+					handleBackgroundCommand: () => this.handleBackgroundCommand(),
+				});
+				if (slashResult === true) {
+					return;
+				}
+				if (typeof slashResult === "string") {
+					// Command handled but returned remaining text to use as prompt
+					text = slashResult;
+				}
 			}
 
 			// Handle skill commands (/skill:name [args])
@@ -283,37 +362,27 @@ export class InputController {
 			}
 
 			// Handle bash command (! for normal, !! for excluded from context)
-			if (text.startsWith("!")) {
+			if (isSingleLineSubmission && !safePasteIntent && text.startsWith("!")) {
 				const isExcluded = text.startsWith("!!");
 				const command = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (command) {
-					if (this.ctx.session.isBashRunning) {
-						this.ctx.showWarning("A bash command is already running. Press Esc to cancel it first.");
+					const handled = await executeBashShortcut(this.ctx, command, isExcluded, { historyEntry: text });
+					if (!handled) {
 						this.ctx.editor.setText(text);
-						return;
 					}
-					this.ctx.editor.addToHistory(text);
-					await this.ctx.handleBashCommand(command, isExcluded);
-					this.ctx.isBashMode = false;
-					this.ctx.updateEditorBorderColor();
 					return;
 				}
 			}
 
 			// Handle python command ($ for normal, $$ for excluded from context)
-			if (text.startsWith("$")) {
+			if (isSingleLineSubmission && !safePasteIntent && text.startsWith("$")) {
 				const isExcluded = text.startsWith("$$");
 				const code = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (code) {
 					if (this.ctx.session.isEvalRunning) {
 						this.ctx.showWarning("A Python execution is already running. Press Esc to cancel it first.");
 						this.ctx.editor.setText(text);
-						return;
 					}
-					this.ctx.editor.addToHistory(text);
-					await this.ctx.handlePythonCommand(code, isExcluded);
-					this.ctx.isPythonMode = false;
-					this.ctx.updateEditorBorderColor();
 					return;
 				}
 			}
@@ -337,7 +406,7 @@ export class InputController {
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
 			if (this.ctx.session.isStreaming) {
-				this.ctx.editor.addToHistory(text);
+				this.ctx.editor.addToHistory(historyText);
 				this.ctx.editor.setText("");
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
 				this.ctx.pendingImages = [];
@@ -389,8 +458,54 @@ export class InputController {
 
 				this.ctx.onInputCallback(submission);
 			}
-			this.ctx.editor.addToHistory(text);
+			this.ctx.editor.addToHistory(historyText);
 		};
+	}
+
+	/**
+	 * Emit custom messages for intermediate text blocks during multi-block submissions so the transcript
+	 * mirrors author intent without triggering a new agent turn.
+	 */
+	async #dispatchMultiBlockText(text: string, options: { suppressTurn: boolean }): Promise<void> {
+		const trimmed = text.trim();
+		if (!trimmed) {
+			return;
+		}
+		this.ctx.editor.addToHistory(trimmed);
+		const wasStreaming = this.ctx.session.isStreaming;
+		await this.ctx.session.sendCustomMessage(
+			{
+				customType: MULTI_BLOCK_TEXT_MESSAGE_TYPE,
+				content: trimmed,
+				display: true,
+				details: { suppressTurn: options.suppressTurn },
+			},
+			{ triggerTurn: false },
+		);
+		syncMultiBlockLiveChat(this.ctx, { wasStreaming, display: true });
+	}
+
+	#maybeGenerateSessionTitle(text: string): void {
+		const hasUserMessages = this.ctx.session.messages.some((m: AgentMessage) => m.role === "user");
+		if (hasUserMessages || this.ctx.sessionManager.getSessionName() || $env.PI_NO_TITLE) {
+			return;
+		}
+		const registry = this.ctx.session.modelRegistry;
+		generateSessionTitle(text, registry, this.ctx.settings, this.ctx.session.sessionId, this.ctx.session.model)
+			.then(async title => {
+				if (title) {
+					const applied = await this.ctx.sessionManager.setSessionName(title, "auto");
+					if (applied) {
+						setSessionTerminalTitle(
+							this.ctx.sessionManager.getSessionName()!,
+							this.ctx.sessionManager.getCwd(),
+							this.ctx.sessionManager.titleSource,
+						);
+						this.ctx.updateEditorBorderColor();
+					}
+				}
+			})
+			.catch(() => {});
 	}
 
 	handleCtrlC(): void {
@@ -538,6 +653,25 @@ export class InputController {
 		process.kill(0, "SIGTSTP");
 	}
 
+	/**
+	 * Execute-intent paste exists to preserve executable clipboard text under an
+	 * explicit shortcut while default terminal paste remains non-executable.
+	 */
+	async handleExecuteIntentPaste(): Promise<void> {
+		try {
+			const clipboardText = await readTextFromClipboard();
+			if (!clipboardText) {
+				this.ctx.showStatus(EXECUTE_INTENT_PASTE_UNAVAILABLE_STATUS);
+				return;
+			}
+
+			this.ctx.editor.insertPastedText(clipboardText, "exec");
+			this.ctx.ui.requestRender();
+		} catch {
+			this.ctx.showStatus(EXECUTE_INTENT_PASTE_UNAVAILABLE_STATUS);
+		}
+	}
+
 	async handleImagePaste(): Promise<boolean> {
 		try {
 			const image = await readImageFromClipboard();
@@ -559,7 +693,11 @@ export class InputController {
 							data: imageData.data,
 							mimeType: imageData.mimeType,
 						});
-						imageData = { type: "image", data: resized.data, mimeType: resized.mimeType };
+						imageData = {
+							type: "image",
+							data: resized.data,
+							mimeType: resized.mimeType,
+						};
 					} catch {
 						// Keep the normalized image when resize fails.
 					}
@@ -583,6 +721,79 @@ export class InputController {
 		} catch {
 			this.ctx.showStatus("Failed to read clipboard");
 			return false;
+		}
+	}
+
+	async #handleSkillCommand(
+		text: string,
+		options?: { addToHistory?: boolean; suppressTurn?: boolean },
+	): Promise<"not-handled" | "handled" | "error"> {
+		if (!text.startsWith("/skill:")) {
+			return "not-handled";
+		}
+		const spaceIndex = text.indexOf(" ");
+		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+		const skillCommand = this.ctx.skillCommands?.get(commandName);
+		if (!skillCommand) {
+			return "not-handled";
+		}
+		const { filePath: skillPath, isNative } = skillCommand;
+		if (options?.addToHistory !== false) {
+			this.ctx.editor.addToHistory(text);
+		}
+		this.ctx.editor.setText("");
+		try {
+			const content = await Bun.file(skillPath).text();
+			const { body } = parseFrontmatter(content, { source: skillPath, level: "fatal" });
+			const skillName = commandName.slice("skill:".length);
+			const expandedBody = isNative
+				? await interpolateShellExpressions({
+						body,
+						cwd: this.ctx.sessionManager.getCwd(),
+						sourceLabel: `skill:${skillName}`,
+					})
+				: body;
+			const metaLines = [`Skill: ${skillPath}`, `Do not read SKILL.md for ${skillName}.`];
+			if (args) {
+				metaLines.push(`User: ${args}`);
+			}
+			const message = `${expandedBody}\n\n---\n\n${metaLines.join("\n")}`;
+			const details: SkillPromptDetails = {
+				name: skillName || commandName,
+				path: skillPath,
+				args: args || undefined,
+				lineCount: expandedBody ? expandedBody.split("\n").length : 0,
+			};
+			if (options?.suppressTurn) {
+				const wasStreaming = this.ctx.session.isStreaming;
+				await this.ctx.session.sendCustomMessage(
+					{
+						customType: SKILL_PROMPT_MESSAGE_TYPE,
+						content: message,
+						display: true,
+						details,
+						attribution: "user",
+					},
+					{ triggerTurn: false },
+				);
+				syncMultiBlockLiveChat(this.ctx, { wasStreaming, display: true });
+			} else {
+				await this.ctx.session.promptCustomMessage(
+					{
+						customType: SKILL_PROMPT_MESSAGE_TYPE,
+						content: message,
+						display: true,
+						details,
+						attribution: "user",
+					},
+					{ streamingBehavior: "followUp" },
+				);
+			}
+			return "handled";
+		} catch (err) {
+			this.ctx.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
+			return "error";
 		}
 	}
 
@@ -752,7 +963,10 @@ export class InputController {
 				? [ttyHandle.fd, ttyHandle.fd, ttyHandle.fd]
 				: ["inherit", "inherit", "inherit"];
 
-			const result = await openInEditor(editorCmd, currentText, { extension: ".omp.md", stdio });
+			const result = await openInEditor(editorCmd, currentText, {
+				extension: ".omp.md",
+				stdio,
+			});
 			if (result !== null) {
 				this.ctx.editor.setText(result);
 			}

@@ -22,6 +22,7 @@ import type {
 } from "./providers/cursor/gen/agent_pb";
 import type { DevinOptions } from "./providers/devin";
 import type { GoogleOptions } from "./providers/google";
+import type { AcpAgentOptions } from "./providers/acp";
 import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
 import type { GoogleVertexOptions } from "./providers/google-vertex";
 import type { OllamaChatOptions } from "./providers/ollama";

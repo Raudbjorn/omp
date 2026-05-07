@@ -1,0 +1,42 @@
+# Bounded `omp --version` so a hung or misbehaving binary can't block
+# pacman. 10s is generous — a healthy build returns in <1s.
+_omp_version() {
+	timeout --signal=KILL 10 omp --version 2>/dev/null || echo 'unknown'
+}
+
+post_install() {
+	local _v
+	_v="$(_omp_version)"
+	cat <<EOF
+:: omp installed (${_v})
+:: Run 'omp' to start the coding agent.
+::
+:: Optional providers (configure via 'omp login <provider>' or ~/.omp/agent/models.yml):
+::   - anthropic        Claude (web subscription via claude-gate, or API key)
+::   - github-copilot   Copilot OAuth
+::   - openai / gemini  API keys via env (OPENAI_API_KEY, GEMINI_API_KEY)
+::   - ollama           local inference (install 'ollama' optdep, then 'ollama pull gemma4')
+::   - ipex-llm/openvino Intel XPU local inference (no auth)
+::
+:: Faster rebuilds: install 'sccache' and/or 'mold' (optdeps) — the PKGBUILD
+:: auto-detects them and wraps cargo accordingly. No reconfiguration needed.
+::
+:: Debug env vars worth knowing:
+::   PI_DEV=1               verbose native-addon loader logging
+::   PI_TUI_WRITE_LOG=yes   write TUI events to ~/.omp/logs/
+::   RUST_BACKTRACE=1       Rust backtrace on native panics
+EOF
+}
+
+post_upgrade() {
+	local _v
+	_v="$(_omp_version)"
+	cat <<EOF
+:: omp upgraded (${_v})
+::
+:: If interactive sessions hang on /exit on this build, file an issue:
+::   https://github.com/Raudbjorn/omp/issues
+:: (The MCP-cleanup-on-exit fix landed in v14.1.4-acp.4; older snapshots
+:: leak stdio MCP children and block bun's event loop.)
+EOF
+}

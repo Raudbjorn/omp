@@ -1495,6 +1495,82 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 }
 
 // ---------------------------------------------------------------------------
+// 22a. IPEX-LLM (Intel PyTorch Extension for LLM — XPU-accelerated serving)
+// ---------------------------------------------------------------------------
+// ipex-llm exposes an OpenAI-compatible endpoint via its FastChat or OpenAI
+// serving modules, e.g.:
+//   python -m ipex_llm.serving.fastchat.vllm_worker --port 8000 ...
+//   python -m ipex_llm.serving.fastapi.openai_api_server --port 8000 ...
+// Set IPEX_LLM_BASE_URL to override the default.
+
+export interface IpexLlmModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function ipexLlmModelManagerOptions(
+	config?: IpexLlmModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? Bun.env.IPEX_LLM_BASE_URL ?? "http://127.0.0.1:8000/v1";
+	const references = createBundledReferenceMap<"openai-completions">(
+		"ipex-llm" as Parameters<typeof getBundledModels>[0],
+	);
+	return {
+		providerId: "ipex-llm",
+		fetchDynamicModels: () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "ipex-llm",
+				baseUrl,
+				apiKey,
+				mapModel: (entry, defaults) => {
+					const reference = references.get(defaults.id);
+					return mapWithBundledReference(entry, defaults, reference);
+				},
+			}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// 22b. OpenVINO (OVMS / openvino-genai serving)
+// ---------------------------------------------------------------------------
+// OpenAI-compatible endpoint exposed by either:
+//   - OpenVINO Model Server (OVMS) with text-generation graph
+//   - openvino-genai `llm_pipeline.serve()` / FastAPI wrapper
+// Both default to port 8000; set OPENVINO_BASE_URL if running alongside
+// another server on that port (e.g. ipex-llm or vLLM).
+
+export interface OpenvinoModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function openvinoModelManagerOptions(
+	config?: OpenvinoModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? Bun.env.OPENVINO_BASE_URL ?? "http://127.0.0.1:8000/v1";
+	const references = createBundledReferenceMap<"openai-completions">(
+		"openvino" as Parameters<typeof getBundledModels>[0],
+	);
+	return {
+		providerId: "openvino",
+		fetchDynamicModels: () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "openvino",
+				baseUrl,
+				apiKey,
+				mapModel: (entry, defaults) => {
+					const reference = references.get(defaults.id);
+					return mapWithBundledReference(entry, defaults, reference);
+				},
+			}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 23. NanoGPT
 // ---------------------------------------------------------------------------
 

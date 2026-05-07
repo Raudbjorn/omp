@@ -267,20 +267,6 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	return { name, description, tools, spawns, model, output, thinkingLevel, blocking };
 }
 
-async function globIf(
-	dir: string,
-	pattern: string,
-	fileType: FileType,
-	recursive: boolean = true,
-): Promise<Array<{ path: string }>> {
-	try {
-		const result = await glob({ pattern, path: dir, gitignore: true, hidden: false, fileType, recursive });
-		return result.matches;
-	} catch {
-		return [];
-	}
-}
-
 export interface ScanSkillsFromDirOptions {
 	dir: string;
 	providerId: string;
@@ -499,6 +485,86 @@ async function readExtensionModuleManifest(
 	return null;
 }
 
+function isExtensionModuleFile(name: string): boolean {
+	return name.endsWith(".ts") || name.endsWith(".js");
+}
+
+async function readExtensionDirEntries(dir: string): Promise<fs.Dirent[]> {
+	try {
+		return (await fs.promises.readdir(dir, { withFileTypes: true }))
+			.filter(entry => !entry.name.startsWith("."))
+			.sort((a, b) => a.name.localeCompare(b.name));
+	} catch {
+		return [];
+	}
+}
+
+async function getDiscoverableEntryKind(entry: fs.Dirent, entryPath: string): Promise<"file" | "directory" | null> {
+	if (entry.isFile()) return "file";
+	if (entry.isDirectory()) return "directory";
+	if (!entry.isSymbolicLink()) return null;
+
+	try {
+		const linkStats = await fs.promises.lstat(entryPath);
+		if (!linkStats.isSymbolicLink()) return null;
+		const targetStats = await fs.promises.stat(entryPath);
+		if (targetStats.isFile()) return "file";
+		if (targetStats.isDirectory()) return "directory";
+	} catch {
+		return null;
+	}
+
+	return null;
+}
+
+async function isDiscoverableFile(filePath: string): Promise<boolean> {
+	try {
+		return (await fs.promises.stat(filePath)).isFile();
+	} catch {
+		return false;
+	}
+}
+
+async function resolveManifestExtensionPaths(_ctx: LoadContext, packageDir: string): Promise<string[] | null> {
+	const packageJsonPath = path.join(packageDir, "package.json");
+	const manifest = await readExtensionModuleManifest(_ctx, packageJsonPath);
+	const declaredExtensions =
+		manifest?.extensions?.filter((extPath): extPath is string => typeof extPath === "string") ?? [];
+	if (declaredExtensions.length === 0) {
+		return null;
+	}
+
+	const resolved: string[] = [];
+
+	for (const extPath of declaredExtensions) {
+		const resolvedExtPath = path.resolve(packageDir, extPath);
+		if (await isDiscoverableFile(resolvedExtPath)) {
+			resolved.push(resolvedExtPath);
+		}
+	}
+
+	return resolved;
+}
+
+async function resolvePackageExtensionPaths(_ctx: LoadContext, packageDir: string): Promise<string[]> {
+	const declaredEntries = await resolveManifestExtensionPaths(_ctx, packageDir);
+	if (declaredEntries !== null) {
+		return declaredEntries;
+	}
+
+	const indexTs = path.join(packageDir, "index.ts");
+	if (await isDiscoverableFile(indexTs)) {
+		return [indexTs];
+	}
+
+	const indexJs = path.join(packageDir, "index.js");
+	if (await isDiscoverableFile(indexJs)) {
+		return [indexJs];
+	}
+
+	return [];
+}
+
 /**
  * Discover extension module entry points in a directory.
  *
@@ -508,66 +574,31 @@ async function readExtensionModuleManifest(
  * 3. Subdirectory with package.json: `extensions/<ext>/package.json` with "omp"/"pi" field → load declared paths
  *
  * No recursion beyond one level. Complex packages must use package.json manifest.
- * Uses native glob for fast filesystem scanning with gitignore support.
+ * Supports direct child symlinked package directories under the discovery root.
  */
 export async function discoverExtensionModulePaths(_ctx: LoadContext, dir: string): Promise<string[]> {
 	const discovered = new Set<string>();
-	// Find all candidate files in parallel using glob
-	const [directFiles, indexFiles, packageJsonFiles] = await Promise.all([
-		// 1. Direct *.ts or *.js files
-		globIf(dir, "*.{ts,js}", FileType.File, false),
-		// 2. Subdirectory index files
-		globIf(dir, "*/index.{ts,js}", FileType.File, false),
-		// 3. Subdirectory package.json files
-		globIf(dir, "*/package.json", FileType.File, false),
-	]);
+	const entries = await readExtensionDirEntries(dir);
 
-	// Process direct files
-	for (const match of directFiles) {
-		if (match.path.includes("/")) continue;
-		discovered.add(path.join(dir, match.path));
-	}
-	// Track which subdirectories have package.json manifests with declared extensions
-	const subdirsWithDeclaredExtensions = new Set<string>();
-	for (const match of packageJsonFiles) {
-		const subdir = path.dirname(match.path); // e.g., "my-extension"
-		const packageJsonPath = path.join(dir, match.path);
-		const manifest = await readExtensionModuleManifest(_ctx, packageJsonPath);
-		const declaredExtensions =
-			manifest?.extensions?.filter((extPath): extPath is string => typeof extPath === "string") ?? [];
-		if (declaredExtensions.length === 0) continue;
-		subdirsWithDeclaredExtensions.add(subdir);
-		const subdirPath = path.join(dir, subdir);
-		for (const extPath of declaredExtensions) {
-			let resolvedExtPath = path.resolve(subdirPath, extPath);
-			const entries = await readDirEntries(resolvedExtPath);
-			if (entries.length !== 0) {
-				const pluginFilePath = entries.find(
-					e => e.isFile() && (e.name === "index.ts" || e.name === "index.js"),
-				)?.name;
-				resolvedExtPath = pluginFilePath ? path.join(resolvedExtPath, pluginFilePath) : resolvedExtPath;
-			}
-			const content = await readFile(resolvedExtPath);
-			if (content !== null) {
-				discovered.add(resolvedExtPath);
-			}
+	for (const entry of entries) {
+		const entryPath = path.join(dir, entry.name);
+		if ((await getDiscoverableEntryKind(entry, entryPath)) === "file" && isExtensionModuleFile(entry.name)) {
+			discovered.add(entryPath);
 		}
 	}
-	const preferredIndexBySubdir = new Map<string, string>();
-	for (const match of indexFiles) {
-		if (match.path.split("/").length !== 2) continue;
-		const subdir = path.dirname(match.path);
-		if (subdirsWithDeclaredExtensions.has(subdir)) continue;
-		const existing = preferredIndexBySubdir.get(subdir);
-		if (!existing || (existing.endsWith("index.js") && match.path.endsWith("index.ts"))) {
-			preferredIndexBySubdir.set(subdir, match.path);
+
+	for (const entry of entries) {
+		const entryPath = path.join(dir, entry.name);
+		if ((await getDiscoverableEntryKind(entry, entryPath)) !== "directory") continue;
+		for (const resolvedPath of await resolvePackageExtensionPaths(_ctx, entryPath)) {
+			discovered.add(resolvedPath);
 		}
 	}
-	for (const preferredPath of preferredIndexBySubdir.values()) {
-		discovered.add(path.join(dir, preferredPath));
-	}
+
 	return [...discovered];
 }
+
+const PACKAGE_ENTRY_CONTAINER_DIRS = new Set(["src", "dist", "build", "lib"]);
 
 /**
  * Derive a stable extension name from a path.
@@ -578,6 +609,10 @@ export function getExtensionNameFromPath(extensionPath: string): string {
 	if (base === "index.ts" || base === "index.js") {
 		const parts = extensionPath.replace(/\\/g, "/").split("/");
 		const parent = parts[parts.length - 2];
+		const grandparent = parts[parts.length - 3];
+		if (parent && grandparent && PACKAGE_ENTRY_CONTAINER_DIRS.has(parent)) {
+			return grandparent;
+		}
 		return parent ?? base;
 	}
 

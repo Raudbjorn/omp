@@ -881,7 +881,9 @@ function buildAntigravityRequest(
 	}
 	parts.push({ text: prompt });
 
-	const imageConfig = aspectRatio || imageSize ? { aspectRatio: aspectRatio, imageSize: imageSize } : undefined;
+	const geminiImageSize = resolveGeminiImageSize(imageSize);
+	const imageConfig =
+		aspectRatio || geminiImageSize ? { aspectRatio: aspectRatio, imageSize: geminiImageSize } : undefined;
 
 	return {
 		project: projectId,
@@ -1198,10 +1200,11 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				responseModalities: ["IMAGE"],
 			};
 
-			if (params.aspect_ratio || params.image_size) {
+			const geminiImageSize = resolveGeminiImageSize(params.image_size);
+			if (params.aspect_ratio || geminiImageSize) {
 				generationConfig.imageConfig = {
 					aspectRatio: params.aspect_ratio,
-					imageSize: params.image_size,
+					imageSize: geminiImageSize,
 				};
 			}
 

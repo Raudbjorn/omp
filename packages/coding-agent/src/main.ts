@@ -132,7 +132,7 @@ export interface InteractiveModeNotify {
 
 export async function submitInteractiveInput(
 	mode: Pick<InteractiveMode, "markPendingSubmissionStarted" | "finishPendingSubmission" | "showError">,
-	session: Pick<AgentSession, "prompt">,
+	session: Pick<AgentSession, "prompt" | "continueFromContext">,
 	input: SubmittedUserInput,
 ): Promise<void> {
 	if (input.cancelled) {
@@ -144,7 +144,11 @@ export async function submitInteractiveInput(
 		if (!input.started && !mode.markPendingSubmissionStarted(input)) {
 			return;
 		}
-		await session.prompt(input.text, { images: input.images });
+		if (input.continueFromContext) {
+			await session.continueFromContext();
+		} else {
+			await session.prompt(input.text, { images: input.images });
+		}
 	} catch (error: unknown) {
 		const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 		mode.showError(errorMessage);

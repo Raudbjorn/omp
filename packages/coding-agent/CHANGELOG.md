@@ -15,10 +15,14 @@
 
 ### Fixed
 
-- Fixed `local://` URL path leak on Linux where `//` collapsing to `/` produced `local:/path` forms that bypassed the internal protocol handler and leaked as filesystem paths, breaking plan mode file resolution
-- Fixed Tavily web search silently returning off-topic news articles when `--recency` was set. The provider was unconditionally coupling `topic: "news"` to recency, which scoped Tavily's index to news publications and excluded documentation, release notes, GitHub, and all non-news technical content. Technical queries with `--recency` now return the correct corpus.
-- Fixed status-line sanitization to strip OSC, DCS, PM, APC, and 8-bit CSI escape sequences instead of leaving payload fragments in the UI
-- Fixed inline read tool previews to avoid rendering duplicate summary rows above the same code cell
+- Fixed `splice_block` multi-line replacements to replace the exact target region and avoid duplicate braces or duplicated signature lines from bare-anchor `splice` attempts
+- Fixed false-positive “unbalanced” replacement-body warnings caused by braces in regex/string/comment text by skipping those constructs during block scanning
+- Fixed `splice_block` for same-line `(` bodies so inline call sites like `int(port)` can be replaced correctly
+
+### Added
+
+- Added `script` tool for programmatic multi-tool orchestration: write Python that calls registered tools as functions, with subprocess isolation, timeout control, and support for dynamically loaded MCP tools via the `tools` proxy (from [beeemT/oh-my-pi#feat/programmatic-tool-calling](https://github.com/beeemT/oh-my-pi/tree/feat/programmatic-tool-calling) by [@beeemT](https://github.com/beeemT))
+- Added local web terminal access (from [nnk97/oh-my-pi#feat/webterminal](https://github.com/nnk97/oh-my-pi/tree/feat/webterminal) by [@nnk97](https://github.com/nnk97)). `omp --web-terminal` or `/web_terminal` starts a local HTTP/WebSocket server that mirrors the TUI to a browser-based xterm.js client; a QR code is printed so a phone on the same LAN can scan to connect. Configurable via the new Web Terminal settings tab: bind-interface selection, mobile control bar (toggle + height), selectable extra control keys (esc/enter/arrows/ctrl+c).
 
 ## [14.1.3] - 2026-04-17
 
@@ -536,6 +540,7 @@
 - Fixed PR checkout tool to resolve symlinks in worktree paths, ensuring consistent path references in results and metadata
 - Fixed `read` output for file-backed internal URLs like `local://...` to include hashline prefixes in hashline edit mode, preserving usable line refs for follow-up edits
 - Fixed the plan review selector to support the external editor shortcut for opening and updating the current plan from the approval screen
+- Fixed status line dropping git branch name when path is long by shrinking the path segment before dropping other segments
 
 ## [13.18.0] - 2026-04-02
 

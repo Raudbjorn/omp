@@ -153,6 +153,10 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	nvidia: "NVIDIA_API_KEY",
 	nanogpt: "NANO_GPT_API_KEY",
 	"lm-studio": "LM_STUDIO_API_KEY",
+	// ipex-llm and openvino typically run unauthenticated local servers; fall back
+	// to a placeholder token so stream() doesn't throw before the request is made.
+	"ipex-llm": () => $env.IPEX_LLM_API_KEY ?? "ipex-llm-local",
+	openvino: () => $env.OPENVINO_API_KEY ?? "openvino-local",
 	ollama: "OLLAMA_API_KEY",
 	"ollama-cloud": "OLLAMA_CLOUD_API_KEY",
 	"llama.cpp": "LLAMA_CPP_API_KEY",
@@ -210,6 +214,10 @@ export function stream<TApi extends Api>(
 	} else if (model.api === "bedrock-converse-stream") {
 		// Bedrock doesn't have any API keys instead it sources credentials from standard AWS env variables or from given AWS profile.
 		return streamBedrock(model as Model<"bedrock-converse-stream">, context, (options || {}) as BedrockOptions);
+	} else if (model.api === "acp-agent") {
+		// ACP agents authenticate out-of-band (OAuth creds on disk, env vars).
+		// The adapter's probeAuth runs inside streamAcp; no API-key guard here.
+		return streamAcp(model as Model<"acp-agent">, context, (options || {}) as AcpAgentOptions);
 	}
 
 	const apiKey = options?.apiKey || getEnvApiKey(model.provider);

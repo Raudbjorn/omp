@@ -16,7 +16,14 @@ import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { UserMessageComponent } from "../../modes/components/user-message";
 import { theme } from "../../modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "../../modes/types";
-import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
+import {
+	type CustomMessage,
+	type HookMessage,
+	MULTI_BLOCK_COMMAND_MESSAGE_TYPE,
+	MULTI_BLOCK_TEXT_MESSAGE_TYPE,
+	SKILL_PROMPT_MESSAGE_TYPE,
+	type SkillPromptDetails,
+} from "../../session/messages";
 import type { SessionContext } from "../../session/session-manager";
 import { formatBytes, formatDuration } from "../../tools/render-utils";
 
@@ -686,5 +693,15 @@ export class UiHelpers {
 			}
 		}
 		return text.trim();
+	}
+
+	#getCustomMessageText(message: CustomMessage | HookMessage): string {
+		if (typeof message.content === "string") {
+			return message.content;
+		}
+		return message.content
+			.filter((content): content is { type: "text"; text: string } => content.type === "text")
+			.map(content => content.text)
+			.join("");
 	}
 }

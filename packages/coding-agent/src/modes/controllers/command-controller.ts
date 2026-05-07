@@ -430,6 +430,42 @@ export class CommandController {
 		}
 	}
 
+	async handleWebTerminalCommand(): Promise<void> {
+		try {
+			if (!settings.get("webTerminal.enabled")) {
+				this.ctx.showError("Web terminal is disabled in settings.");
+				return;
+			}
+			const existing = getWebTerminalServer();
+			if (existing?.isRunning) {
+				stopWebTerminalServer("Web terminal stopped via /web_terminal");
+				return;
+			}
+			const server = await getOrStartWebTerminalServer({ cwd: this.ctx.sessionManager.getCwd() });
+			const urls = server.urls;
+			const lines = ["Web terminal URLs:"];
+			urls.forEach((url, index) => {
+				lines.push(`  ${url}`);
+				const qr = renderQrCode(url);
+				if (qr.trim().length > 0) {
+					lines.push(qr);
+				}
+				if (index < urls.length - 1) {
+					lines.push("");
+				}
+			});
+			if (server.bindingErrors.length > 0) {
+				lines.push("", "Failed bindings:");
+				for (const error of server.bindingErrors) {
+					lines.push(`  ${error.binding.label} - ${error.error}`);
+				}
+			}
+			this.ctx.showStatus(lines.join("\n"), { dim: false });
+		} catch (error) {
+			this.ctx.showError(`Failed to start web terminal: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
 	async handleSessionCommand(): Promise<void> {
 		const stats = this.ctx.session.getSessionStats();
 		const premiumRequests =

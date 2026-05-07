@@ -1,3 +1,7 @@
+# Danger Pi is a fork of Oh-My-Pi
+
+Read @FORK.md. You **MUST** keep this file up to date as you add and remove features from this codebase.
+
 # Development Rules
 
 ## Default Context
@@ -118,7 +122,7 @@ $`do-stuff ${tmpFile}`.quiet().nothrow();
 
 ### Sleep
 
-**Prefer** `await Bun.sleep(ms)`  
+**Prefer** `await Bun.sleep(ms)`
 **Avoid** `new Promise((resolve) => setTimeout(resolve, ms))`
 
 ### Node Module Imports

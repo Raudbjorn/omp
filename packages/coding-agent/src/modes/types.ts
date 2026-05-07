@@ -35,9 +35,21 @@ export type CompactionQueuedMessage = {
 export type SubmittedUserInput = {
 	text: string;
 	images?: ImageContent[];
+	continueFromContext?: boolean;
 	cancelled: boolean;
 	started: boolean;
 };
+
+/**
+ * Resolved target for a `/skill:` command.
+ *
+ * The map stores only what the input layer needs at invocation time: where the
+ * skill lives on disk and whether native OMP-only body interpolation is allowed.
+ */
+export interface SkillCommandBinding {
+	filePath: string;
+	isNative: boolean;
+}
 
 export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
 

@@ -1500,6 +1500,119 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// ────────────────────────────────────────────────────────────────────────
+	// Context manager (assembler pipeline)
+	// ────────────────────────────────────────────────────────────────────────
+	"contextManager.mode": {
+		type: "enum",
+		values: ["legacy", "shadow", "assembler"] as const,
+		default: "assembler",
+		ui: {
+			tab: "context",
+			label: "Context manager",
+			description:
+				"Active context management strategy (legacy = current, shadow = observe-only assembler, assembler = assembler-managed)",
+			submenu: true,
+		},
+	},
+	"assembler.safetyMarginPercent": {
+		type: "number",
+		default: 5,
+		ui: {
+			tab: "context",
+			label: "Safety margin %",
+			description: "Percentage of context window held as safety reserve (0-100)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.messageBudgetPercent": {
+		type: "number",
+		default: 50,
+		ui: {
+			tab: "context",
+			label: "Message budget %",
+			description: "Guaranteed minimum percentage of allocatable budget for messages (0-100)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.hydrationBudgetPercent": {
+		type: "number",
+		default: 50,
+		ui: {
+			tab: "context",
+			label: "Hydration budget %",
+			description: "Hard cap on hydration as percentage of allocatable budget (0-100)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.hotWindowTurns": {
+		type: "number",
+		default: 4,
+		ui: {
+			tab: "context",
+			label: "Hot window turns",
+			description: "Number of recent turns always kept in full (0-20)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.turnBufferPercent": {
+		type: "number",
+		default: 20,
+		ui: {
+			tab: "context",
+			label: "Turn buffer %",
+			description: "Percentage of context window reserved for current turn (tool calls, results, new messages)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.contextWindowCap": {
+		type: "number",
+		default: 200_000,
+		ui: {
+			tab: "context",
+			label: "Context window cap",
+			description: "Hard upper limit on assembled context tokens regardless of model window (0 = no cap)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+
+	// ────────────────────────────────────────────────────────────────────────
+	// Composer (dynamic system prompt)
+	// ────────────────────────────────────────────────────────────────────────
+	"composer.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			label: "Enable Composer",
+			description: "Compile the system prompt with an LLM at session start instead of using the static template",
+		},
+	},
+	"composer.model": {
+		type: "string",
+		default: "sonnet",
+		ui: {
+			tab: "context",
+			label: "Composer model",
+			description: "Model to use for system prompt compilation (e.g. sonnet, haiku, gpt-4o)",
+		},
+	},
+	"composer.tokenBudget": {
+		type: "number",
+		default: 24000,
+		ui: {
+			tab: "context",
+			label: "Composer token budget",
+			description: "Target size for the compiled system prompt in tokens",
+		},
+	},
+
+	// ────────────────────────────────────────────────────────────────────────
 	// Editing
 	// ────────────────────────────────────────────────────────────────────────
 
@@ -2041,6 +2154,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"async.pollWaitDuration": {
+		type: "enum",
+		values: ["5s", "10s", "30s", "1m", "5m"] as const,
+		default: "30s",
+		ui: {
+			tab: "tools",
+			label: "Poll Wait Duration",
+			description: "How long the poll tool waits for background job updates before returning the current state",
+			submenu: true,
+		},
+	},
+
 	"bash.autoBackground.enabled": {
 		type: "boolean",
 		default: false,
@@ -2443,6 +2568,46 @@ export const SETTINGS_SCHEMA = {
 				{ value: "off", label: "Off", description: "Disable websockets for OpenAI Codex models" },
 				{ value: "on", label: "On", description: "Force websockets for OpenAI Codex models" },
 			],
+		},
+	},
+
+	// ─────────────────────────────────────────────────────────────────────────
+	// Web terminal settings
+	// ─────────────────────────────────────────────────────────────────────────
+	"webTerminal.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "webterm",
+			label: "Web terminal",
+			description: "Enable the web terminal feature",
+		},
+	},
+	"webTerminal.bindings": {
+		type: "array",
+		default: [] as WebTerminalBinding[],
+	},
+	"webTerminal.showExtraControls": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "webterm",
+			label: "Show extra controls",
+			description: "Show mobile-friendly control bar",
+		},
+	},
+	"webTerminal.extraControlKeys": {
+		type: "array",
+		default: ["esc", "enter", "up", "down", "left", "right", "ctrl+c"] as WebTerminalControlKey[],
+	},
+	"webTerminal.extraControlsHeightPx": {
+		type: "number",
+		default: 48,
+		ui: {
+			tab: "webterm",
+			label: "Control bar height",
+			description: "Height of the extra controls bar in pixels",
+			submenu: true,
 		},
 	},
 
