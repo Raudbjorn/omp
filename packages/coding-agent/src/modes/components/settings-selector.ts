@@ -260,7 +260,6 @@ class MultiSelectSubmenu<T> extends Container {
 	}
 
 	handleInput(data: string): void {
-		if (isKeyRelease(data)) return;
 		if (matchesKey(data, "ctrl+s") || data.toLowerCase() === "s") {
 			this.#onSave(this.#getSelectedOptions());
 			return;
@@ -308,6 +307,7 @@ export interface StatusLinePreviewSettings {
 	leftSegments?: StatusLineSegmentId[];
 	rightSegments?: StatusLineSegmentId[];
 	separator?: StatusLineSeparatorStyle;
+	sessionAccent?: boolean;
 }
 
 export interface SettingsCallbacks {
@@ -401,8 +401,8 @@ export class SettingsSelectorComponent extends Container {
 	 * Convert a setting definition to a SettingItem for the UI.
 	 */
 	#defToItem(def: SettingDef): SettingItem | null {
-		// Check condition
-		if (def.type === "boolean" && def.condition && !def.condition()) {
+		// Check condition: applies to every variant — booleans, enums, submenus, text inputs.
+		if (def.condition && !def.condition()) {
 			return null;
 		}
 
@@ -770,9 +770,6 @@ export class SettingsSelectorComponent extends Container {
 	}
 
 	#getBindingInterfaceDisplay(option: WebTerminalBindingOption): { interfaceLabel: string; ipDisplay: string } {
-		if (this.#isWildcardIp(option.ip)) {
-			return { interfaceLabel: "All interfaces", ipDisplay: option.ip };
-		}
 		if (this.#isLocalhostIp(option.ip) || option.isLoopback) {
 			const cleaned = option.interface
 				.replace(/loopback/gi, "")
@@ -796,9 +793,6 @@ export class SettingsSelectorComponent extends Container {
 	}
 
 	#classifyBinding(option: WebTerminalBindingOption): { label: string; isPublic: boolean } {
-		if (this.#isWildcardIp(option.ip)) {
-			return { label: "All interfaces", isPublic: true };
-		}
 		if (this.#isLocalhostIp(option.ip) || option.isLoopback) {
 			return { label: "Localhost", isPublic: false };
 		}
@@ -808,12 +802,8 @@ export class SettingsSelectorComponent extends Container {
 		return { label: "Public", isPublic: true };
 	}
 
-	#isWildcardIp(ip: string): boolean {
-		return ip === "0.0.0.0" || ip === "::";
-	}
-
 	#isLocalhostIp(ip: string): boolean {
-		return ip.startsWith("127.") || ip === "::1";
+		return ip === "0.0.0.0" || ip.startsWith("127.");
 	}
 
 	#isPrivateIp(ip: string): boolean {
@@ -875,6 +865,7 @@ export class SettingsSelectorComponent extends Container {
 			leftSegments: settings.get("statusLine.leftSegments"),
 			rightSegments: settings.get("statusLine.rightSegments"),
 			separator: settings.get("statusLine.separator"),
+			sessionAccent: settings.get("statusLine.sessionAccent"),
 		};
 		this.callbacks.onStatusLinePreview?.(statusLineSettings);
 		this.#updateStatusPreview();

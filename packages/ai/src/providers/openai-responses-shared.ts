@@ -527,24 +527,39 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 			if (response?.usage) {
 				const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
+				const reasoningTokens = response.usage.output_tokens_details?.reasoning_tokens || 0;
 				output.usage = {
 					input: (response.usage.input_tokens || 0) - cachedTokens,
 					output: response.usage.output_tokens || 0,
 					cacheRead: cachedTokens,
 					cacheWrite: 0,
 					totalTokens: response.usage.total_tokens || 0,
+					...(reasoningTokens > 0 ? { reasoningTokens } : {}),
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 				};
 			}
 			calculateCost(model, output.usage);
 			output.stopReason = mapOpenAIResponsesStopReason(response?.status);
+			if (response?.status === "failed" || response?.status === "cancelled") {
+				const error = response?.error ?? (response as any)?.status_details?.error;
+				const details = response?.incomplete_details;
+				const statusDetailsReason = (response as any)?.status_details?.reason;
+				const message = error
+					? `${error.code || "unknown"}: ${error.message || "no message"}`
+					: details?.reason
+						? `incomplete: ${details.reason}`
+						: typeof statusDetailsReason === "string" && statusDetailsReason.length > 0
+							? `status_details: ${statusDetailsReason}`
+							: "Unknown error (no error details in response)";
+				throw new Error(message);
+			}
 			if (output.content.some(block => block.type === "toolCall") && output.stopReason === "stop") {
 				output.stopReason = "toolUse";
 			}
 		} else if (event.type === "error") {
 			throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
 		} else if (event.type === "response.failed") {
-			const error = event.response?.error;
+			const error = event.response?.error ?? (event.response as any)?.status_details?.error;
 			const details = event.response?.incomplete_details;
 			const message = error
 				? `${error.code || "unknown"}: ${error.message || "no message"}`

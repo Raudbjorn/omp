@@ -1,14 +1,6 @@
 // ============================================================================
 // High-level API
 // ============================================================================
-import { refreshAnthropicToken } from "./anthropic";
-import { refreshCursorToken } from "./cursor";
-import { refreshGitHubCopilotToken } from "./github-copilot";
-import { refreshGitLabDuoToken } from "./gitlab-duo";
-import { refreshAntigravityToken } from "./google-antigravity";
-import { refreshGoogleCloudToken } from "./google-gemini-cli";
-import { refreshKimiToken } from "./kimi";
-import { refreshOpenAICodexToken } from "./openai-codex";
 import type {
 	OAuthCredentials,
 	OAuthProvider,
@@ -59,8 +51,6 @@ export {
 } from "./cursor";
 // Devin (API key)
 export { loginDevin } from "./devin";
-// Fireworks (API key)
-export { loginFireworks } from "./fireworks";
 // GitHub Copilot
 export {
 	getGitHubCopilotBaseUrl,
@@ -135,6 +125,7 @@ export { loginXiaomi } from "./xiaomi";
 export { loginZai } from "./zai";
 // ZenMux (API key)
 export { loginZenMux } from "./zenmux";
+
 
 const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
@@ -223,6 +214,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "upb",
+		name: "UPB AI-Chat (Universit\u00e4t Paderborn)",
+		available: true,
+	},
+	{
 		id: "lm-studio",
 		name: "LM Studio (Local OpenAI-compatible)",
 		available: true,
@@ -260,6 +256,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "xiaomi",
 		name: "Xiaomi MiMo",
+		available: true,
+	},
+	{
+		id: "mimo-code",
+		name: "Xiaomi MiMo Coding Plan",
 		available: true,
 	},
 	{
@@ -400,39 +401,53 @@ export async function refreshOAuthToken(
 
 	let newCredentials: OAuthCredentials;
 	switch (provider) {
-		case "anthropic":
+		case "anthropic": {
+			const { refreshAnthropicToken } = await import("./anthropic");
 			newCredentials = await refreshAnthropicToken(credentials.refresh);
 			break;
-		case "github-copilot":
+		}
+		case "github-copilot": {
+			const { refreshGitHubCopilotToken } = await import("./github-copilot");
 			newCredentials = await refreshGitHubCopilotToken(credentials.refresh, credentials.enterpriseUrl);
 			break;
-		case "google-gemini-cli":
+		}
+		case "google-gemini-cli": {
+			const { refreshGoogleCloudToken } = await import("./google-gemini-cli");
 			if (!credentials.projectId) {
 				throw new Error("Google Cloud credentials missing projectId");
 			}
 			newCredentials = await refreshGoogleCloudToken(credentials.refresh, credentials.projectId);
 			break;
-		case "google-antigravity":
+		}
+		case "google-antigravity": {
+			const { refreshAntigravityToken } = await import("./google-antigravity");
 			if (!credentials.projectId) {
 				throw new Error("Antigravity credentials missing projectId");
 			}
 			newCredentials = await refreshAntigravityToken(credentials.refresh, credentials.projectId);
 			break;
-		case "openai-codex":
+		}
+		case "openai-codex": {
+			const { refreshOpenAICodexToken } = await import("./openai-codex");
 			newCredentials = await refreshOpenAICodexToken(credentials.refresh);
 			break;
-		case "kimi-code":
+		}
+		case "kimi-code": {
+			const { refreshKimiToken } = await import("./kimi");
 			newCredentials = await refreshKimiToken(credentials.refresh);
 			break;
-		case "kilo":
-			newCredentials = credentials;
-			break;
-		case "gitlab-duo":
+		}
+		case "gitlab-duo": {
+			const { refreshGitLabDuoToken } = await import("./gitlab-duo");
 			newCredentials = await refreshGitLabDuoToken(credentials);
 			break;
-		case "cursor":
+		}
+		case "cursor": {
+			const { refreshCursorToken } = await import("./cursor");
 			newCredentials = await refreshCursorToken(credentials.refresh);
 			break;
+		}
+		case "kilo":
 		case "perplexity":
 		case "huggingface":
 		case "opencode-zen":

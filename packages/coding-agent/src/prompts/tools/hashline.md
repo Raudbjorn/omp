@@ -1,70 +1,83 @@
-Applies precise file edits using full anchors from `read` output (for example `160sr`).
+Your patch language is a compact, line-anchored edit format.
 
-Read the file first. Copy the full anchors exactly as shown by `read`.
+A patch contains one or more file sections. The first non-blank line of every edit section **MUST** be `@PATH`.
+Operations reference lines in the file by their line number and hash, called "Anchors", e.g. `5th`, `123ab`.
+You **MUST** copy them verbatim from the latest output for the file you're editing.
 
-<operations>
-**Top level**
-- `edits` — array of edit entries
-- `path` (optional) — default file path used when an entry omits its own `path`. Lets you share the path across many edits in one request.
+This format is purely textual. The tool has NO awareness of language, indentation, brackets, fences, or table widths. You are responsible for emitting valid syntax in your replacements/insertions.
 
-**Edit entry**: `{ path?, loc, content }`
-- `path` — file path (omit to fall back to the request-level `path`)
-- `loc` — where to apply the edit (see below)
-- `content` — replacement/inserted lines (`string[]`, one element per line; `null` to delete)
+<ops>
+@PATH            header: subsequent ops apply to PATH
+< ANCHOR         insert lines BEFORE the anchored line (or BOF); payload follows as `{{hsep}}TEXT` lines
++ ANCHOR         insert lines AFTER  the anchored line (or EOF); payload follows as `{{hsep}}TEXT` lines
+- A..B           delete the line range (inclusive); `- A` for one line
+= A..B           replace the range with payload `{{hsep}}TEXT` lines, or with one blank line if no payload follows
+</ops>
 
-**`loc` values**
-- `"append"` / `"prepend"` — insert at end/start of file
-- `{ append: "123th" }` / `{ prepend: "123th" }` — insert after/before anchored line
-- `{ range: { pos: "123th", end: "123th" } }` — replace inclusive range `pos..end` with new content (set `pos == end` for single-line replace)
-</operations>
+<rules>
+- Every line of inserted/replacement content **MUST** be emitted as a payload line starting with `{{hsep}}`.
+- `{{hsep}}` is syntax, not content. The inserted text begins after the first `{{hsep}}`; use a bare `{{hsep}}` to insert a blank line.
+- `< A` inserts before line A; `+ A` inserts after line A. `< BOF` / `+ BOF` both prepend; `< EOF` / `+ EOF` both append.
+- `= A..B` replaces the inclusive range with the following payload lines. `= A` (or `= A..B`) with no payload blanks the range to a single empty line.
+- `- A..B` deletes the inclusive range; omit `..B` for one line.
+</rules>
+
+<case file="a.ts">
+{{hline 1 "const DEF = \"guest\";"}}
+{{hline 2 ""}}
+{{hline 3 "export function label(name) {"}}
+{{hline 4 "\tconst clean = name || DEF;"}}
+{{hline 5 "\treturn clean.trim();"}}
+{{hline 6 "}"}}
+</case>
 
 <examples>
-All examples below reference the same file:
+# Replace one line (preserve the leading tab from the original)
+@a.ts
+= {{hrefr 5}}
+{{hsep}}	return clean.trim().toUpperCase();
 
-```ts title="a.ts"
-{{hline  1 "// @ts-ignore"}}
-{{hline  2 "const timeout = 5000;"}}
-{{hline  3 "const tag = \"DO NOT SHIP\";"}}
-{{hline  4 ""}}
-{{hline  5 "function alpha() {"}}
-{{hline  6 "\tlog();"}}
-{{hline  7 "}"}}
-{{hline  8 ""}}
-{{hline  9 "function beta() {"}}
-{{hline 10 "\t// TODO: remove after migration"}}
-{{hline 11 "\tlegacy();"}}
-{{hline 12 "\ttry {"}}
-{{hline 13 "\t\treturn parse(data);"}}
-{{hline 14 "\t} catch (err) {"}}
-{{hline 15 "\t\tconsole.error(err);"}}
-{{hline 16 "\t\treturn null;"}}
-{{hline 17 "\t}"}}
-{{hline 18 "}"}}
-```
+# Replace a contiguous range with multiple lines
+@a.ts
+= {{hrefr 3}}..{{hrefr 6}}
+{{hsep}}export function label(name: string): string {
+{{hsep}}	const clean = (name || DEF).trim();
+{{hsep}}	return clean.length === 0 ? DEF : clean.toUpperCase();
+{{hsep}}}
 
-# Replace a block body
-Replace only the catch body. Do not target the shared boundary line `} catch (err) {`.
-`{edits:[{path:"a.ts",loc:{range:{pos:{{href 15 "\t\tconsole.error(err);"}},end:{{href 16 "\t\treturn null;"}}}},content:["\t\tif (isEnoent(err)) return null;","\t\tthrow err;"]}]}`
-# Replace whole block including closing brace
-Replace `alpha`'s entire body including the closing `}`. `end` **MUST** be {{href 7 "}"}} because `content` includes `}`.
-`{edits:[{path:"a.ts",loc:{range:{pos:{{href 6 "\tlog();"}},end:{{href 7 "}"}}}},content:["\tvalidate();","\tlog();","}"]}]}`
-**Wrong**: `end: {{href 6 "\tlog();"}}` — line 7 (`}`) survives AND content emits `}`, producing two closing braces.
-# Replace one line
-Single-line replace uses `pos == end`.
-`{edits:[{path:"a.ts",loc:{range:{pos:{{href 2 "const timeout = 5000;"}},end:{{href 2 "const timeout = 5000;"}}}},content:["const timeout = 30_000;"]}]}`
-# Delete a range
-`{edits:[{path:"a.ts",loc:{range:{pos:{{href 10 "\t// TODO: remove after migration"}},end:{{href 11 "\tlegacy();"}}}},content:null}]}`
-# Insert before a sibling
-When adding a sibling declaration, prefer `prepend` on the next declaration.
-`{edits:[{path:"a.ts",loc:{prepend:{{href 9 "function beta() {"}}},content:["function gamma() {","\tvalidate();","}",""]}]}`
+# Insert BEFORE a line
+@a.ts
+< {{hrefr 5}}
+{{hsep}}	const debug = false;
+
+# Insert AFTER a line
+@a.ts
++ {{hrefr 4}}
+{{hsep}}	if (clean.length === 0) return DEF;
+
+# Append WITHIN a line
+@a.ts
++ {{hrefr 4}}{{hsep}} // first run
+
+# Append to end of file
+@a.ts
++ EOF
+{{hsep}}export const done = true;
+
+# Delete a single line
+@a.ts
+- {{hrefr 2}}
+
+# Blank a line in place (no payload required)
+@a.ts
+= {{hrefr 2}}
 </examples>
 
 <critical>
-- Make the minimum exact edit.
-- Copy the full anchors exactly as shown by `read/grep` (for example `160sr`, not just `sr`).
-- `range` requires both `pos` and `end`.
-- **Closing-delimiter check**: when your replacement `content` ends with a closing delimiter (`}`, `*/`, `)`, `]`), compare it against the line immediately after `end` in the file. If they match, extend `end` to include that line — otherwise the original delimiter survives and `content` adds a second copy.
-- For a range, replace only the body or the whole range — don't split range boundaries.
-- `content` must be literal file content with matching indentation. If the file uses tabs, use real tabs.
-- You **MUST NOT** use this tool to reformat or clean up unrelated code — use project-specific linters or code formatters instead.
+- Always copy anchors exactly from tool output, but **NEVER** include line content after the `{{hsep}}` separator in the op line.
+- Only emit changed lines. Do not restate unchanged context as payload.
+- Every inserted/replacement content line **MUST** start with `{{hsep}}`; raw content lines are invalid.
+- Do not write unified diff syntax (`@@`, `-OLD`, `+NEW`).
+- To replace a block, use one `= A..B` op followed by all replacement `{{hsep}}TEXT` payload lines.
+- `= A..B` deletes the range; payload is what's written. If a payload edge line already exists immediately outside `A..B`, widen the range to cover it — otherwise it duplicates.
 </critical>

@@ -581,8 +581,13 @@ export class TUI extends Container {
 		});
 	}
 
-	requestFullRender(_clear = false): void {
-		this.requestRender(true);
+	requestFullRender(clear = false): void {
+		this.#previousLines = [];
+		this.#previousWidth = clear ? -1 : 0;
+		this.#cursorRow = 0;
+		this.#hardwareCursorRow = 0;
+		this.#maxLinesRendered = 0;
+		this.requestRender();
 	}
 
 	#handleInput(data: string): void {

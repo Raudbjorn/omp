@@ -8,11 +8,11 @@
 import {
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
 	extractRetryDelay,
-	getAntigravityHeaders,
+	getAntigravityUserAgent,
 	getGeminiCliHeaders,
-	refreshAntigravityToken,
-	refreshGoogleCloudToken,
 } from "@oh-my-pi/pi-ai";
+import { refreshAntigravityToken } from "@oh-my-pi/pi-ai/utils/oauth/google-antigravity";
+import { refreshGoogleCloudToken } from "@oh-my-pi/pi-ai/utils/oauth/google-gemini-cli";
 import { getAgentDbPath } from "@oh-my-pi/pi-utils";
 import { AgentStorage } from "../../../session/agent-storage";
 import type { SearchCitation, SearchResponse, SearchSource } from "../../../web/search/types";
@@ -248,7 +248,7 @@ async function callGeminiSearch(
 	usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
 }> {
 	const endpoints = auth.isAntigravity ? ANTIGRAVITY_ENDPOINT_FALLBACKS : [DEFAULT_ENDPOINT];
-	const headers = auth.isAntigravity ? getAntigravityHeaders() : getGeminiCliHeaders();
+	const headers = auth.isAntigravity ? { "User-Agent": getAntigravityUserAgent() } : getGeminiCliHeaders();
 
 	const requestMetadata = auth.isAntigravity
 		? {

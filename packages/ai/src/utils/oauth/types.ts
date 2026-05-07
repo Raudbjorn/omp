@@ -30,6 +30,7 @@ export type OAuthProvider =
 	| "openvino"
 	| "minimax-code"
 	| "minimax-code-cn"
+	| "mimo-code"
 	| "moonshot"
 	| "nvidia"
 	| "nanogpt"

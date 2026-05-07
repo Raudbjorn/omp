@@ -1,4 +1,3 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
 import * as path from "node:path";
 import * as url from "node:url";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -96,32 +95,11 @@ export class WebTerminalServer {
 	#urls: string[] = [];
 	#url = "";
 	#callbacks: WebTerminalServerCallbacks | null = null;
-	#authToken: string;
 
-	private constructor(assets: Map<string, WebTerminalAsset>, port: number, cwd: string, authToken: string) {
+	private constructor(assets: Map<string, WebTerminalAsset>, port: number, cwd: string) {
 		this.#assets = assets;
 		this.#port = port;
 		this.#cwd = cwd;
-		this.#authToken = authToken;
-	}
-
-	#timingSafeEqualToken(candidate: string | null | undefined): boolean {
-		if (!candidate) return false;
-		const a = Buffer.from(this.#authToken);
-		const b = Buffer.from(candidate);
-		if (a.length !== b.length) return false;
-		return timingSafeEqual(a, b);
-	}
-
-	#isAllowedOrigin(origin: string, bindingId: string): boolean {
-		try {
-			const originUrl = new URL(origin);
-			const binding = this.#bindings.get(bindingId);
-			if (!binding) return false;
-			return originUrl.hostname === binding.ip && originUrl.port === String(this.#port);
-		} catch {
-			return false;
-		}
 	}
 
 	static async start(
@@ -130,9 +108,8 @@ export class WebTerminalServer {
 	): Promise<WebTerminalServer> {
 		const port = options.port ?? DEFAULT_PORT;
 		const cwd = options.cwd ?? process.cwd();
-		const authToken = randomBytes(24).toString("base64url");
 		const assets = await buildAssets();
-		const instance = new WebTerminalServer(assets, port, cwd, authToken);
+		const instance = new WebTerminalServer(assets, port, cwd);
 		const callbacks = options.callbacks ?? cachedCallbacks;
 		if (callbacks) {
 			instance.setCallbacks(callbacks);
@@ -178,10 +155,6 @@ export class WebTerminalServer {
 
 	get port(): number {
 		return this.#port;
-	}
-
-	get authToken(): string {
-		return this.#authToken;
 	}
 
 	setCwd(cwd: string): void {
@@ -235,9 +208,7 @@ export class WebTerminalServer {
 		this.#bindingErrors = failures;
 
 		const activeBindings = bindings.filter(binding => this.#servers.has(binding.id));
-		this.#urls = activeBindings.map(
-			binding => `http://${binding.ip}:${this.#port}/?t=${encodeURIComponent(this.#authToken)}`,
-		);
+		this.#urls = activeBindings.map(binding => `http://${binding.ip}:${this.#port}`);
 		this.#url = this.#urls[0] ?? "";
 	}
 
@@ -299,20 +270,10 @@ export class WebTerminalServer {
 		if (requestUrl.pathname === "/favicon.ico") {
 			return new Response(null, { status: 204 });
 		}
-		const providedToken = requestUrl.searchParams.get("t");
-		if (!this.#timingSafeEqualToken(providedToken)) {
-			logger.warn("Web terminal request rejected: invalid or missing token", { path: requestUrl.pathname });
-			return new Response("Unauthorized.", { status: 401 });
-		}
 		if (requestUrl.pathname === "/ws") {
 			logger.debug("Web terminal websocket upgrade requested", { url: req.url });
 			if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
 				return new Response("Expected WebSocket upgrade.", { status: 400 });
-			}
-			const origin = req.headers.get("origin");
-			if (origin !== null && !this.#isAllowedOrigin(origin, bindingId)) {
-				logger.warn("Web terminal websocket rejected: cross-origin", { origin });
-				return new Response("Forbidden.", { status: 403 });
 			}
 			if (!this.#canAcceptClient()) {
 				logger.warn("Web terminal websocket rejected (already active)");
@@ -342,7 +303,7 @@ export class WebTerminalServer {
 		if (asset.contentType === "text/html") {
 			const config = getWebTerminalClientConfig();
 			const configScript = `<script>window.__OMP_WEB_TERMINAL_CONFIG=${JSON.stringify(config).replace(/</g, "\\u003c")};</script>`;
-			content = content.replace(/<script>window\.__OMP_WEB_TERMINAL_CONFIG=.*?;<\/script>/, () => configScript);
+			content = content.replace(/<script>window\.__OMP_WEB_TERMINAL_CONFIG=.*?;<\/script>/, configScript);
 		}
 
 		return new Response(content, {
@@ -636,7 +597,7 @@ async function buildAssets(): Promise<Map<string, WebTerminalAsset>> {
 	const css = await Bun.file(cssPath).text();
 	const clientConfig = getWebTerminalClientConfig();
 	const configScript = `<script>window.__OMP_WEB_TERMINAL_CONFIG=${JSON.stringify(clientConfig).replace(/</g, "\\u003c")};</script>`;
-	const htmlWithConfig = html.replace("</head>", () => `${configScript}</head>`);
+	const htmlWithConfig = html.replace("</head>", `${configScript}</head>`);
 	const xtermCssPath = resolveModulePath("@xterm/xterm/css/xterm.css");
 	const xtermCss = await Bun.file(xtermCssPath).text();
 

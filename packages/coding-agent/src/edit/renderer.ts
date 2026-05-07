@@ -28,8 +28,8 @@ import { Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../
 import type { EditMode } from "../utils/edit-mode";
 import type { VimToolDetails } from "../vim/types";
 import type { DiffError, DiffResult } from "./diff";
-import { expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
-import type { Operation, PatchEditEntry } from "./modes/patch";
+import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
+import type { Operation } from "./modes/patch";
 import type { PerFileDiffPreview } from "./streaming";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -106,8 +106,12 @@ type EditRenderEntry = {
 	op?: Operation;
 };
 
+interface HashlineInputRenderSummary {
+	entries: Array<{ path: string }>;
+}
+
 interface ApplyPatchRenderSummary {
-	entries: PatchEditEntry[];
+	entries: ApplyPatchEntry[];
 	error?: string;
 }
 
@@ -305,8 +309,56 @@ function getCallPreview(
 }
 
 const MISSING_APPLY_PATCH_END_ERROR = "The last line of the patch must be '*** End Patch'";
+const HL_INPUT_HEADER_PREFIX = "@";
 
-function getApplyPatchRenderSummary(args: EditRenderArgs, isPartial: boolean): ApplyPatchRenderSummary | undefined {
+function normalizeHashlineInputPreviewPath(rawPath: string): string {
+	const trimmed = rawPath.trim();
+	if (trimmed.length < 2) return trimmed;
+	const first = trimmed[0];
+	const last = trimmed[trimmed.length - 1];
+	if ((first === '"' || first === "'") && first === last) {
+		return trimmed.slice(1, -1);
+	}
+	return trimmed;
+}
+
+function parseHashlineInputPreviewHeader(line: string): string | null {
+	if (!line.startsWith(HL_INPUT_HEADER_PREFIX)) return null;
+	const body = line.slice(HL_INPUT_HEADER_PREFIX.length).trim();
+	const previewPath = normalizeHashlineInputPreviewPath(body);
+	return previewPath.length > 0 ? previewPath : null;
+}
+
+function getHashlineInputPaths(input: string): string[] {
+	const stripped = input.startsWith("\uFEFF") ? input.slice(1) : input;
+	const paths: string[] = [];
+	for (const rawLine of stripped.split("\n")) {
+		const line = rawLine.replace(/\r$/, "");
+		const path = parseHashlineInputPreviewHeader(line);
+		if (path) paths.push(path);
+	}
+	return paths;
+}
+
+function getHashlineInputRenderSummary(
+	args: EditRenderArgs,
+	editMode: EditMode | undefined,
+): HashlineInputRenderSummary | undefined {
+	if (editMode !== "hashline" || typeof args.input !== "string") {
+		return undefined;
+	}
+	return { entries: getHashlineInputPaths(args.input).map(path => ({ path })) };
+}
+
+function getApplyPatchRenderSummary(
+	args: EditRenderArgs,
+	isPartial: boolean,
+	editMode: EditMode | undefined,
+): ApplyPatchRenderSummary | undefined {
+	if (editMode !== undefined && editMode !== "apply_patch") {
+		return undefined;
+	}
+
 	if (typeof args.input !== "string") {
 		return undefined;
 	}
@@ -397,8 +449,10 @@ export const editToolRenderer = {
 		}
 
 		const editArgs = args as EditRenderArgs;
-		const applyPatchSummary = getApplyPatchRenderSummary(editArgs, options.isPartial);
+		const hashlineInputSummary = getHashlineInputRenderSummary(editArgs, renderContext?.editMode);
+		const applyPatchSummary = getApplyPatchRenderSummary(editArgs, options.isPartial, renderContext?.editMode);
 		const firstApplyPatchEntry = applyPatchSummary?.entries[0];
+		const firstHashlineInputEntry = hashlineInputSummary?.entries[0];
 		// Extract path from first edit entry when top-level path is absent (new schema)
 		const firstEdit = Array.isArray(editArgs.edits) && editArgs.edits.length > 0 ? editArgs.edits[0] : undefined;
 		const rawPath =
@@ -406,6 +460,7 @@ export const editToolRenderer = {
 			editArgs.path ||
 			filePathFromEditEntry(firstEdit?.path) ||
 			getPartialJsonEditPath(editArgs) ||
+			firstHashlineInputEntry?.path ||
 			firstApplyPatchEntry?.path ||
 			"";
 		const rename = editArgs.rename || firstEdit?.rename || firstEdit?.move || firstApplyPatchEntry?.rename;
@@ -415,9 +470,10 @@ export const editToolRenderer = {
 			options?.spinnerFrame !== undefined ? formatStatusIcon("running", uiTheme, options.spinnerFrame) : "";
 		let text = `${formatTitle(getOperationTitle(op), uiTheme)} ${spinner ? `${spinner} ` : ""}${description}`;
 		// Show file count hint for multi-file edits
-		const fileCount = Array.isArray(editArgs.edits)
-			? countEditFiles(editArgs.edits)
-			: (applyPatchSummary?.entries.length ?? 0);
+		let fileCount = hashlineInputSummary?.entries.length ?? applyPatchSummary?.entries.length ?? 0;
+		if (Array.isArray(editArgs.edits)) {
+			fileCount = countEditFiles(editArgs.edits);
+		}
 		if (fileCount > 1) {
 			text += uiTheme.fg("dim", ` (+${fileCount - 1} more)`);
 		}
@@ -465,11 +521,14 @@ function renderSingleFileResult(
 	const details = result.details;
 	const isError = result.isError ?? (details && "isError" in details ? details.isError : false);
 	const firstEdit = args?.edits?.[0];
+	const hashlineInputSummary = getHashlineInputRenderSummary(args ?? {}, options.renderContext?.editMode);
+	const firstHashlineInputEntry = hashlineInputSummary?.entries[0];
 	const rawPath =
 		args?.file_path ||
 		args?.path ||
 		filePathFromEditEntry(firstEdit?.path) ||
 		(details && "path" in details ? details.path : "") ||
+		firstHashlineInputEntry?.path ||
 		"";
 	const op = args?.op || firstEdit?.op || details?.op;
 	const rename = args?.rename || firstEdit?.rename || firstEdit?.move || details?.move;

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -41,15 +42,6 @@ function tryShellEscapedPath(filePath: string): string {
 function fileExists(filePath: string): boolean {
 	try {
 		fs.accessSync(filePath, fs.constants.F_OK);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-	try {
-		await fs.promises.access(filePath, fs.constants.F_OK);
 		return true;
 	} catch {
 		return false;
@@ -157,6 +149,27 @@ export function resolveToCwd(filePath: string, cwd: string): string {
 	return path.resolve(cwd, expanded);
 }
 
+export function formatPathRelativeToCwd(
+	filePath: string,
+	cwd: string,
+	options: { trailingSlash?: boolean } = {},
+): string {
+	const resolvedCwd = path.resolve(cwd);
+	const normalized = normalizeLocalScheme(filePath);
+	if (isInternalUrlPath(normalized)) {
+		return normalized;
+	}
+	const expanded = expandPath(normalized);
+	const resolvedPath = path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(cwd, expanded);
+	const relative = path.relative(resolvedCwd, resolvedPath);
+	const isWithinCwd = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+	let displayPath = normalizePosixPath(isWithinCwd ? relative || "." : resolvedPath);
+	if (options.trailingSlash && displayPath !== "." && !displayPath.endsWith("/")) {
+		displayPath += "/";
+	}
+	return displayPath;
+}
+
 /**
  * Strip matching surrounding double quotes from a path string.
  * Common when users paste quoted paths from Windows Explorer or shell copy-paste.
@@ -189,11 +202,17 @@ export interface ParsedFindPattern {
 	hasGlob: boolean;
 }
 
+export interface ResolvedSearchTarget {
+	basePath: string;
+	glob?: string;
+}
+
 export interface ResolvedMultiSearchPath {
 	basePath: string;
 	glob?: string;
 	scopePath: string;
 	exactFilePaths?: string[];
+	targets?: ResolvedSearchTarget[];
 }
 
 export interface ResolvedMultiFindPattern {
@@ -273,77 +292,6 @@ export function combineSearchGlobs(prefixGlob?: string, suffixGlob?: string): st
 	return `${normalizedPrefix}/${normalizedSuffix}`;
 }
 
-type TopLevelSeparator = "comma" | "whitespace";
-
-function splitTopLevel(value: string, separator: TopLevelSeparator): string[] {
-	const parts: string[] = [];
-	let current = "";
-	let braceDepth = 0;
-	let bracketDepth = 0;
-	let parenDepth = 0;
-	let quote: '"' | "'" | undefined;
-	let escaped = false;
-
-	const pushCurrent = () => {
-		const normalized = current.trim();
-		if (normalized.length > 0) {
-			parts.push(normalized);
-		}
-		current = "";
-	};
-
-	for (const char of value) {
-		if (escaped) {
-			current += char;
-			escaped = false;
-			continue;
-		}
-
-		if (char === "\\") {
-			current += char;
-			escaped = true;
-			continue;
-		}
-
-		if (quote) {
-			current += char;
-			if (char === quote) {
-				quote = undefined;
-			}
-			continue;
-		}
-
-		if (char === '"' || char === "'") {
-			quote = char;
-			current += char;
-			continue;
-		}
-
-		if (char === "{") braceDepth += 1;
-		else if (char === "}" && braceDepth > 0) braceDepth -= 1;
-		else if (char === "[") bracketDepth += 1;
-		else if (char === "]" && bracketDepth > 0) bracketDepth -= 1;
-		else if (char === "(") parenDepth += 1;
-		else if (char === ")" && parenDepth > 0) parenDepth -= 1;
-
-		const topLevel = braceDepth === 0 && bracketDepth === 0 && parenDepth === 0;
-		const isWhitespace = /\s/.test(char);
-		if (topLevel && separator === "comma" && char === ",") {
-			pushCurrent();
-			continue;
-		}
-		if (topLevel && separator === "whitespace" && isWhitespace) {
-			pushCurrent();
-			continue;
-		}
-
-		current += char;
-	}
-
-	pushCurrent();
-	return parts.length > 1 ? parts : [value.trim()];
-}
-
 function normalizePosixPath(filePath: string): string {
 	return filePath.replace(/\\/g, "/");
 }
@@ -381,125 +329,22 @@ function findCommonBasePath(paths: string[]): string {
 	return joined || path.parse(path.resolve(paths[0])).root;
 }
 
-function toScopeDisplay(items: string[]): string {
-	return items.map(item => normalizePosixPath(item)).join(", ");
+function toScopeDisplay(items: string[], cwd: string): string {
+	return items
+		.map(item =>
+			formatPathRelativeToCwd(item, cwd, {
+				trailingSlash: item.endsWith("/") || item.endsWith("\\"),
+			}),
+		)
+		.join(", ");
 }
 
-function looksLikeDelimitedPathToken(token: string): boolean {
-	return (
-		TOP_LEVEL_INTERNAL_URL_PREFIXES.some(prefix => token.startsWith(prefix)) ||
-		token.startsWith(".") ||
-		token.startsWith("/") ||
-		token.startsWith("~") ||
-		token.startsWith("@") ||
-		token.includes("/") ||
-		token.includes("\\") ||
-		hasGlobPathChars(token) ||
-		/\.[^./\\]+$/.test(token)
-	);
-}
-
-async function areDelimitedTokensResolvable(
-	tokens: string[],
-	cwd: string,
-	parseBasePath: (value: string) => string,
-	allowBareExistingTokens: boolean,
-): Promise<boolean> {
-	for (const token of tokens) {
-		if (TOP_LEVEL_INTERNAL_URL_PREFIXES.some(prefix => token.startsWith(prefix))) {
-			return false;
-		}
-
-		if (!allowBareExistingTokens && !looksLikeDelimitedPathToken(token)) {
-			// Bare names like "packages" don't look like path tokens syntactically,
-			// but may still be valid directory names. Check existence before rejecting.
-			const resolvedExactPath = resolveToCwd(token, cwd);
-			if (!(await pathExists(resolvedExactPath))) {
-				return false;
-			}
-			continue;
-		}
-
-		const basePath = parseBasePath(token);
-		const resolvedBasePath = resolveToCwd(basePath, cwd);
-		if (await pathExists(resolvedBasePath)) {
-			continue;
-		}
-
-		if (!allowBareExistingTokens) {
-			return false;
-		}
-
-		const resolvedExactPath = resolveToCwd(token, cwd);
-		if (!(await pathExists(resolvedExactPath))) {
-			return false;
-		}
-	}
-
-	return true;
-}
-
-async function filterResolvableTokens(
-	tokens: string[],
-	cwd: string,
-	parseBasePath: (value: string) => string,
-): Promise<string[]> {
-	const out: string[] = [];
-	for (const token of tokens) {
-		if (TOP_LEVEL_INTERNAL_URL_PREFIXES.some(prefix => token.startsWith(prefix))) continue;
-		const basePath = parseBasePath(token);
-		const resolvedBasePath = resolveToCwd(basePath, cwd);
-		if (await pathExists(resolvedBasePath)) {
-			out.push(token);
-			continue;
-		}
-		const resolvedExactPath = resolveToCwd(token, cwd);
-		if (await pathExists(resolvedExactPath)) {
-			out.push(token);
-		}
-	}
-	return out;
-}
-
-async function splitDelimitedSearchInput(
-	rawInput: string,
-	cwd: string,
-	parseBasePath: (value: string) => string,
-): Promise<string[] | undefined> {
-	const trimmed = rawInput.trim();
-	if (!trimmed) return undefined;
-
-	const resolvedExactPath = resolveToCwd(trimmed, cwd);
-	if (await pathExists(resolvedExactPath)) {
-		return undefined;
-	}
-
-	const commaSeparated = splitTopLevel(trimmed, "comma");
-	if (commaSeparated.length > 1) {
-		const resolvable = await filterResolvableTokens(commaSeparated, cwd, parseBasePath);
-		if (resolvable.length >= 1) {
-			return [...new Set(resolvable)];
-		}
-	}
-
-	const whitespaceSeparated = splitTopLevel(trimmed, "whitespace");
-	if (
-		whitespaceSeparated.length > 1 &&
-		(await areDelimitedTokensResolvable(whitespaceSeparated, cwd, parseBasePath, false))
-	) {
-		return [...new Set(whitespaceSeparated)];
-	}
-
-	return undefined;
-}
-
-export async function resolveMultiSearchPath(
-	rawPath: string,
+async function resolveSearchPathItems(
+	pathItems: string[],
 	cwd: string,
 	suffixGlob?: string,
 ): Promise<ResolvedMultiSearchPath | undefined> {
-	const pathItems = await splitDelimitedSearchInput(rawPath, cwd, value => parseSearchPath(value).basePath);
-	if (!pathItems || pathItems.length < 1) {
+	if (pathItems.length < 1) {
 		return undefined;
 	}
 
@@ -529,21 +374,37 @@ export async function resolveMultiSearchPath(
 		}
 		return relativeBasePath === "." ? path.basename(item.absoluteBasePath) : relativeBasePath;
 	});
+	const rootPath = path.parse(commonBasePath).root;
+	const isDegenerateRoot = commonBasePath === rootPath && parsedItems.length > 1;
+	const targets = isDegenerateRoot
+		? parsedItems.map(item => ({
+				basePath: item.absoluteBasePath,
+				glob: item.parsedPath.glob ? combineSearchGlobs(item.parsedPath.glob, suffixGlob) : suffixGlob,
+			}))
+		: undefined;
 
 	return {
 		basePath: commonBasePath,
 		glob: buildBraceUnion(combinedPatterns),
-		scopePath: toScopeDisplay(pathItems),
+		scopePath: toScopeDisplay(pathItems, cwd),
 		exactFilePaths: allExactFiles ? parsedItems.map(item => item.absoluteBasePath) : undefined,
+		targets,
 	};
 }
 
-export async function resolveMultiFindPattern(
-	rawPattern: string,
+export async function resolveExplicitSearchPaths(
+	pathItems: string[],
+	cwd: string,
+	suffixGlob?: string,
+): Promise<ResolvedMultiSearchPath | undefined> {
+	return resolveSearchPathItems([...new Set(pathItems)], cwd, suffixGlob);
+}
+
+async function resolveFindPatternItems(
+	patternItems: string[],
 	cwd: string,
 ): Promise<ResolvedMultiFindPattern | undefined> {
-	const patternItems = await splitDelimitedSearchInput(rawPattern, cwd, value => parseFindPattern(value).basePath);
-	if (!patternItems || patternItems.length <= 1) {
+	if (patternItems.length <= 1) {
 		return undefined;
 	}
 
@@ -571,8 +432,69 @@ export async function resolveMultiFindPattern(
 	return {
 		basePath: commonBasePath,
 		globPattern: buildBraceUnion(combinedPatterns) ?? "**/*",
-		scopePath: toScopeDisplay(patternItems),
+		scopePath: toScopeDisplay(patternItems, cwd),
 	};
+}
+
+export async function resolveExplicitFindPatterns(
+	patternItems: string[],
+	cwd: string,
+): Promise<ResolvedMultiFindPattern | undefined> {
+	return resolveFindPatternItems([...new Set(patternItems)], cwd);
+}
+
+/**
+ * Result of partitioning a list of user-supplied paths/globs into entries whose
+ * base directory currently exists on disk versus those that do not.
+ *
+ * Used by multi-path tools (search, find, ast_grep, ast_edit) to tolerate one
+ * or more missing entries in a multi-path call: the surviving entries should
+ * still be searched, with the missing entries surfaced as a non-fatal warning.
+ */
+export interface PartitionedPaths {
+	/** Raw input strings whose resolved base path exists. */
+	valid: string[];
+	/** Raw input strings whose resolved base path is missing (ENOENT). */
+	missing: string[];
+}
+
+/**
+ * Stat each input's base path concurrently; return entries split by existence.
+ *
+ * `splitter` is expected to be {@link parseFindPattern} or
+ * {@link parseSearchPath}: both return a `basePath` field that this helper
+ * resolves against `cwd` and stats. ENOENT is the only swallowed error — every
+ * other stat failure (permission, IO, etc.) propagates so callers do not silently
+ * skip paths that exist but are unreadable.
+ *
+ * Order of `valid` and `missing` follows the input order, so callers can rely
+ * on `valid[0]` matching the first surviving user-supplied entry.
+ */
+export async function partitionExistingPaths(
+	items: string[],
+	cwd: string,
+	splitter: (item: string) => { basePath: string },
+): Promise<PartitionedPaths> {
+	const settled = await Promise.all(
+		items.map(async item => {
+			const { basePath } = splitter(item);
+			const absoluteBasePath = resolveToCwd(basePath, cwd);
+			try {
+				await fs.promises.stat(absoluteBasePath);
+				return { item, exists: true } as const;
+			} catch (err) {
+				if (isEnoent(err)) return { item, exists: false } as const;
+				throw err;
+			}
+		}),
+	);
+	const valid: string[] = [];
+	const missing: string[] = [];
+	for (const entry of settled) {
+		if (entry.exists) valid.push(entry.item);
+		else missing.push(entry.item);
+	}
+	return { valid, missing };
 }
 
 export function resolveReadPath(filePath: string, cwd: string): string {

@@ -52,13 +52,22 @@ export class InputController {
 					this.ctx.session.isCompacting ||
 					this.ctx.session.isGeneratingHandoff ||
 					this.ctx.session.isBashRunning ||
-					this.ctx.session.isPythonRunning ||
+					this.ctx.session.isEvalRunning ||
 					this.ctx.autoCompactionLoader ||
 					this.ctx.retryLoader ||
 					this.ctx.autoCompactionEscapeHandler ||
 					this.ctx.retryEscapeHandler,
 			);
 		this.ctx.editor.onEscape = () => {
+			if (this.ctx.loopModeEnabled) {
+				this.ctx.pauseLoop();
+				if (this.ctx.session.isStreaming) {
+					void this.ctx.session.abort();
+				} else {
+					this.ctx.cancelPendingSubmission();
+				}
+				return;
+			}
 			if (this.ctx.hasActiveBtw() && this.ctx.handleBtwEscape()) {
 				return;
 			}
@@ -73,8 +82,8 @@ export class InputController {
 				this.ctx.editor.setText("");
 				this.ctx.isBashMode = false;
 				this.ctx.updateEditorBorderColor();
-			} else if (this.ctx.session.isPythonRunning) {
-				this.ctx.session.abortPython();
+			} else if (this.ctx.session.isEvalRunning) {
+				this.ctx.session.abortEval();
 			} else if (this.ctx.isPythonMode) {
 				this.ctx.editor.setText("");
 				this.ctx.isPythonMode = false;
@@ -311,11 +320,43 @@ export class InputController {
 			}
 
 			// Handle skill commands (/skill:name [args])
-			if (isSingleLineSubmission && !safePasteIntent && text.startsWith("/skill:")) {
-				const skillOutcome = await this.#handleSkillCommand(text, {
-					addToHistory: true,
-				});
-				if (skillOutcome !== "not-handled") {
+			if (text.startsWith("/skill:")) {
+				const spaceIndex = text.indexOf(" ");
+				const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+				const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+				const skillEntry = this.ctx.skillCommands?.get(commandName);
+				const skillPath = skillEntry?.filePath;
+				if (skillPath) {
+					this.ctx.editor.addToHistory(text);
+					this.ctx.editor.setText("");
+					try {
+						const content = await Bun.file(skillPath).text();
+						const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
+						const metaLines = [`Skill: ${skillPath}`];
+						if (args) {
+							metaLines.push(`User: ${args}`);
+						}
+						const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
+						const skillName = commandName.slice("skill:".length);
+						const details: SkillPromptDetails = {
+							name: skillName || commandName,
+							path: skillPath,
+							args: args || undefined,
+							lineCount: body ? body.split("\n").length : 0,
+						};
+						await this.ctx.session.promptCustomMessage(
+							{
+								customType: SKILL_PROMPT_MESSAGE_TYPE,
+								content: message,
+								display: true,
+								details,
+								attribution: "user",
+							},
+							{ streamingBehavior: "followUp" },
+						);
+					} catch (err) {
+						this.ctx.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
+					}
 					return;
 				}
 			}
@@ -338,12 +379,18 @@ export class InputController {
 				const isExcluded = text.startsWith("$$");
 				const code = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (code) {
-					const handled = await executePythonShortcut(this.ctx, code, isExcluded, { historyEntry: text });
-					if (!handled) {
+					if (this.ctx.session.isEvalRunning) {
+						this.ctx.showWarning("A Python execution is already running. Press Esc to cancel it first.");
 						this.ctx.editor.setText(text);
 					}
 					return;
 				}
+			}
+
+			// While loop mode is on, every user-typed prompt becomes the new loop
+			// prompt that auto-resubmits after each yield.
+			if (this.ctx.loopModeEnabled) {
+				this.ctx.loopPrompt = text;
 			}
 
 			// Queue input during compaction
@@ -363,10 +410,15 @@ export class InputController {
 				this.ctx.editor.setText("");
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
 				this.ctx.pendingImages = [];
-				await this.ctx.session.prompt(text, {
-					streamingBehavior: "steer",
-					images,
-				});
+				// Record the signature so the queued message's eventual delivery
+				// (a user-role `message_start` event) leaves any draft the user has
+				// typed since queuing intact. Same protection as #783, applied to
+				// the streaming/queue path.
+				await this.ctx.withLocalSubmission(
+					text,
+					() => this.ctx.session.prompt(text, { streamingBehavior: "steer", images }),
+					{ imageCount: images?.length ?? 0 },
+				);
 				this.ctx.updatePendingMessagesDisplay();
 				this.ctx.ui.requestRender();
 				return;
@@ -377,7 +429,24 @@ export class InputController {
 			this.ctx.flushPendingBashComponents();
 
 			// Generate session title on first message
-			this.#maybeGenerateSessionTitle(text);
+			const hasUserMessages = this.ctx.session.messages.some((m: AgentMessage) => m.role === "user");
+			if (!hasUserMessages && !this.ctx.sessionManager.getSessionName() && !$env.PI_NO_TITLE) {
+				const registry = this.ctx.session.modelRegistry;
+				generateSessionTitle(text, registry, this.ctx.settings, this.ctx.session.sessionId, this.ctx.session.model)
+					.then(async title => {
+						if (title) {
+							const applied = await this.ctx.sessionManager.setSessionName(title, "auto");
+							if (applied) {
+								setSessionTerminalTitle(
+									this.ctx.sessionManager.getSessionName()!,
+									this.ctx.sessionManager.getCwd(),
+								);
+								this.ctx.updateEditorBorderColor();
+							}
+						}
+					})
+					.catch(() => {});
+			}
 
 			if (this.ctx.onInputCallback) {
 				// Include any pending images from clipboard paste
@@ -490,7 +559,9 @@ export class InputController {
 		if (this.ctx.session.isStreaming) {
 			this.ctx.editor.addToHistory(text);
 			this.ctx.editor.setText("");
-			await this.ctx.session.prompt(text, { streamingBehavior: "followUp" });
+			await this.ctx.withLocalSubmission(text, () =>
+				this.ctx.session.prompt(text, { streamingBehavior: "followUp" }),
+			);
 			this.ctx.updatePendingMessagesDisplay();
 			this.ctx.ui.requestRender();
 			return;
@@ -499,10 +570,11 @@ export class InputController {
 		// Not streaming — just submit normally
 		this.ctx.editor.addToHistory(text);
 		this.ctx.editor.setText("");
-		await this.ctx.session.prompt(text);
+		await this.ctx.withLocalSubmission(text, () => this.ctx.session.prompt(text));
 	}
 
 	restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
+		this.ctx.locallySubmittedUserSignatures.clear();
 		const { steering, followUp } = this.ctx.session.clearQueue();
 		const allQueued = [...steering, ...followUp];
 		if (allQueued.length === 0) {

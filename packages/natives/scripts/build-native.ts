@@ -17,13 +17,6 @@ const isCrossCompile = Boolean(crossTarget) || targetPlatform !== process.platfo
 
 type X64Variant = "modern" | "baseline";
 
-interface SafeHostZigBuildConfig {
-	wrapperPath: string;
-	realZigPath: string;
-	target: string;
-	cpu: string;
-}
-
 let configuredVariant: X64Variant | undefined;
 if (configuredVariantRaw) {
 	if (targetArch !== "x64") {
@@ -46,36 +39,8 @@ function resolveEffectiveVariant(): X64Variant | null {
 const effectiveVariant = resolveEffectiveVariant();
 const variantSuffix = effectiveVariant ? `-${effectiveVariant}` : "";
 
-function resolveLinuxHostZigTarget(): "x86_64-linux-gnu" | "x86_64-linux-musl" {
-	const report = process.report?.getReport?.() as { header?: { glibcVersionRuntime?: string } } | undefined;
-	return report?.header?.glibcVersionRuntime ? "x86_64-linux-gnu" : "x86_64-linux-musl";
-}
-
-function resolveSafeHostZigBuildConfig(): SafeHostZigBuildConfig | null {
-	if (isCrossCompile || targetArch !== "x64" || !effectiveVariant) {
-		return null;
-	}
-
-	if (targetPlatform !== "linux" && targetPlatform !== "darwin") {
-		return null;
-	}
-
-	const realZigPath = Bun.env.ZIG ?? Bun.which("zig");
-	if (!realZigPath) {
-		return null;
-	}
-
-	return {
-		wrapperPath: path.join(import.meta.dir, "zig-safe-wrapper.ts"),
-		realZigPath,
-		target: targetPlatform === "linux" ? resolveLinuxHostZigTarget() : "x86_64-macos",
-		cpu: effectiveVariant === "modern" ? "x86_64_v3" : "x86_64_v2",
-	};
-}
-
-// Keep host-built Zig dependencies on the same ISA floor as the Rust addon.
-// zlob's build.rs defaults host builds to `native`, which can leak newer CPU
-// instructions into release artifacts even when Rust itself targets x86-64-v2/v3.
+// Pin Rust target-cpu so x64 baseline/modern variants get a reproducible ISA floor
+// instead of inheriting the host CPU when RUSTFLAGS is unset.
 if (!isCrossCompile && !Bun.env.RUSTFLAGS) {
 	if (effectiveVariant === "modern") {
 		Bun.env.RUSTFLAGS = "-C target-cpu=x86-64-v3";
@@ -129,32 +94,6 @@ async function installBinary(src: string, dest: string): Promise<void> {
 		}
 	}
 }
-async function patchGeneratedIndexLoader(): Promise<void> {
-	const indexPath = path.join(nativeDir, "index.js");
-	let content = await Bun.file(indexPath).text();
-	const embeddedLoadPatch = "let embeddedAddon = null;\n";
-	if (!content.includes(embeddedLoadPatch)) {
-		content = content.replace(/const \{ embeddedAddon \} = require\("\.\/embedded-addon"\);\n/, embeddedLoadPatch);
-	}
-	const lazyLoadPatch = [
-		"if (isCompiledBinary) {",
-		"\ttry {",
-		'\t\t({ embeddedAddon } = require("./embedded-addon"));',
-		"\t} catch {",
-		"\t\tembeddedAddon = null;",
-		"\t}",
-		"}",
-		"",
-	].join("\n");
-	if (!content.includes(lazyLoadPatch)) {
-		content = content.replace(
-			/(const isCompiledBinary =[\s\S]*?__filename\.includes\("%7EBUN"\);\n)/,
-			`$1\n${lazyLoadPatch}`,
-		);
-	}
-	await Bun.write(indexPath, content);
-}
-
 async function resolveBuiltAddonPath(outputDir: string, canonicalFilename: string): Promise<string> {
 	// napi-rs 3.x emits `${binaryName}.${platformArchABI}.node` where
 	// platformArchABI is e.g. `darwin-x64`, `linux-x64-gnu`, `win32-x64-msvc`,
@@ -196,43 +135,20 @@ function resolveBuildOutputDirPrefix(profileLabel: string): string {
 }
 
 async function installGeneratedBindings(outputDir: string): Promise<void> {
-	for (const filename of ["index.js", "index.d.ts"]) {
-		const sourcePath = path.join(outputDir, filename);
-		const destPath = path.join(nativeDir, filename);
-		try {
-			await fs.copyFile(sourcePath, destPath);
-		} catch (err) {
-			const errno = err as NodeJS.ErrnoException;
-			if (errno.code === "ENOENT") {
-				const destExists = await Bun.file(destPath).exists();
-				if (destExists) {
-					continue;
-				}
-			}
-			const message = err instanceof Error ? err.message : String(err);
-			throw new Error(`Failed to install generated ${filename}: ${message}`);
-		}
+	const sourcePath = path.join(outputDir, "index.d.ts");
+	const destPath = path.join(nativeDir, "index.d.ts");
+	try {
+		await fs.copyFile(sourcePath, destPath);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		throw new Error(`Failed to install generated index.d.ts: ${message}`);
 	}
-}
-
-function resolveManagedCargoTargetDir(profileLabel: string): string | null {
-	if (Bun.env.CARGO_TARGET_DIR) {
-		return null;
-	}
-
-	if (useLocalProfile) {
-		return null;
-	}
-
-	const buildTarget = crossTarget ?? `${targetPlatform}-${targetArch}`;
-	const variantLabel = effectiveVariant ?? "default";
-	return path.join(repoRoot, "target", "napi-build", `${buildTarget}-${variantLabel}-${profileLabel}`);
 }
 
 const isCI = Boolean(Bun.env.CI);
 const useLocalProfile = !isCI && !isCrossCompile;
 const profileLabel = useLocalProfile ? "local" : "ci";
-const profileSuffix = useLocalProfile ? " (local)" : " (ci)";
+const profileSuffix = ` (${profileLabel})`;
 
 const buildOutputDirPrefix = resolveBuildOutputDirPrefix(profileLabel);
 
@@ -275,23 +191,6 @@ if (!napiBin) {
 	throw new Error("Could not locate @napi-rs/cli `napi` binary in node_modules/.bin");
 }
 
-const managedCargoTargetDir = resolveManagedCargoTargetDir(profileLabel);
-if (managedCargoTargetDir) {
-	Bun.env.CARGO_TARGET_DIR = managedCargoTargetDir;
-	console.log(`Using isolated CARGO_TARGET_DIR: ${managedCargoTargetDir}`);
-}
-
-const safeHostZigBuildConfig = resolveSafeHostZigBuildConfig();
-if (safeHostZigBuildConfig) {
-	Bun.env.ZIG = safeHostZigBuildConfig.wrapperPath;
-	Bun.env.PI_NATIVE_REAL_ZIG = safeHostZigBuildConfig.realZigPath;
-	Bun.env.PI_NATIVE_ZIG_TARGET = safeHostZigBuildConfig.target;
-	Bun.env.PI_NATIVE_ZIG_CPU = safeHostZigBuildConfig.cpu;
-	console.log(
-		`Pinning host Zig CPU contract: ${safeHostZigBuildConfig.target} ${safeHostZigBuildConfig.cpu} (${effectiveVariant})`,
-	);
-}
-
 try {
 	const buildResult = await $`${napiBin} ${napiArgs}`.nothrow();
 	if (buildResult.exitCode !== 0) {
@@ -307,7 +206,6 @@ try {
 	await installGeneratedBindings(buildOutputDir);
 
 	await generateEnumExports();
-	await patchGeneratedIndexLoader();
 
 	console.log("Build complete.");
 } finally {

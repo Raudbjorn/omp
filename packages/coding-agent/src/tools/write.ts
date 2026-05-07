@@ -6,7 +6,6 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { unzipSync, zipSync } from "fflate";
 import { stripHashlinePrefixes } from "../edit";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { createLspWritethrough, type FileDiagnosticsResult, type WritethroughCallback, writethroughNoop } from "../lsp";
@@ -19,6 +18,7 @@ import { parseArchivePathCandidates } from "./archive-reader";
 import { assertEditableFile } from "./auto-generated-guard";
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import { type OutputMeta, outputMeta } from "./output-meta";
+import { formatPathRelativeToCwd } from "./path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "./plan-mode-guard";
 import {
 	formatDiagnostics,
@@ -42,6 +42,12 @@ import {
 } from "./sqlite-reader";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
+
+let fflateModulePromise: Promise<typeof import("fflate")> | undefined;
+async function loadFflate(): Promise<typeof import("fflate")> {
+	if (!fflateModulePromise) fflateModulePromise = import("fflate");
+	return fflateModulePromise;
+}
 
 const writeSchema = Type.Object({
 	path: Type.String({ description: "file path", examples: ["src/new.ts"] }),
@@ -212,7 +218,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	}
 
 	async #writeArchiveEntry(
-		displayPath: string,
 		content: string,
 		resolvedArchivePath: ResolvedArchiveWritePath,
 	): Promise<AgentToolResult<WriteToolDetails>> {
@@ -229,6 +234,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			if (resolvedArchivePath.exists) {
 				try {
 					const bytes = await Bun.file(resolvedArchivePath.absolutePath).bytes();
+					const { unzipSync } = await loadFflate();
 					const existing = unzipSync(new Uint8Array(bytes));
 					for (const [entryPath, data] of Object.entries(existing)) {
 						zipEntries[entryPath.replace(/\\/g, "/")] = data;
@@ -241,6 +247,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			zipEntries[resolvedArchivePath.archiveSubPath] = new TextEncoder().encode(content);
 
 			try {
+				const { zipSync } = await loadFflate();
 				const zipBuffer = zipSync(zipEntries);
 				await Bun.write(resolvedArchivePath.absolutePath, zipBuffer);
 			} catch (error) {
@@ -278,8 +285,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		}
 
 		invalidateFsScanAfterWrite(resolvedArchivePath.absolutePath);
+		const outputPath = `${formatPathRelativeToCwd(resolvedArchivePath.absolutePath, this.session.cwd)}:${
+			resolvedArchivePath.archiveSubPath
+		}`;
 		return {
-			content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${displayPath}` }],
+			content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${outputPath}` }],
 			details: {},
 		};
 	}
@@ -426,7 +436,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					op: resolvedArchivePath.exists ? "update" : "create",
 				});
 
-				const archiveResult = await this.#writeArchiveEntry(path, cleanContent, resolvedArchivePath);
+				const archiveResult = await this.#writeArchiveEntry(cleanContent, resolvedArchivePath);
 				if (stripped) {
 					const firstText = archiveResult.content.find(
 						(block): block is { type: "text"; text: string } =>
@@ -468,7 +478,8 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const diagnostics = await this.#writethrough(absolutePath, cleanContent, signal, undefined, batchRequest);
 			invalidateFsScanAfterWrite(absolutePath);
 
-			let resultText = `Successfully wrote ${cleanContent.length} bytes to ${path}`;
+			const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
+			let resultText = `Successfully wrote ${cleanContent.length} bytes to ${displayPath}`;
 			if (stripped) {
 				resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
 			}

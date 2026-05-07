@@ -18,10 +18,10 @@ import type { ExitPlanModeDetails, LspStartupServerInfo } from "../tools";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import type { CustomEditor } from "./components/custom-editor";
+import type { EvalExecutionComponent } from "./components/eval-execution";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
-import type { PythonExecutionComponent } from "./components/python-execution";
 import type { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import type { OAuthManualInputManager } from "./oauth-manual-input";
@@ -54,7 +54,6 @@ export interface SkillCommandBinding {
 export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
 
 export type TodoItem = {
-	id: string;
 	content: string;
 	status: TodoStatus;
 	details?: string;
@@ -62,7 +61,6 @@ export type TodoItem = {
 };
 
 export type TodoPhase = {
-	id: string;
 	name: string;
 	tasks: TodoItem[];
 };
@@ -98,6 +96,8 @@ export interface InteractiveModeContext {
 	toolOutputExpanded: boolean;
 	todoExpanded: boolean;
 	planModeEnabled: boolean;
+	loopModeEnabled: boolean;
+	loopPrompt?: string;
 	planModePlanFilePath?: string;
 	hideThinkingBlock: boolean;
 	pendingImages: ImageContent[];
@@ -105,8 +105,8 @@ export interface InteractiveModeContext {
 	pendingTools: Map<string, ToolExecutionHandle>;
 	pendingBashComponents: BashExecutionComponent[];
 	bashComponent: BashExecutionComponent | undefined;
-	pendingPythonComponents: PythonExecutionComponent[];
-	pythonComponent: PythonExecutionComponent | undefined;
+	pendingPythonComponents: EvalExecutionComponent[];
+	pythonComponent: EvalExecutionComponent | undefined;
 	isPythonMode: boolean;
 	streamingComponent: AssistantMessageComponent | undefined;
 	streamingMessage: AssistantMessage | undefined;
@@ -118,6 +118,7 @@ export interface InteractiveModeContext {
 	unsubscribe?: () => void;
 	onInputCallback?: (input: SubmittedUserInput) => void;
 	optimisticUserMessageSignature: string | undefined;
+	locallySubmittedUserSignatures: Set<string>;
 	lastSigintTime: number;
 	lastEscapeTime: number;
 	shutdownRequested: boolean;
@@ -127,7 +128,7 @@ export interface InteractiveModeContext {
 	lastStatusSpacer: Spacer | undefined;
 	lastStatusText: Text | undefined;
 	fileSlashCommands: Set<string>;
-	skillCommands: Map<string, SkillCommandBinding>;
+	skillCommands: Map<string, { filePath: string; isNative: boolean }>;
 	oauthManualInput: OAuthManualInputManager;
 	todoPhases: TodoPhase[];
 
@@ -163,13 +164,26 @@ export interface InteractiveModeContext {
 	cancelPendingSubmission(): boolean;
 	markPendingSubmissionStarted(input: SubmittedUserInput): boolean;
 	finishPendingSubmission(input: SubmittedUserInput): void;
+	/**
+	 * Marks a locally-initiated user submission so the eventual `message_start`
+	 * event for that user message does not clobber the editor draft (see #783).
+	 * Returns a dispose function that removes the signature; call it on
+	 * delivery failure so a retry can be re-marked cleanly.
+	 */
+	recordLocalSubmission(text: string, imageCount?: number): () => void;
+	/**
+	 * Wraps `fn` in a `recordLocalSubmission` marker that is automatically
+	 * removed if `fn` rejects. Use this for the common case where a thrown
+	 * delivery error should leave the signature set untouched.
+	 */
+	withLocalSubmission<T>(text: string, fn: () => Promise<T>, options?: { imageCount?: number }): Promise<T>;
 	isKnownSlashCommand(text: string): boolean;
 	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void;
 	renderSessionContext(
 		sessionContext: SessionContext,
 		options?: { updateFooter?: boolean; populateHistory?: boolean },
 	): void;
-	renderInitialMessages(): void;
+	renderInitialMessages(prebuiltContext?: SessionContext): void;
 	getUserMessageText(message: Message): string;
 	findLastAssistantMessage(): AssistantMessage | undefined;
 	extractAssistantText(message: AssistantMessage): string;
@@ -191,6 +205,7 @@ export interface InteractiveModeContext {
 	handleChangelogCommand(showFull?: boolean): Promise<void>;
 	handleHotkeysCommand(): void;
 	handleToolsCommand(): void;
+	handleContextCommand(): void;
 	handleDumpCommand(): void;
 	handleDebugTranscriptCommand(): Promise<void>;
 	handleClearCommand(): Promise<void>;
@@ -250,6 +265,9 @@ export interface InteractiveModeContext {
 	openExternalEditor(): void;
 	registerExtensionShortcuts(): void;
 	handlePlanModeCommand(initialPrompt?: string): Promise<void>;
+	handleLoopCommand(): Promise<void>;
+	disableLoopMode(): void;
+	pauseLoop(): void;
 	handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void>;
 
 	// Hook UI methods

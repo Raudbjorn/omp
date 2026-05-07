@@ -23,15 +23,23 @@ import {
 import type { ToolSession } from ".";
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
-import { normalizePathLikeInput, parseFindPattern, resolveMultiFindPattern, resolveToCwd } from "./path-utils";
+import {
+	formatPathRelativeToCwd,
+	normalizePathLikeInput,
+	parseFindPattern,
+	partitionExistingPaths,
+	resolveExplicitFindPatterns,
+	resolveToCwd,
+} from "./path-utils";
 import { formatCount, formatEmptyMessage, formatErrorMessage, PREVIEW_LIMITS } from "./render-utils";
 import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const findSchema = Type.Object({
-	pattern: Type.String({
-		description: "glob including search path",
-		examples: ["src/**/*.ts", "lib/*.json", "apps/,packages/", "*.ts"],
+	paths: Type.Array(Type.String({ description: "glob including search path" }), {
+		minItems: 1,
+		description: "globs including search paths",
+		examples: [["src/**/*.ts"], ["lib/*.json"], ["apps/", "packages/"], ["*.ts"]],
 	}),
 	hidden: Type.Optional(Type.Boolean({ description: "include hidden files", default: true })),
 	limit: Type.Optional(Type.Number({ description: "max results", default: 1000 })),
@@ -52,6 +60,10 @@ export interface FindToolDetails {
 	files?: string[];
 	truncated?: boolean;
 	error?: string;
+	/** User-supplied paths whose base directory was missing on disk. The tool
+	 * skipped these and continued with the surviving entries; surfaced as a
+	 * non-fatal warning in the renderer and in the model-facing text. */
+	missingPaths?: string[];
 }
 
 /**
@@ -98,20 +110,32 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 		onUpdate?: AgentToolUpdateCallback<FindToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<FindToolDetails>> {
-		const { pattern, limit, hidden } = params;
+		const { paths, limit, hidden } = params;
 
 		return untilAborted(signal, async () => {
-			const formatScopePath = (targetPath: string): string => {
-				const relative = path.relative(this.session.cwd, targetPath).replace(/\\/g, "/");
-				return relative.length === 0 ? "." : relative;
-			};
-			const normalizedPattern = normalizePathLikeInput(pattern).replace(/\\/g, "/");
-			if (!normalizedPattern) {
-				throw new ToolError("Pattern must not be empty");
+			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
+			const normalizedPatterns = paths.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
+			if (normalizedPatterns.some(pattern => pattern.length === 0)) {
+				throw new ToolError("`paths` must contain non-empty globs or paths");
 			}
 
-			const multiPattern = await resolveMultiFindPattern(normalizedPattern, this.session.cwd);
-			const parsedPattern = multiPattern ? null : parseFindPattern(normalizedPattern);
+			// Tolerate missing entries in a multi-path call: skip ones whose base
+			// directory is gone, and only error if every entry is missing. Single
+			// missing path keeps the original ENOENT semantics — the user explicitly
+			// asked about that one path, so silent empty results would be misleading.
+			let missingPaths: string[] = [];
+			let effectivePatterns = normalizedPatterns;
+			if (normalizedPatterns.length > 1 && !this.#customOps) {
+				const partition = await partitionExistingPaths(normalizedPatterns, this.session.cwd, parseFindPattern);
+				if (partition.valid.length === 0) {
+					throw new ToolError(`Path not found: ${partition.missing.join(", ")}`);
+				}
+				effectivePatterns = partition.valid;
+				missingPaths = partition.missing;
+			}
+
+			const multiPattern = await resolveExplicitFindPatterns(effectivePatterns, this.session.cwd);
+			const parsedPattern = multiPattern ? null : parseFindPattern(effectivePatterns[0] ?? ".");
 			const hasGlob = multiPattern ? true : (parsedPattern?.hasGlob ?? false);
 			const globPattern = multiPattern?.globPattern ?? parsedPattern?.globPattern ?? "**/*";
 			const searchPath = resolveToCwd(multiPattern?.basePath ?? parsedPattern?.basePath ?? ".", this.session.cwd);
@@ -120,7 +144,6 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			if (searchPath === "/") {
 				throw new ToolError("Searching from root directory '/' is not allowed");
 			}
-
 			const rawLimit = limit ?? DEFAULT_LIMIT;
 			const effectiveLimit = Number.isFinite(rawLimit) ? Math.floor(rawLimit) : Number.NaN;
 			if (!Number.isFinite(effectiveLimit) || effectiveLimit <= 0) {
@@ -132,26 +155,34 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			const formatMatchPath = (matchPath: string, fileType?: natives.FileType): string => {
 				const hadTrailingSlash = matchPath.endsWith("/") || matchPath.endsWith("\\");
 				const absolutePath = path.isAbsolute(matchPath) ? matchPath : path.resolve(searchPath, matchPath);
-				let relativePath = path.relative(this.session.cwd, absolutePath).replace(/\\/g, "/");
-				if (relativePath.length === 0) {
-					relativePath = ".";
-				}
-				if ((fileType === natives.FileType.Dir || hadTrailingSlash) && !relativePath.endsWith("/")) {
-					relativePath += "/";
-				}
-				return relativePath;
+				return formatPathRelativeToCwd(absolutePath, this.session.cwd, {
+					trailingSlash: fileType === natives.FileType.Dir || hadTrailingSlash,
+				});
 			};
+
+			const missingPathsNote =
+				missingPaths.length > 0 ? `Skipped missing paths: ${missingPaths.join(", ")}` : undefined;
 
 			const buildResult = (files: string[]): AgentToolResult<FindToolDetails> => {
 				if (files.length === 0) {
-					const details: FindToolDetails = { scopePath, fileCount: 0, files: [], truncated: false };
-					return toolResult(details).text("No files found matching pattern").done();
+					const details: FindToolDetails = {
+						scopePath,
+						fileCount: 0,
+						files: [],
+						truncated: false,
+						missingPaths: missingPaths.length > 0 ? missingPaths : undefined,
+					};
+					const text = missingPathsNote
+						? `No files found matching pattern\n${missingPathsNote}`
+						: "No files found matching pattern";
+					return toolResult(details).text(text).done();
 				}
 
 				const listLimit = applyListLimit(files, { limit: effectiveLimit });
 				const limited = listLimit.items;
 				const limitMeta = listLimit.meta;
-				const rawOutput = limited.join("\n");
+				const baseOutput = limited.join("\n");
+				const rawOutput = missingPathsNote ? `${baseOutput}\n\n${missingPathsNote}` : baseOutput;
 				const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 
 				const details: FindToolDetails = {
@@ -161,6 +192,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 					truncated: Boolean(limitMeta.resultLimit || truncation.truncated),
 					resultLimitReached: limitMeta.resultLimit?.reached,
 					truncation: truncation.truncated ? truncation : undefined,
+					missingPaths: missingPaths.length > 0 ? missingPaths : undefined,
 				};
 
 				const resultBuilder = toolResult(details)
@@ -294,7 +326,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 // =============================================================================
 
 interface FindRenderArgs {
-	pattern: string;
+	paths?: string[];
 	limit?: number;
 }
 
@@ -307,7 +339,7 @@ export const findToolRenderer = {
 		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
 
 		const text = renderStatusLine(
-			{ icon: "pending", title: "Find", description: args.pattern || "*", meta },
+			{ icon: "pending", title: "Find", description: args.paths?.join(", ") || "*", meta },
 			uiTheme,
 		);
 		return new Text(text, 0, 0);
@@ -344,7 +376,7 @@ export const findToolRenderer = {
 				{
 					icon: "success",
 					title: "Find",
-					description: args?.pattern,
+					description: args?.paths?.join(", "),
 					meta: [formatCount("file", lines.length)],
 				},
 				uiTheme,
@@ -381,18 +413,24 @@ export const findToolRenderer = {
 		const truncated = Boolean(details?.truncated || truncation || details?.resultLimitReached || limits?.resultLimit);
 		const files = details?.files ?? [];
 
+		const missingPaths = details?.missingPaths ?? [];
+		const missingNote =
+			missingPaths.length > 0 ? uiTheme.fg("warning", `skipped missing: ${missingPaths.join(", ")}`) : undefined;
+
 		if (fileCount === 0) {
 			const header = renderStatusLine(
-				{ icon: "warning", title: "Find", description: args?.pattern, meta: ["0 files"] },
+				{ icon: "warning", title: "Find", description: args?.paths?.join(", "), meta: ["0 files"] },
 				uiTheme,
 			);
-			return new Text([header, formatEmptyMessage("No files found", uiTheme)].join("\n"), 0, 0);
+			const lines = [header, formatEmptyMessage("No files found", uiTheme)];
+			if (missingNote) lines.push(missingNote);
+			return new Text(lines.join("\n"), 0, 0);
 		}
 		const meta: string[] = [formatCount("file", fileCount)];
 		if (details?.scopePath) meta.push(`in ${details.scopePath}`);
 		if (truncated) meta.push(uiTheme.fg("warning", "truncated"));
 		const header = renderStatusLine(
-			{ icon: truncated ? "warning" : "success", title: "Find", description: args?.pattern, meta },
+			{ icon: truncated ? "warning" : "success", title: "Find", description: args?.paths?.join(", "), meta },
 			uiTheme,
 		);
 
@@ -407,6 +445,7 @@ export const findToolRenderer = {
 		if (truncationReasons.length > 0) {
 			extraLines.push(uiTheme.fg("warning", `truncated: ${truncationReasons.join(", ")}`));
 		}
+		if (missingNote) extraLines.push(missingNote);
 
 		let cached: RenderCache | undefined;
 		return {

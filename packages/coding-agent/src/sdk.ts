@@ -6,7 +6,7 @@ import {
 	INTENT_FIELD,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
-import type { Message, Model } from "@oh-my-pi/pi-ai";
+import type { Message, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import {
 	getOpenAICodexTransportDetails,
 	prewarmOpenAICodexResponses,
@@ -62,6 +62,7 @@ import {
 import { ToolResultStore } from "./context/recall/tool-result-store";
 import { dangerPiBundledExtensions } from "./danger-pi/extensions";
 import { initializeWithSettings } from "./discovery";
+import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./eval/py/executor";
 import { TtsrManager } from "./export/ttsr";
 import {
 	type CustomCommandsLoadResult,
@@ -86,19 +87,20 @@ import {
 } from "./extensibility/extensions";
 import { loadSkills as loadSkillsInternal, type Skill, type SkillWarning } from "./extensibility/skills";
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
+import type { HindsightSessionState } from "./hindsight/state";
 import {
 	AgentProtocolHandler,
 	ArtifactProtocolHandler,
 	InternalUrlRouter,
 	JobsProtocolHandler,
 	LocalProtocolHandler,
+	type LocalProtocolOptions,
 	McpProtocolHandler,
 	MemoryProtocolHandler,
 	PiProtocolHandler,
 	RuleProtocolHandler,
 	SkillProtocolHandler,
 } from "./internal-urls";
-import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./ipy/executor";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import { discoverAndLoadMCPTools, type MCPManager, type MCPToolsLoadResult } from "./mcp";
 import {
@@ -107,7 +109,8 @@ import {
 	selectDiscoverableMCPToolNamesByServer,
 	summarizeDiscoverableMCPTools,
 } from "./mcp/discoverable-tool-metadata";
-import { buildMemoryToolDeveloperInstructions, getMemoryRoot, startMemoryStartupTask } from "./memories";
+import { getMemoryRoot } from "./memories";
+import { resolveMemoryBackend } from "./memory-backend";
 import { compileSystemPrompt } from "./prompts/composer/compile";
 import composerInvariants from "./prompts/composer/invariants.md" with { type: "text" };
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
@@ -126,6 +129,8 @@ import { SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
+	type AgentsMdSearch,
+	buildAgentsMdSearch,
 	buildSystemPrompt as buildSystemPromptInternal,
 	buildSystemPromptToolMetadata,
 	loadProjectContextFiles as loadContextFilesInternal,
@@ -138,21 +143,22 @@ import {
 	createTools,
 	discoverStartupLspServers,
 	EditTool,
+	EvalTool,
 	FindTool,
-	GrepTool,
 	getSearchTools,
 	HIDDEN_TOOLS,
 	isSearchProviderPreference,
 	type LspStartupServerInfo,
 	loadSshTool,
-	PythonTool,
 	ReadTool,
 	ResolveTool,
 	renderSearchToolBm25Description,
+	SearchTool,
 	setPreferredImageProvider,
 	setPreferredSearchProvider,
 	type Tool,
 	type ToolSession,
+	WebSearchTool,
 	WriteTool,
 	warmupLspServers,
 } from "./tools";
@@ -230,9 +236,6 @@ export interface CreateAgentSessionOptions {
 	enableLsp?: boolean;
 	/** Skip Python kernel availability check and prelude warmup */
 	skipPythonPreflight?: boolean;
-	/** Force Python prelude warmup even when test env would normally skip it */
-	forcePythonWarmup?: boolean;
-
 	/** Tool names explicitly requested (enables disabled-by-default tools) */
 	toolNames?: string[];
 
@@ -242,6 +245,8 @@ export interface CreateAgentSessionOptions {
 	requireYieldTool?: boolean;
 	/** Task recursion depth (for subagent sessions). Default: 0 */
 	taskDepth?: number;
+	/** Parent Hindsight state to alias for subagent memory tools. */
+	parentHindsightSessionState?: HindsightSessionState;
 	/** Pre-allocated agent identity for IRC routing. Default: "0-Main" for top-level, parentTaskPrefix-derived for sub. */
 	agentId?: string;
 	/** Display name for the agent in IRC. Default: "main" or "sub". */
@@ -253,6 +258,9 @@ export interface CreateAgentSessionOptions {
 
 	/** Session manager. Default: session stored under the configured agentDir sessions root */
 	sessionManager?: SessionManager;
+
+	/** Override local:// protocol options for subagent local:// sharing. Default: uses the session's own artifacts dir and session ID. */
+	localProtocolOptions?: LocalProtocolOptions;
 
 	/** Settings instance. Default: Settings.init({ cwd, agentDir }) */
 	settings?: Settings;
@@ -313,14 +321,15 @@ export {
 	BUILTIN_TOOLS,
 	createTools,
 	EditTool,
+	EvalTool,
 	FindTool,
-	GrepTool,
 	HIDDEN_TOOLS,
 	loadSshTool,
-	PythonTool,
 	ReadTool,
 	ResolveTool,
+	SearchTool,
 	type ToolSession,
+	WebSearchTool,
 	WriteTool,
 };
 
@@ -338,7 +347,6 @@ function getDefaultAgentDir(): string {
  */
 export async function discoverAuthStorage(agentDir: string = getDefaultAgentDir()): Promise<AuthStorage> {
 	const dbPath = getAgentDbPath(agentDir);
-	logger.debug("discoverAuthStorage", { agentDir, dbPath });
 
 	const storage = await AuthStorage.create(dbPath, {
 		configValueResolver: resolveConfigValue,
@@ -468,6 +476,9 @@ function isCustomTool(tool: CustomTool | ToolDefinition): tool is CustomTool {
 }
 
 const TOOL_DEFINITION_MARKER = Symbol("__isToolDefinition");
+
+/** Matches the truncation applied to per-server instructions inside `rebuildSystemPrompt`. */
+const MAX_MCP_INSTRUCTIONS_LENGTH = 4000;
 
 let sshCleanupRegistered = false;
 
@@ -722,20 +733,40 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage);
 
 	const settings = options.settings ?? (await logger.time("settings", Settings.init, { cwd, agentDir }));
-	logger.time("initializeWithSettings");
-	initializeWithSettings(settings, cwd);
+	logger.time("initializeWithSettings", initializeWithSettings, settings, cwd);
 	if (!options.modelRegistry) {
 		modelRegistry.refreshInBackground();
 	}
+	// Kick off AGENTS.md filesystem search in parallel — it is the slowest piece of buildSystemPrompt
+	// (~200ms on large repos) and only needs `cwd`, so it can overlap with everything that follows.
+	const agentsMdSearchPromise: Promise<AgentsMdSearch> = logger.time("buildAgentsMdSearch", buildAgentsMdSearch, cwd);
+	agentsMdSearchPromise.catch(() => {});
+
+	// Independent discoveries that depend only on cwd/agentDir — kicked off in parallel and awaited
+	// at their respective consumer sites. Their work can overlap with model resolution, secret loading,
+	// session-context build, tool creation, MCP discovery, and extension discovery.
+	const contextFilesPromise = options.contextFiles
+		? Promise.resolve(options.contextFiles)
+		: logger.time("discoverContextFiles", discoverContextFiles, cwd, agentDir);
+	contextFilesPromise.catch(() => {});
+	const promptTemplatesPromise = options.promptTemplates
+		? Promise.resolve(options.promptTemplates)
+		: logger.time("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir);
+	promptTemplatesPromise.catch(() => {});
+	const slashCommandsPromise = options.slashCommands
+		? Promise.resolve(options.slashCommands)
+		: logger.time("discoverSlashCommands", discoverSlashCommands, cwd);
+	slashCommandsPromise.catch(() => {});
 	const skillsSettings = settings.getGroup("skills");
 	const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
 	const discoveredSkillsPromise =
 		options.skills === undefined
-			? discoverSkills(cwd, agentDir, {
+			? logger.time("discoverSkills", discoverSkills, cwd, agentDir, {
 					...skillsSettings,
 					disabledExtensions: disabledExtensionIds,
 				})
 			: undefined;
+	discoveredSkillsPromise?.catch(() => {});
 
 	// Initialize provider preferences from settings
 	const webSearchProvider = settings.get("providers.webSearch");
@@ -851,7 +882,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = defaultRoleSpec.thinkingLevel;
 	}
 
-	// Fall back to settings default
+	// Prefer the selected model's configured defaultLevel, otherwise fall back
+	// to the global settings default.
+	if (thinkingLevel === undefined && model?.thinking?.defaultLevel !== undefined) {
+		thinkingLevel = model.thinking.defaultLevel;
+	}
 	if (thinkingLevel === undefined) {
 		thinkingLevel = settings.get("defaultThinkingLevel");
 	}
@@ -868,10 +903,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		skills = options.skills;
 		skillWarnings = [];
 	} else {
-		const discovered = await logger.time(
-			"discoverSkills",
-			() => discoveredSkillsPromise ?? Promise.resolve({ skills: [], warnings: [] }),
-		);
+		const discovered = await (discoveredSkillsPromise ?? Promise.resolve({ skills: [], warnings: [] }));
 		skills = discovered.skills;
 		skillWarnings = discovered.warnings;
 	}
@@ -906,10 +938,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		return { ttsrManager, rulebookRules, alwaysApplyRules };
 	});
 
-	const contextFiles = await logger.time(
-		"discoverContextFiles",
-		async () => options.contextFiles ?? (await discoverContextFiles(cwd, agentDir)),
-	);
+	const contextFiles = await contextFilesPromise;
 
 	let agent: Agent;
 	let session!: AgentSession;
@@ -975,7 +1004,42 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const resolvedAgentId = options.agentId ?? options.parentTaskPrefix ?? MAIN_AGENT_ID;
 	const resolvedAgentDisplayName =
 		options.agentDisplayName ?? ((options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main");
-	const pythonKernelOwnerId = `agent-session:${Snowflake.next()}`;
+	const evalKernelOwnerId = `agent-session:${Snowflake.next()}`;
+
+	// Initialize recall store early so the recall tool can be created during tool setup.
+	// Both the recall tool and ingest pipeline share the same store instance.
+	let recallStore: RecallStore | undefined;
+	let memexLicense: string | undefined;
+	try {
+		memexLicense = await resolveMemexLicense();
+		recallStore = await RecallStore.open({
+			agentDir,
+			sessionId: sessionManager.getSessionId(),
+		});
+		postmortem.register("recall-store-close", () => recallStore?.close());
+		logger.debug("RecallStore initialized for recall tool + ingest pipeline");
+	} catch (err) {
+		// No memex license or LanceDB init failure — recall is optional.
+		logger.debug("Recall infrastructure not available", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+		recallStore = undefined;
+		memexLicense = undefined;
+	}
+
+	// Initialize FTS5 tool result store for keyword search over past tool results.
+	let toolResultStore: ToolResultStore | undefined;
+	try {
+		toolResultStore = ToolResultStore.open(path.join(agentDir, "tool-results.db"));
+		toolResultStore.cleanup(30 * 24 * 60 * 60 * 1000); // 30 days
+		postmortem.register("tool-result-store-close", () => toolResultStore?.close());
+		logger.debug("ToolResultStore initialized");
+	} catch (err) {
+		logger.debug("ToolResultStore not available", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+		toolResultStore = undefined;
+	}
 
 	// Initialize recall store early so the recall tool can be created during tool setup.
 	// Both the recall tool and ingest pipeline share the same store instance.
@@ -1030,7 +1094,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return !requestedToolNames || requestedToolNames.includes("edit");
 			},
 			skipPythonPreflight: options.skipPythonPreflight,
-			forcePythonWarmup: options.forcePythonWarmup,
 			contextFiles,
 			skills,
 			eventBus,
@@ -1038,12 +1101,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			requireYieldTool: options.requireYieldTool,
 			taskDepth: options.taskDepth ?? 0,
 			getSessionFile: () => sessionManager.getSessionFile() ?? null,
-			getPythonKernelOwnerId: () => pythonKernelOwnerId,
-			assertPythonExecutionAllowed: () => session?.assertPythonExecutionAllowed(),
-			trackPythonExecution: (execution, abortController) =>
-				session ? session.trackPythonExecution(execution, abortController) : execution,
+			getEvalKernelOwnerId: () => evalKernelOwnerId,
+			assertEvalExecutionAllowed: () => session?.assertEvalExecutionAllowed(),
+			trackEvalExecution: (execution, abortController) =>
+				session ? session.trackEvalExecution(execution, abortController) : execution,
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
+			getHindsightSessionState: () => session?.getHindsightSessionState(),
 			getAgentId: () => resolvedAgentId,
+			getToolByName: name => session?.getToolByName(name),
 			agentRegistry,
 			getSessionSpawns: () => options.spawns ?? "*",
 			getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
@@ -1102,10 +1167,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}),
 		);
 		internalRouter.register(
-			new LocalProtocolHandler({
-				getArtifactsDir,
-				getSessionId: () => sessionManager.getSessionId(),
-			}),
+			new LocalProtocolHandler(
+				options.localProtocolOptions ?? {
+					getArtifactsDir,
+					getSessionId: () => sessionManager.getSessionId(),
+				},
+			),
 		);
 		internalRouter.register(
 			new SkillProtocolHandler({
@@ -1412,13 +1479,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					description: renderSearchToolBm25Description(discoverableMCPTools),
 				},
 			});
-			const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
+			const memoryInstructions = await resolveMemoryBackend(settings).buildDeveloperInstructions(
+				agentDir,
+				settings,
+				session,
+			);
 
 			// Build combined append prompt: memory instructions + MCP server instructions
 			const serverInstructions = mcpManager?.getServerInstructions();
 			let appendPrompt: string | undefined = memoryInstructions ?? undefined;
 			if (serverInstructions && serverInstructions.size > 0) {
-				const MAX_INSTRUCTIONS_LENGTH = 4000;
 				const parts: string[] = [];
 				if (appendPrompt) parts.push(appendPrompt);
 				parts.push(
@@ -1426,8 +1496,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				);
 				for (const [srvName, srvInstructions] of serverInstructions) {
 					const truncated =
-						srvInstructions.length > MAX_INSTRUCTIONS_LENGTH
-							? `${srvInstructions.slice(0, MAX_INSTRUCTIONS_LENGTH)}\n[truncated]`
+						srvInstructions.length > MAX_MCP_INSTRUCTIONS_LENGTH
+							? `${srvInstructions.slice(0, MAX_MCP_INSTRUCTIONS_LENGTH)}\n[truncated]`
 							: srvInstructions;
 					parts.push(`### ${srvName}\n${truncated}`);
 				}
@@ -1449,6 +1519,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(formatDiscoverableMCPToolServerSummary),
 				eagerTasks,
 				secretsEnabled,
+				agentsMdSearch: agentsMdSearchPromise,
 			});
 
 			const applySystemPromptOverride = async (basePrompt: string): Promise<string> => {
@@ -1543,8 +1614,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					});
 				}
 			}
-
-			return await applySystemPromptOverride(defaultPrompt);
+			if (typeof options.systemPrompt === "string") {
+				return await buildSystemPromptInternal({
+					cwd,
+					skills,
+					contextFiles,
+					tools: promptTools,
+					toolNames,
+					rules: rulebookRules,
+					alwaysApplyRules,
+					skillsSettings: settings.getGroup("skills"),
+					customPrompt: options.systemPrompt,
+					appendSystemPrompt: appendPrompt,
+					repeatToolDescriptions,
+					intentField,
+					mcpDiscoveryMode: hasDiscoverableMCPTools,
+					mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(formatDiscoverableMCPToolServerSummary),
+					eagerTasks,
+					secretsEnabled,
+					agentsMdSearch: agentsMdSearchPromise,
+				});
+			}
+			return options.systemPrompt(defaultPrompt);
 		};
 
 		const toolNamesFromRegistry = Array.from(toolRegistry.keys());
@@ -1564,7 +1655,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));
 		const explicitlyRequestedMCPToolNames = options.toolNames
-			? requestedActiveToolNames.filter(name => name.startsWith("mcp_"))
+			? requestedActiveToolNames.filter(name => name.startsWith("mcp__"))
 			: [];
 		const discoveryDefaultServers = new Set(
 			(settings.get("mcp.discoveryDefaultServers") ?? []).map(serverName => serverName.trim()).filter(Boolean),
@@ -1590,7 +1681,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				: [...new Set([...restoredSelectedMCPToolNames, ...defaultSelectedMCPToolNames])];
 			initialToolNames = [
 				...new Set([
-					...initialRequestedActiveToolNames.filter(name => !name.startsWith("mcp_")),
+					...initialRequestedActiveToolNames.filter(name => !name.startsWith("mcp__")),
 					...initialSelectedMCPToolNames,
 				]),
 			];
@@ -1602,7 +1693,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			...registeredTools.filter(t => !t.definition.defaultInactive).map(t => t.definition.name),
 		];
 		for (const name of alwaysInclude) {
-			if (mcpDiscoveryEnabled && name.startsWith("mcp_")) {
+			if (mcpDiscoveryEnabled && name.startsWith("mcp__")) {
 				continue;
 			}
 			if (toolRegistry.has(name) && !initialToolNames.includes(name)) {
@@ -1612,13 +1703,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		const systemPrompt = await logger.time("buildSystemPrompt", rebuildSystemPrompt, initialToolNames, toolRegistry);
 
-		const promptTemplates =
-			options.promptTemplates ??
-			(await logger.time("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir));
+		const promptTemplates = await promptTemplatesPromise;
 		toolSession.promptTemplates = promptTemplates;
 
-		const slashCommands =
-			options.slashCommands ?? (await logger.time("discoverSlashCommands", discoverSlashCommands, cwd));
+		const slashCommands = await slashCommandsPromise;
 
 		// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
 		const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
@@ -1954,6 +2042,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					return await extensionRunner.emitBeforeProviderRequest(payload);
 				}
 			: undefined;
+		const onResponse: SimpleStreamOptions["onResponse"] | undefined = extensionRunner
+			? async (response, model) => {
+					await extensionRunner.emitAfterProviderResponse(response, model);
+				}
+			: undefined;
 
 		const setToolUIContext = (uiContext: ExtensionUIContext, hasUI: boolean) => {
 			toolContextStore.setUIContext(uiContext, hasUI);
@@ -1983,6 +2076,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			},
 			convertToLlm: convertToLlmFinal,
 			onPayload,
+			onResponse,
 			sessionId: providerSessionId,
 			transformContext,
 			steeringMode: settings.get("steeringMode") ?? "one-at-a-time",
@@ -2045,7 +2139,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			thinkingLevel,
 			sessionManager,
 			settings,
-			pythonKernelOwnerId,
+			evalKernelOwnerId,
 			scopedModels: options.scopedModels,
 			promptTemplates,
 			slashCommands,
@@ -2058,8 +2152,23 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			toolRegistry,
 			transformContext,
 			onPayload,
+			onResponse,
 			convertToLlm: convertToLlmFinal,
 			rebuildSystemPrompt,
+			getMcpServerInstructions: mcpManager
+				? () => {
+						const raw = mcpManager.getServerInstructions();
+						if (!raw || raw.size === 0) return raw;
+						const out = new Map<string, string>();
+						for (const [name, text] of raw) {
+							out.set(
+								name,
+								text.length > MAX_MCP_INSTRUCTIONS_LENGTH ? text.slice(0, MAX_MCP_INSTRUCTIONS_LENGTH) : text,
+							);
+						}
+						return out;
+					}
+				: undefined,
 			mcpDiscoveryEnabled,
 			initialSelectedMCPToolNames,
 			defaultSelectedMCPToolNames,
@@ -2068,6 +2177,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			ttsrManager,
 			obfuscator,
 			asyncJobManager,
+			agentId: resolvedAgentId,
+			agentRegistry,
 			assemblerBridge: assemblerActive ? assemblerBridge : undefined,
 			getLastPromptSnapshotFn: () => lastPromptSnapshot,
 		});
@@ -2168,13 +2279,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		logger.time("startMemoryStartupTask", () =>
-			startMemoryStartupTask({
-				session,
-				settings,
-				modelRegistry,
-				agentDir,
-				taskDepth,
-			}),
+			Promise.resolve(
+				resolveMemoryBackend(settings).start({
+					session,
+					settings,
+					modelRegistry,
+					agentDir,
+					taskDepth,
+					parentHindsightSessionState: options.parentHindsightSessionState,
+				}),
+			),
 		);
 
 		// Wire MCP manager callbacks to session for reactive tool updates.
@@ -2221,7 +2335,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			});
 		}
 
-		logger.time("createAgentSession:return");
 		return {
 			session,
 			extensionsResult,
@@ -2238,7 +2351,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (hasSession) {
 				await session.dispose();
 			} else {
-				await disposeKernelSessionsByOwner(pythonKernelOwnerId);
+				await disposeKernelSessionsByOwner(evalKernelOwnerId);
 			}
 		} catch (cleanupError) {
 			logger.warn("Failed to clean up createAgentSession resources after startup error", {

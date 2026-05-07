@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAntigravityHeaders, getEnvApiKey, type Model, StringEnum } from "@oh-my-pi/pi-ai";
+import { getAntigravityUserAgent, getEnvApiKey, type Model, StringEnum } from "@oh-my-pi/pi-ai";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
@@ -47,13 +47,14 @@ interface ImageApiKey {
 }
 
 const responseModalitySchema = StringEnum(["IMAGE", "TEXT"]);
-const aspectRatioSchema = StringEnum(["1:1", "3:4", "4:3", "9:16", "16:9"], {
-	description: "aspect ratio",
-	examples: ["1:1", "3:4", "16:9"],
-});
-const imageSizeSchema = StringEnum(["1024x1024", "1536x1024", "1024x1536"], {
-	description: "image size",
-	examples: ["1024x1024", "1536x1024"],
+const aspectRatioSchema = StringEnum(
+	["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"],
+	{
+		description: "Aspect ratio (1:1, 1:4, 1:8, 2:3, 3:2, 3:4, 4:1, 4:3, 4:5, 5:4, 8:1, 9:16, 16:9, 21:9).",
+	},
+);
+const imageSizeSchema = StringEnum(["512", "1K", "2K", "4K"], {
+	description: "Image size (512, 1K, 2K, 4K).",
 });
 
 const inputImageSchema = Type.Object(
@@ -665,22 +666,6 @@ function resolveOpenAIImageSize(aspectRatio: string | undefined, imageSize: stri
 	}
 }
 
-// Gemini's image generation API expects `imageSize` as a tier label ("1K", "2K", "4K"),
-// not the pixel-dimension strings the schema exposes. Map the OpenAI-style values to
-// the closest tier so the same schema works across providers.
-function resolveGeminiImageSize(imageSize: string | undefined): string | undefined {
-	if (!imageSize) return undefined;
-	switch (imageSize) {
-		case "1024x1024":
-			return "1K";
-		case "1536x1024":
-		case "1024x1536":
-			return "2K";
-		default:
-			return imageSize;
-	}
-}
-
 function buildOpenAIHostedImageRequest(
 	model: Model,
 	promptText: string,
@@ -1073,7 +1058,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 						Authorization: `Bearer ${apiKey.apiKey}`,
 						"Content-Type": "application/json",
 						Accept: "text/event-stream",
-						...getAntigravityHeaders(),
+						"User-Agent": getAntigravityUserAgent(),
 					},
 					body: JSON.stringify(requestBody),
 					signal: requestSignal,

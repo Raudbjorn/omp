@@ -18,6 +18,7 @@ import { EDIT_MODE_STRATEGIES, type EditMode, type PerFileDiffPreview } from "..
 import type { Theme } from "../../modes/theme/theme";
 import { theme } from "../../modes/theme/theme";
 import { BASH_DEFAULT_PREVIEW_LINES } from "../../tools/bash";
+import { EVAL_DEFAULT_PREVIEW_LINES } from "../../tools/eval";
 import {
 	formatArgsInline,
 	JSON_TREE_MAX_DEPTH_COLLAPSED,
@@ -28,7 +29,6 @@ import {
 	JSON_TREE_SCALAR_LEN_EXPANDED,
 	renderJsonTreeLines,
 } from "../../tools/json-tree";
-import { PYTHON_DEFAULT_PREVIEW_LINES } from "../../tools/python";
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
 import { toolRenderers } from "../../tools/renderers";
 import { renderStatusLine } from "../../tui";
@@ -192,6 +192,7 @@ export class ToolExecutionComponent extends Container {
 		this.#schedulePreviewDiff(0);
 	}
 
+	/**
 	/**
 	 * Called when the tool has actually started executing (tool_execution_start event).
 	 * More accurate than setArgsComplete() which fires at end of arg streaming.
@@ -679,12 +680,11 @@ export class ToolExecutionComponent extends Container {
 			context.previewLines = BASH_DEFAULT_PREVIEW_LINES;
 			context.timeout = normalizeTimeoutSeconds(this.#args?.timeout, 3600);
 			context.executionStartMs = this.#executionStartTime;
-		} else if (this.#toolName === "python" && this.#result) {
+		} else if (this.#toolName === "eval" && this.#result) {
 			const output = this.#getTextOutput().trimEnd();
 			context.output = output;
 			context.expanded = this.#expanded;
-			context.previewLines = PYTHON_DEFAULT_PREVIEW_LINES;
-			context.timeout = normalizeTimeoutSeconds(this.#args?.timeout, 600);
+			context.previewLines = EVAL_DEFAULT_PREVIEW_LINES;
 			context.executionStartMs = this.#executionStartTime;
 		} else if (isEditLikeToolName(this.#toolName)) {
 			context.editMode = this.#editMode;

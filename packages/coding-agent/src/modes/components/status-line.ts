@@ -9,7 +9,7 @@ import { theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
 import { calculatePromptTokens } from "../../session/compaction/compaction";
 import * as git from "../../utils/git";
-import { getSessionAccentAnsi, getSessionAccentHexForTitle } from "../../utils/session-color";
+import { getSessionAccentAnsi, getSessionAccentHex } from "../../utils/session-color";
 import { sanitizeStatusText } from "../shared";
 import {
 	canReuseCachedPr,
@@ -36,6 +36,7 @@ export interface StatusLineSettings {
 	separator?: StatusLineSeparatorStyle;
 	segmentOptions?: StatusLineSegmentOptions;
 	showHookStatus?: boolean;
+	sessionAccent?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -57,6 +58,7 @@ export class StatusLineComponent implements Component {
 	#subagentCount: number = 0;
 	#sessionStartTime: number = Date.now();
 	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
+	#loopModeStatus: { enabled: boolean } | null = null;
 
 	// Git status caching (1s TTL)
 	#cachedGitStatus: { staged: number; unstaged: number; untracked: number } | null = null;
@@ -79,6 +81,7 @@ export class StatusLineComponent implements Component {
 			separator: settings.get("statusLine.separator"),
 			showHookStatus: settings.get("statusLine.showHookStatus"),
 			segmentOptions: settings.getGroup("statusLine").segmentOptions,
+			sessionAccent: settings.get("statusLine.sessionAccent"),
 		};
 	}
 
@@ -100,6 +103,10 @@ export class StatusLineComponent implements Component {
 
 	setPlanModeStatus(status: { enabled: boolean; paused: boolean } | undefined): void {
 		this.#planModeStatus = status ?? null;
+	}
+
+	setLoopModeStatus(status: { enabled: boolean } | undefined): void {
+		this.#loopModeStatus = status ?? null;
 	}
 
 	setHookStatus(key: string, text: string | undefined): void {
@@ -326,6 +333,7 @@ export class StatusLineComponent implements Component {
 			width,
 			options: this.#resolveSettings().segmentOptions ?? {},
 			planMode: this.#planModeStatus,
+			loopMode: this.#loopModeStatus,
 			usageStats,
 			contextPercent,
 			contextWindow,
@@ -508,10 +516,9 @@ export class StatusLineComponent implements Component {
 		leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
 		rightWidth = groupWidth(right, rightCapWidth, rightSepWidth);
 		const gapWidth = Math.max(1, topFillWidth - leftWidth - rightWidth);
-		const accentHex = getSessionAccentHexForTitle(
-			this.session.sessionManager?.getSessionName(),
-			this.session.sessionManager?.titleSource,
-		);
+		const sessionName =
+			effectiveSettings.sessionAccent !== false ? this.session.sessionManager?.getSessionName() : undefined;
+		const accentHex = sessionName ? getSessionAccentHex(sessionName) : undefined;
 		const gapColor = getSessionAccentAnsi(accentHex) ?? theme.getFgAnsi("border");
 		const gapFill = `${gapColor}${theme.boxRound.horizontal.repeat(gapWidth)}\x1b[39m`;
 		return leftGroup + gapFill + rightGroup;

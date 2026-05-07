@@ -431,21 +431,22 @@ export class Settings {
 	// ─────────────────────────────────────────────────────────────────────────
 
 	async #load(): Promise<Settings> {
+		// Project settings load (loadCapability scans cwd) is independent of the
+		// persist chain (storage open → legacy migration → global config.yml read),
+		// so kick it off first and await after the persist chain completes. The
+		// persist steps remain sequential: migration may write config.yml, which
+		// #loadYaml then reads; migration's db fallback needs #storage opened.
+		const projectPromise = this.#loadProjectSettings();
+
 		if (this.#persist) {
-			// Open storage
 			this.#storage = await AgentStorage.open(getAgentDbPath(this.#agentDir));
-
-			// Migrate from legacy formats if needed
 			await this.#migrateFromLegacy();
-
-			// Load global settings from config.yml
 			this.#global = await this.#loadYaml(this.#configPath!);
 		}
 
-		// Load project settings
-		this.#project = await this.#loadProjectSettings();
+		this.#project = await projectPromise;
 
-		// Build merged view
+		// Build merged view (global → project → overrides; project wins over global)
 		this.#rebuildMerged();
 		this.#fireAllHooks();
 		return this;
@@ -563,6 +564,83 @@ export class Settings {
 				isolationObj.mode = isolationObj.enabled ? "worktree" : "none";
 			}
 			delete isolationObj.enabled;
+		}
+
+		// edit.mode: removed "atom" variant is now "hashline"
+		const editObj = raw.edit as Record<string, unknown> | undefined;
+		if (editObj) {
+			if (editObj.mode === "atom") {
+				editObj.mode = "hashline";
+			}
+			const modelVariants = editObj.modelVariants as Record<string, unknown> | undefined;
+			if (modelVariants && typeof modelVariants === "object" && !Array.isArray(modelVariants)) {
+				for (const [pattern, variant] of Object.entries(modelVariants)) {
+					if (variant === "atom") {
+						modelVariants[pattern] = "hashline";
+					}
+				}
+			}
+		}
+		if (raw["edit.mode"] === "atom") {
+			raw["edit.mode"] = "hashline";
+		}
+
+		// statusLine: rename "plan_mode" segment to "mode"
+		const statusLineObj = raw.statusLine as Record<string, unknown> | undefined;
+		if (statusLineObj) {
+			for (const key of ["leftSegments", "rightSegments"] as const) {
+				const segments = statusLineObj[key];
+				if (Array.isArray(segments)) {
+					statusLineObj[key] = segments.map(seg => (seg === "plan_mode" ? "mode" : seg));
+				}
+			}
+			const segmentOptions = statusLineObj.segmentOptions as Record<string, unknown> | undefined;
+			if (segmentOptions && "plan_mode" in segmentOptions && !("mode" in segmentOptions)) {
+				segmentOptions.mode = segmentOptions.plan_mode;
+				delete segmentOptions.plan_mode;
+			}
+		}
+
+		// Map legacy `memories.enabled` boolean to the explicit `memory.backend`
+		// enum if the latter hasn't been set yet. Idempotent: subsequent
+		// migrations are no-ops once memory.backend is materialised.
+		const memoryBackendObj = raw.memory as Record<string, unknown> | undefined;
+		const memoryBackendSet = memoryBackendObj && typeof memoryBackendObj.backend === "string";
+		const memoriesObj = raw.memories as Record<string, unknown> | undefined;
+		if (!memoryBackendSet && memoriesObj && typeof memoriesObj.enabled === "boolean") {
+			const next = memoriesObj.enabled ? "local" : "off";
+			const memoryRoot = (memoryBackendObj ?? {}) as Record<string, unknown>;
+			memoryRoot.backend = next;
+			raw.memory = memoryRoot;
+		}
+
+		// hindsight: dynamicBankId/agentName -> scoping enum + bankId
+		// - dynamicBankId=true  → scoping="per-project" (closest semantic match;
+		//   the legacy `agent::project::channel::user` tuple was per-project in
+		//   practice — the channel/user env vars were rarely set).
+		// - hindsight.agentName was only used as the agent slot in the legacy
+		//   dynamic tuple; if the user customised it we surface it as the new
+		//   bankId base when no explicit bankId is set.
+		const hindsightObj = raw.hindsight as Record<string, unknown> | undefined;
+		if (hindsightObj) {
+			if ("dynamicBankId" in hindsightObj) {
+				if (!("scoping" in hindsightObj) && hindsightObj.dynamicBankId === true) {
+					hindsightObj.scoping = "per-project";
+				}
+				delete hindsightObj.dynamicBankId;
+			}
+			if ("agentName" in hindsightObj) {
+				const agentName = hindsightObj.agentName;
+				if (
+					!("bankId" in hindsightObj) &&
+					typeof agentName === "string" &&
+					agentName.trim().length > 0 &&
+					agentName !== "omp"
+				) {
+					hindsightObj.bankId = agentName;
+				}
+				delete hindsightObj.agentName;
+			}
 		}
 
 		return raw;
@@ -765,6 +843,10 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 
 let globalInstance: Settings | null = null;
 let globalInstancePromise: Promise<Settings> | null = null;
+
+export function isSettingsInitialized(): boolean {
+	return globalInstance !== null;
+}
 
 /**
  * Reset the global singleton for testing.

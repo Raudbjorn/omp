@@ -6,7 +6,7 @@ import type { BunFile } from "bun";
 import { type Theme, theme } from "../modes/theme/theme";
 import lspDescription from "../prompts/tools/lsp.md" with { type: "text" };
 import type { ToolSession } from "../tools";
-import { resolveToCwd } from "../tools/path-utils";
+import { formatPathRelativeToCwd, resolveToCwd } from "../tools/path-utils";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { clampTimeout } from "../tools/tool-timeouts";
 import {
@@ -16,6 +16,7 @@ import {
 	type LspServerStatus,
 	notifySaved,
 	refreshFile,
+	sendNotification,
 	sendRequest,
 	setIdleTimeout,
 	syncContent,
@@ -263,6 +264,10 @@ function getLspServerForFile(config: LspConfig, filePath: string): [string, Serv
 	return servers.length > 0 ? servers[0] : null;
 }
 
+function isProjectAwareLspServer(serverConfig: ServerConfig): boolean {
+	return !serverConfig.createClient && !serverConfig.isLinter;
+}
+
 /**
  * Fetch the symbol tree for a file from the first available LSP server.
  * Returns null when no server covers the file or the request fails.
@@ -288,10 +293,6 @@ export async function getDocumentSymbols(
 	} catch {
 		return null;
 	}
-}
-
-function isProjectAwareLspServer(serverConfig: ServerConfig): boolean {
-	return !serverConfig.createClient && !serverConfig.isLinter;
 }
 
 const DIAGNOSTIC_MESSAGE_LIMIT = 50;
@@ -352,6 +353,61 @@ async function formatLocationWithContext(location: Location, cwd: string): Promi
 	}
 	return `${header}\n${context.map(lineText => `    ${lineText}`).join("\n")}`;
 }
+
+const MAX_RENAME_PAIRS = 1000;
+
+interface FileRenamePair {
+	oldUri: string;
+	newUri: string;
+}
+
+/**
+ * Enumerate the {oldUri, newUri} pairs needed for an LSP willRenameFiles/didRenameFiles request.
+ * For files this is a single pair. For directories this walks every regular file underneath
+ * and produces a parallel pair anchored at the new directory root.
+ */
+async function enumerateRenamePairs(
+	source: string,
+	dest: string,
+): Promise<{ pairs: FileRenamePair[]; directory: boolean; exceeded: boolean }> {
+	const stat = await fs.promises.stat(source);
+	if (!stat.isDirectory()) {
+		return {
+			pairs: [{ oldUri: fileToUri(source), newUri: fileToUri(dest) }],
+			directory: false,
+			exceeded: false,
+		};
+	}
+	const entries = await fs.promises.readdir(source, { recursive: true, withFileTypes: true });
+	const pairs: FileRenamePair[] = [];
+	for (const entry of entries) {
+		if (!entry.isFile()) continue;
+		if (pairs.length >= MAX_RENAME_PAIRS) {
+			return { pairs, directory: true, exceeded: true };
+		}
+		const parent = entry.parentPath ?? source;
+		const absOld = path.join(parent, entry.name);
+		const rel = path.relative(source, absOld);
+		pairs.push({
+			oldUri: fileToUri(absOld),
+			newUri: fileToUri(path.join(dest, rel)),
+		});
+	}
+	return { pairs, directory: true, exceeded: false };
+}
+
+/** True when an LSP error indicates the server doesn't implement the requested method. */
+function isMethodNotFoundError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	const msg = err.message.toLowerCase();
+	return (
+		msg.includes("method not found") ||
+		msg.includes("unhandled method") ||
+		msg.includes("not supported") ||
+		msg.includes("-32601")
+	);
+}
+
 async function reloadServer(client: LspClient, serverName: string, signal?: AbortSignal): Promise<string> {
 	let output = `Restarted ${serverName}`;
 	const reloadMethods = ["rust-analyzer/reloadWorkspace", "workspace/didChangeConfiguration"];
@@ -589,7 +645,7 @@ async function getDiagnosticsForFile(
 	}
 
 	const uri = fileToUri(absolutePath);
-	const relPath = path.relative(cwd, absolutePath);
+	const relPath = formatPathRelativeToCwd(absolutePath, cwd);
 	const allDiagnostics: Diagnostic[] = [];
 	const serverNames: string[] = [];
 
@@ -1163,7 +1219,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 		_onUpdate?: AgentToolUpdateCallback<LspToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<LspToolDetails>> {
-		const { action, file, line, symbol, occurrence, query, new_name, apply, timeout } = params;
+		const { action, file, line, symbol, query, new_name, apply, timeout } = params;
 		const timeoutSec = clampTimeout("lsp", timeout);
 		const timeoutSignal = AbortSignal.timeout(timeoutSec * 1000);
 		signal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
@@ -1256,7 +1312,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 				}
 
 				const uri = fileToUri(resolved);
-				const relPath = path.relative(this.session.cwd, resolved);
+				const relPath = formatPathRelativeToCwd(resolved, this.session.cwd);
 				const allDiagnostics: Diagnostic[] = [];
 
 				// Query all applicable servers for this file
@@ -1337,6 +1393,345 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 				content: [{ type: "text", text: results.join("\n") }],
 				details: { action, serverName: Array.from(allServerNames).join(", "), success: true },
 			};
+		}
+
+		if (action === "rename_file") {
+			if (!file || !new_name) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: "Error: rename_file requires both `file` (source path) and `new_name` (destination path)",
+						},
+					],
+					details: { action, success: false, request: params },
+				};
+			}
+
+			const source = resolveToCwd(file, this.session.cwd);
+			const dest = resolveToCwd(new_name, this.session.cwd);
+
+			if (source === dest) {
+				return {
+					content: [{ type: "text", text: "Error: source and destination paths are identical" }],
+					details: { action, success: false, request: params },
+				};
+			}
+
+			let sourceStat: fs.Stats;
+			try {
+				sourceStat = await fs.promises.stat(source);
+			} catch {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Error: source path does not exist: ${formatPathRelativeToCwd(source, this.session.cwd)}`,
+						},
+					],
+					details: { action, success: false, request: params },
+				};
+			}
+
+			let destExists = false;
+			try {
+				await fs.promises.stat(dest);
+				destExists = true;
+			} catch {
+				// expected: destination must not exist
+			}
+			if (destExists) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Error: destination already exists: ${formatPathRelativeToCwd(dest, this.session.cwd)}`,
+						},
+					],
+					details: { action, success: false, request: params },
+				};
+			}
+
+			const enumerated = await enumerateRenamePairs(source, dest);
+			if (enumerated.exceeded) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Error: directory contains more than ${MAX_RENAME_PAIRS} files; rename in smaller batches to keep LSP edits accurate`,
+						},
+					],
+					details: { action, success: false, request: params },
+				};
+			}
+			const { pairs } = enumerated;
+			if (pairs.length === 0) {
+				return {
+					content: [{ type: "text", text: "Error: no files to rename" }],
+					details: { action, success: false, request: params },
+				};
+			}
+
+			const lspParams = { files: pairs };
+			const servers = getLspServers(config);
+			const respondingServers = new Set<string>();
+			const perServerEdits: Array<{ serverName: string; edit: WorkspaceEdit }> = [];
+			const serverNotes: string[] = [];
+
+			for (const [serverName, serverConfig] of servers) {
+				throwIfAborted(signal);
+				try {
+					const client = await getOrCreateClient(serverConfig, this.session.cwd);
+					if (isProjectAwareLspServer(serverConfig)) {
+						await waitForProjectLoaded(client, signal);
+					}
+					const result = (await sendRequest(
+						client,
+						"workspace/willRenameFiles",
+						lspParams,
+						signal,
+					)) as WorkspaceEdit | null;
+					respondingServers.add(serverName);
+					if (result && (result.changes || result.documentChanges)) {
+						perServerEdits.push({ serverName, edit: result });
+					}
+				} catch (err) {
+					if (err instanceof ToolAbortError || signal?.aborted) {
+						throw err;
+					}
+					if (!isMethodNotFoundError(err)) {
+						const msg = err instanceof Error ? err.message : String(err);
+						serverNotes.push(`  ${serverName}: ${msg}`);
+					}
+				}
+			}
+
+			const sourceLabel = formatPathRelativeToCwd(source, this.session.cwd);
+			const destLabel = formatPathRelativeToCwd(dest, this.session.cwd);
+			const fileCountLabel = sourceStat.isDirectory()
+				? `${pairs.length} file${pairs.length !== 1 ? "s" : ""} under ${sourceLabel}`
+				: sourceLabel;
+
+			const shouldApply = apply !== false;
+			if (!shouldApply) {
+				const lines: string[] = [];
+				lines.push(`Rename preview: ${fileCountLabel} → ${destLabel}`);
+				if (perServerEdits.length === 0) {
+					lines.push("  No LSP edits would be applied");
+				} else {
+					for (const { serverName, edit } of perServerEdits) {
+						const edits = formatWorkspaceEdit(edit, this.session.cwd);
+						if (edits.length === 0) continue;
+						lines.push(`  ${serverName}:`);
+						for (const e of edits) {
+							lines.push(`    ${e}`);
+						}
+					}
+				}
+				if (serverNotes.length > 0) {
+					lines.push("  Server notes:");
+					lines.push(...serverNotes);
+				}
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					details: {
+						action,
+						serverName: Array.from(respondingServers).join(", "),
+						success: true,
+						request: params,
+					},
+				};
+			}
+
+			const summary: string[] = [];
+			for (const { serverName, edit } of perServerEdits) {
+				const applied = await applyWorkspaceEdit(edit, this.session.cwd);
+				if (applied.length > 0) {
+					summary.push(`  ${serverName}:`);
+					summary.push(...applied.map(line => `    ${line}`));
+				}
+			}
+
+			await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+			await fs.promises.rename(source, dest);
+			summary.push(`  Renamed ${sourceLabel} → ${destLabel}`);
+
+			for (const [serverName, serverConfig] of servers) {
+				try {
+					const client = await getOrCreateClient(serverConfig, this.session.cwd);
+					for (const { oldUri } of pairs) {
+						if (client.openFiles.has(oldUri)) {
+							await sendNotification(client, "textDocument/didClose", {
+								textDocument: { uri: oldUri },
+							});
+							client.openFiles.delete(oldUri);
+						}
+					}
+					await sendNotification(client, "workspace/didRenameFiles", lspParams);
+				} catch (err) {
+					if (err instanceof ToolAbortError || signal?.aborted) {
+						throw err;
+					}
+					const msg = err instanceof Error ? err.message : String(err);
+					serverNotes.push(`  ${serverName}: ${msg}`);
+				}
+			}
+
+			if (serverNotes.length > 0) {
+				summary.push("  Server notes:");
+				summary.push(...serverNotes);
+			}
+
+			const header = `Renamed ${fileCountLabel} → ${destLabel}`;
+			return {
+				content: [{ type: "text", text: `${header}\n${summary.join("\n")}` }],
+				details: {
+					action,
+					serverName: Array.from(respondingServers).join(", "),
+					success: true,
+					request: params,
+				},
+			};
+		}
+
+		if (action === "capabilities") {
+			let serverList: Array<[string, ServerConfig]>;
+			if (file && file !== "*") {
+				const resolved = resolveToCwd(file, this.session.cwd);
+				serverList = getLspServersForFile(config, resolved);
+				if (serverList.length === 0) {
+					return {
+						content: [{ type: "text", text: "No language server found for this file" }],
+						details: { action, success: false, request: params },
+					};
+				}
+			} else {
+				serverList = getLspServers(config);
+			}
+
+			if (serverList.length === 0) {
+				return {
+					content: [{ type: "text", text: "No language servers configured" }],
+					details: { action, success: false, request: params },
+				};
+			}
+
+			const sections: string[] = [];
+			const respondingServers = new Set<string>();
+			for (const [serverName, serverConfig] of serverList) {
+				throwIfAborted(signal);
+				try {
+					const client = await getOrCreateClient(serverConfig, this.session.cwd);
+					respondingServers.add(serverName);
+					const caps = client.serverCapabilities ?? {};
+					sections.push(`${serverName}:`);
+					sections.push(`  capabilities: ${JSON.stringify(caps, null, 2).split("\n").join("\n  ")}`);
+				} catch (err) {
+					if (err instanceof ToolAbortError || signal?.aborted) {
+						throw err;
+					}
+					const msg = err instanceof Error ? err.message : String(err);
+					sections.push(`${serverName}: failed to start (${msg})`);
+				}
+			}
+
+			return {
+				content: [{ type: "text", text: sections.join("\n") }],
+				details: {
+					action,
+					serverName: Array.from(respondingServers).join(", "),
+					success: true,
+					request: params,
+				},
+			};
+		}
+
+		if (action === "request") {
+			const method = query?.trim();
+			if (!method) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: "Error: action=request requires `query` to specify the LSP method name (e.g., 'rust-analyzer/expandMacro')",
+						},
+					],
+					details: { action, success: false, request: params },
+				};
+			}
+
+			let chosenServer: [string, ServerConfig] | null = null;
+			let resolvedTarget: string | null = null;
+			if (file && file !== "*") {
+				resolvedTarget = resolveToCwd(file, this.session.cwd);
+				chosenServer = getLspServerForFile(config, resolvedTarget);
+				if (!chosenServer) {
+					return {
+						content: [{ type: "text", text: "No language server found for this file" }],
+						details: { action, success: false, request: params },
+					};
+				}
+			} else {
+				const all = getLspServers(config);
+				if (all.length === 0) {
+					return {
+						content: [{ type: "text", text: "No language servers configured" }],
+						details: { action, success: false, request: params },
+					};
+				}
+				chosenServer = all[0];
+			}
+
+			const [chosenName, chosenConfig] = chosenServer;
+			let requestParams: unknown;
+			if (params.payload !== undefined) {
+				try {
+					requestParams = JSON.parse(params.payload);
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					return {
+						content: [{ type: "text", text: `Error: invalid JSON in payload: ${msg}` }],
+						details: { action, serverName: chosenName, success: false, request: params },
+					};
+				}
+			} else if (resolvedTarget) {
+				const uri = fileToUri(resolvedTarget);
+				if (line !== undefined) {
+					const character = await resolveSymbolColumn(resolvedTarget, line, symbol);
+					requestParams = { textDocument: { uri }, position: { line: line - 1, character } };
+				} else {
+					requestParams = { textDocument: { uri } };
+				}
+			} else {
+				requestParams = {};
+			}
+
+			try {
+				const client = await getOrCreateClient(chosenConfig, this.session.cwd);
+				if (resolvedTarget) {
+					await ensureFileOpen(client, resolvedTarget, signal);
+				}
+				const result = await sendRequest(client, method, requestParams, signal);
+				const formatted =
+					result === null || result === undefined
+						? "null"
+						: typeof result === "string"
+							? result
+							: JSON.stringify(result, null, 2);
+				return {
+					content: [{ type: "text", text: `${chosenName} ← ${method}:\n${formatted}` }],
+					details: { action, serverName: chosenName, success: true, request: params },
+				};
+			} catch (err) {
+				if (err instanceof ToolAbortError || signal?.aborted) {
+					throw new ToolAbortError();
+				}
+				const msg = err instanceof Error ? err.message : String(err);
+				return {
+					content: [{ type: "text", text: `LSP error from ${chosenName} on ${method}: ${msg}` }],
+					details: { action, serverName: chosenName, success: false, request: params },
+				};
+			}
 		}
 
 		// `*` means workspace scope for symbols/reload; other actions need a concrete file.
@@ -1476,9 +1871,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 			const uri = targetFile ? fileToUri(targetFile) : "";
 			const resolvedLine = line ?? 1;
-			const resolvedCharacter = targetFile
-				? await resolveSymbolColumn(targetFile, resolvedLine, symbol, occurrence)
-				: 0;
+			const resolvedCharacter = targetFile ? await resolveSymbolColumn(targetFile, resolvedLine, symbol) : 0;
 			const position = { line: resolvedLine - 1, character: resolvedCharacter };
 
 			let output: string;
@@ -1734,7 +2127,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					if (!result || result.length === 0) {
 						output = "No symbols found";
 					} else {
-						const relPath = path.relative(this.session.cwd, targetFile);
+						const relPath = formatPathRelativeToCwd(targetFile, this.session.cwd);
 						if ("selectionRange" in result[0]) {
 							const lines = (result as DocumentSymbol[]).flatMap(s => formatDocumentSymbol(s));
 							output = `Symbols in ${relPath}:\n${lines.join("\n")}`;

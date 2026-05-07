@@ -1,8 +1,39 @@
+import { LRUCache } from "lru-cache/raw";
 import { marked, type Token, type Tokens } from "marked";
 import type { SymbolTheme } from "../symbols";
 import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
 import { applyBackgroundToLine, padding, replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
+
+// ---------------------------------------------------------------------------
+// Module-level LRU render cache
+// ---------------------------------------------------------------------------
+// Each session-tree navigation discards and recreates Markdown component
+// instances, so the per-instance #cachedLines field is always cold on first
+// render of a fresh component. This module-level cache survives across
+// component lifetimes and eliminates redundant marked.lexer + highlightCode
+// (Rust FFI) work for content/layout combinations already seen this session.
+
+const RENDER_CACHE_MAX = 256; // sane cap: ~256 distinct message × width combos
+const renderCache = new LRUCache<string, string[]>({ max: RENDER_CACHE_MAX });
+
+/** Drop all L2 cache entries. Call on theme change to prevent stale styled output. */
+export function clearRenderCache(): void {
+	renderCache.clear();
+}
+
+// Stable numeric IDs for structural theme/style objects (no ID field on type).
+// WeakMap so GC can collect orphaned themes/styles without a leak.
+const _objectIds = new WeakMap<object, number>();
+let _nextObjectId = 0;
+function objectId(o: object): number {
+	let id = _objectIds.get(o);
+	if (id === undefined) {
+		id = _nextObjectId++;
+		_objectIds.set(o, id);
+	}
+	return id;
+}
 
 /**
  * Default text styling for markdown content.
@@ -80,7 +111,7 @@ export class Markdown implements Component {
 	#defaultTextStyle?: DefaultTextStyle;
 	#theme: MarkdownTheme;
 	#defaultStylePrefix?: string;
-	/** Number of spaces used to indent code block content. */
+	/** Number of spaces used to indent code block content. Defaults to 0 so copied code is not prefixed with renderer-only whitespace. */
 	#codeBlockIndent: number;
 
 	// Cache for rendered output
@@ -94,7 +125,7 @@ export class Markdown implements Component {
 		paddingY: number,
 		theme: MarkdownTheme,
 		defaultTextStyle?: DefaultTextStyle,
-		codeBlockIndent: number = 2,
+		codeBlockIndent: number = 0,
 	) {
 		this.#text = text;
 		this.#paddingX = paddingX;
@@ -116,7 +147,8 @@ export class Markdown implements Component {
 	}
 
 	render(width: number): string[] {
-		// Check cache
+		// L1: per-instance cache — fastest path for repeated renders of the same
+		// instance at the same width (e.g. resize debounce, repeated redraws).
 		if (this.#cachedLines && this.#cachedText === this.#text && this.#cachedWidth === width) {
 			return this.#cachedLines;
 		}
@@ -127,7 +159,7 @@ export class Markdown implements Component {
 		// Don't render anything if there's no actual text
 		if (!this.#text || this.#text.trim() === "") {
 			const result: string[] = [];
-			// Update cache
+			// Update per-instance cache
 			this.#cachedText = this.#text;
 			this.#cachedWidth = width;
 			this.#cachedLines = result;
@@ -136,6 +168,19 @@ export class Markdown implements Component {
 
 		// Replace tabs with 3 spaces for consistent rendering
 		const normalizedText = replaceTabs(this.#text);
+
+		// L2: module-level LRU — survives component disposal/recreation across
+		// session-tree navigations. Key encodes every dimension that affects the
+		// render output so different configurations never collide.
+		const cacheKey = `${normalizedText}\x00${width}\x00${this.#paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}`;
+		const cached = renderCache.get(cacheKey);
+		if (cached !== undefined) {
+			// Populate L1 so subsequent calls from this instance are O(1) map lookup.
+			this.#cachedText = this.#text;
+			this.#cachedWidth = width;
+			this.#cachedLines = cached;
+			return cached;
+		}
 
 		// Parse markdown to HTML-like tokens
 		const tokens = marked.lexer(normalizedText);
@@ -195,14 +240,19 @@ export class Markdown implements Component {
 		}
 
 		// Combine top padding, content, and bottom padding
-		const result = [...emptyLines, ...contentLines, ...emptyLines];
+		const rawResult = [...emptyLines, ...contentLines, ...emptyLines];
+		const result = rawResult.length > 0 ? rawResult : [""];
 
-		// Update cache
+		// Update L1 per-instance cache
 		this.#cachedText = this.#text;
 		this.#cachedWidth = width;
 		this.#cachedLines = result;
 
-		return result.length > 0 ? result : [""];
+		// Update L2 module-level LRU so future instances with the same key skip
+		// the marked.lexer + highlightCode (Rust FFI) work entirely.
+		renderCache.set(cacheKey, result);
+
+		return result;
 	}
 
 	/**

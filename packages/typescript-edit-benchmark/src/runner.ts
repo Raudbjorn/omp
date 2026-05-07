@@ -9,7 +9,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage, ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
-
 import { computeLineHash, formatSessionDumpText, RpcClient } from "@oh-my-pi/pi-coding-agent";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { diffLines } from "diff";
@@ -21,8 +20,15 @@ import benchmarkTaskPrompt from "./prompts/benchmark-task.md" with { type: "text
 import type { EditTask } from "./tasks";
 import { verifyExpectedFileSubset, verifyExpectedFiles } from "./verify";
 
-const TMP = `/tmp/rb-${Math.random().toString(36).slice(2, 10)}`;
+const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
+const RUNS_DIR = path.join(REPO_ROOT, "runs");
+const TMP = path.join(RUNS_DIR, `rb-${Math.random().toString(36).slice(2, 10)}`);
 const CLI_PATH = Bun.fileURLToPath(import.meta.resolve("@oh-my-pi/pi-coding-agent/cli"));
+
+function formatLogPath(logFile: string): string {
+	const relativePath = path.relative(REPO_ROOT, logFile);
+	return relativePath === "" ? "." : relativePath;
+}
 
 /** Subset of session state used for markdown conversation dumps (parity with /dump). */
 type ConversationDumpSessionState = {
@@ -40,7 +46,10 @@ interface BenchmarkClient {
 	onEvent(listener: (event: { type: string; [key: string]: unknown }) => void): () => void;
 	prompt(text: string): Promise<void>;
 	followUp(text: string): Promise<void>;
-	getSessionStats(): Promise<{ tokens: { input: number; output: number; total: number }; assistantMessages: number }>;
+	getSessionStats(): Promise<{
+		tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+		assistantMessages: number;
+	}>;
 	getLastAssistantText(): Promise<string | null>;
 	getMessages(): Promise<AgentMessage[]>;
 	getState(): Promise<ConversationDumpSessionState>;
@@ -48,7 +57,7 @@ interface BenchmarkClient {
 	dispose(): Promise<void>;
 }
 
-fs.mkdirSync(TMP);
+fs.mkdirSync(TMP, { recursive: true });
 
 let n = 0;
 function subtmp(pre: string): string {
@@ -190,10 +199,74 @@ function getEditPathFromArgs(args: unknown): string | null {
 	return typeof pathValue === "string" && pathValue.length > 0 ? pathValue : null;
 }
 
-const HASHLINE_SUBTYPES = ["set", "set_range", "insert"] as const;
+function getEditPayloadFromArgs(args: unknown): string {
+	if (!args || typeof args !== "object") return "";
+	const input = (args as { input?: unknown }).input;
+	if (typeof input === "string") return input;
+	const diff = (args as { diff?: unknown }).diff;
+	if (typeof diff === "string") return diff;
+	try {
+		return JSON.stringify(args);
+	} catch {
+		return "";
+	}
+}
 
-const BENCHMARK_TOOL_NAMES = ["read", "edit", "vim", "write", "apply_patch"] as const;
-const EDIT_TOOL_NAMES = ["edit", "vim", "apply_patch"] as const;
+export const EDIT_FAILURE_CATEGORIES = [
+	"range-continuation",
+	"unified-diff",
+	"no-change",
+	"hash-mismatch",
+	"other",
+] as const;
+
+export type EditFailureCategory = (typeof EDIT_FAILURE_CATEGORIES)[number];
+
+function categorizeEditFailure(error: string, args: unknown): EditFailureCategory {
+	const payload = getEditPayloadFromArgs(args);
+	const hasRangeReplacePayload = /^[1-9]\d*[a-z]{2}\.\.[1-9]\d*[a-z]{2}[ \t]*=/m.test(payload);
+	if (
+		/\\TEXT.* (?:continuation|has been removed)|range[- ]replacement continuation|LidA\.\.LidB=FIRST_LINE/i.test(
+			error,
+		)
+	) {
+		return "range-continuation";
+	}
+	if (/unified-diff syntax|\+Lid[=|]|\+[1-9]\d*[a-z]{2}[=|]/i.test(error)) {
+		return "unified-diff";
+	}
+	if (/No changes made|no changes being made|replacement is identical/i.test(error)) {
+		return "no-change";
+	}
+	if (/hash mismatch|expected hash|stale/i.test(error)) {
+		return "hash-mismatch";
+	}
+	if (hasRangeReplacePayload && /unrecognized op|cannot parse|Lines must start/i.test(error)) {
+		return "range-continuation";
+	}
+	return "other";
+}
+
+function emptyEditFailureCategoryCounts(): Record<EditFailureCategory, number> {
+	return Object.fromEntries(EDIT_FAILURE_CATEGORIES.map(category => [category, 0])) as Record<
+		EditFailureCategory,
+		number
+	>;
+}
+
+function countEditFailureCategories(runs: TaskRunResult[]): Record<EditFailureCategory, number> {
+	const counts = emptyEditFailureCategoryCounts();
+	for (const run of runs) {
+		for (const failure of run.editFailures) {
+			counts[failure.category ?? "other"] += 1;
+		}
+	}
+	return counts;
+}
+
+const HL_SUBTYPES = ["set", "set_range", "insert"] as const;
+const BENCHMARK_TOOL_NAMES = ["read", "edit", "write", "apply_patch"] as const;
+const EDIT_TOOL_NAMES = ["edit", "apply_patch"] as const;
 
 function isEditTool(toolName: unknown): toolName is (typeof EDIT_TOOL_NAMES)[number] {
 	return toolName === "edit" || toolName === "vim" || toolName === "apply_patch";
@@ -204,13 +277,13 @@ function isMutationTool(toolName: unknown): boolean {
 }
 
 function countHashlineEditSubtypes(args: unknown): Record<string, number> {
-	const counts: Record<string, number> = Object.fromEntries(HASHLINE_SUBTYPES.map(k => [k, 0]));
+	const counts: Record<string, number> = Object.fromEntries(HL_SUBTYPES.map(k => [k, 0]));
 	if (!args || typeof args !== "object") return counts;
 	const edits = (args as { edits?: unknown[] }).edits;
 	if (!Array.isArray(edits)) return counts;
 	for (const edit of edits) {
 		if (!edit || typeof edit !== "object") continue;
-		for (const key of HASHLINE_SUBTYPES) {
+		for (const key of HL_SUBTYPES) {
 			if (key in edit) {
 				counts[key]++;
 				break;
@@ -729,6 +802,7 @@ export interface EditFailure {
 	toolCallId: string;
 	args: unknown;
 	error: string;
+	category?: EditFailureCategory;
 }
 
 export interface TaskRunResult {
@@ -817,6 +891,7 @@ export interface BenchmarkSummary {
 	/** Runs excluded because provider/transport stalls exhausted retries (subset of ghostRuns when error matches). */
 	transportFailureRuns: number;
 	mutationIntentMatchRate?: number;
+	editFailureCategories: Record<EditFailureCategory, number>;
 	/** Hashline edit subtype totals — only when editVariant is hashline */
 	hashlineEditSubtypes?: Record<string, number>;
 }
@@ -909,7 +984,7 @@ async function runSingleTask(
 		editAutocorrects: 0,
 		totalInputChars: 0,
 	};
-	const hashlineSubtypes: Record<string, number> = Object.fromEntries(HASHLINE_SUBTYPES.map(k => [k, 0]));
+	const hashlineSubtypes: Record<string, number> = Object.fromEntries(HL_SUBTYPES.map(k => [k, 0]));
 
 	const logFile = path.join(TMP, `run-${task.id}-${runIndex}.jsonl`);
 	const logEvent = async (event: unknown) => {
@@ -939,7 +1014,6 @@ async function runSingleTask(
 		if (config.editFuzzyThreshold !== undefined)
 			process.env.PI_EDIT_FUZZY_THRESHOLD =
 				config.editFuzzyThreshold === "auto" ? "auto" : String(config.editFuzzyThreshold);
-		process.env.PI_STRICT_EDIT_MODE = "1";
 		process.env.PI_NO_TITLE = "1";
 
 		const useInProcess = config.inProcess !== false;
@@ -1128,7 +1202,7 @@ async function runSingleTask(
 							pendingEdits.delete(e.toolCallId);
 							if (config.editVariant === "hashline" && args) {
 								const counts = countHashlineEditSubtypes(args);
-								for (const key of HASHLINE_SUBTYPES) {
+								for (const key of HL_SUBTYPES) {
 									hashlineSubtypes[key] += counts[key];
 								}
 							}
@@ -1140,7 +1214,12 @@ async function runSingleTask(
 									cwd,
 									originalFiles,
 								);
-								editFailures.push({ toolCallId: e.toolCallId, args, error });
+								editFailures.push({
+									toolCallId: e.toolCallId,
+									args,
+									error,
+									category: categorizeEditFailure(error, args),
+								});
 							} else {
 								toolStats.editSuccesses++;
 								if (e.toolName === "edit") {
@@ -1196,7 +1275,7 @@ async function runSingleTask(
 					? `Verification failed: ${error}${diff ? `\n\nDiff (expected vs actual):\n\n\`\`\`diff\n${diff}\n\`\`\`` : ""}${mutationIntentSuffix}`
 					: `Previous attempt failed.${mutationIntentSuffix}`;
 			}
-			if (!useInProcess) {
+			if (config.conversationDumpDir) {
 				conversationSnapshot = await snapshotConversationDump(client);
 			}
 		} finally {
@@ -1225,7 +1304,7 @@ async function runSingleTask(
 		timeoutTelemetry,
 		mutationIntentValidation,
 	});
-	console.log(`  Log: ${logFile}`);
+	console.log(`  Log: ${formatLogPath(logFile)}`);
 
 	if (config.conversationDumpDir && conversationSnapshot) {
 		await writeConversationDump({
@@ -1305,7 +1384,7 @@ async function _runRpcBenchmarkRun(
 		editAutocorrects: 0,
 		totalInputChars: 0,
 	};
-	const hashlineSubtypes: Record<string, number> = Object.fromEntries(HASHLINE_SUBTYPES.map(k => [k, 0]));
+	const hashlineSubtypes: Record<string, number> = Object.fromEntries(HL_SUBTYPES.map(k => [k, 0]));
 
 	const logFile = path.join(sessionDir, `run-${task.id}-${runIndex}.jsonl`);
 	const logEvent = async (event: unknown) => {
@@ -1449,7 +1528,7 @@ async function _runRpcBenchmarkRun(
 						pendingEdits.delete(e.toolCallId);
 						if (config.editVariant === "hashline" && args) {
 							const counts = countHashlineEditSubtypes(args);
-							for (const key of HASHLINE_SUBTYPES) {
+							for (const key of HL_SUBTYPES) {
 								hashlineSubtypes[key] += counts[key];
 							}
 						}
@@ -1461,7 +1540,12 @@ async function _runRpcBenchmarkRun(
 								cwd,
 								originalFiles,
 							);
-							editFailures.push({ toolCallId: e.toolCallId, args, error: toolError });
+							editFailures.push({
+								toolCallId: e.toolCallId,
+								args,
+								error: toolError,
+								category: categorizeEditFailure(toolError, args),
+							});
 						} else {
 							toolStats.editSuccesses++;
 							if (e.toolName === "edit") {
@@ -1542,7 +1626,7 @@ async function _runRpcBenchmarkRun(
 		timeoutTelemetry,
 		mutationIntentValidation,
 	});
-	console.log(`  Log: ${logFile}`);
+	console.log(`  Log: ${formatLogPath(logFile)}`);
 
 	await persistConversationDump({
 		client,
@@ -1840,21 +1924,31 @@ function estimateTokens(text: string): number {
 	return Math.ceil(text.length / 4);
 }
 
-function diffTokenStats(
-	before: { tokens: { input: number; output: number; total: number }; assistantMessages: number },
-	after: { tokens: { input: number; output: number; total: number }; assistantMessages: number },
-	systemPromptTokens: number,
-): TokenStats {
-	// The system prompt (and tool definitions) live in cacheRead/cacheWrite, not in `input`.
-	// `input` already excludes the cached system prompt; only `total` (which sums cache too)
-	// needs the overhead subtracted, once per LLM call.
+function diffTokenStats(before: SessionTokenStats, after: SessionTokenStats, systemPromptTokens: number): TokenStats {
+	// `input` here is the total prompt tokens delivered to the model on the wire,
+	// summed across all four buckets the providers expose: non-cached input,
+	// cacheRead, cacheWrite. Summing makes the metric comparable across providers
+	// with different caching behavior — Anthropic with a hot cache reports its
+	// prompt entirely under cacheRead/cacheWrite while non-caching providers put
+	// the same content under `input`.
+	//
+	// The system prompt and tool definitions are constant per-call overhead. We
+	// subtract `calls * systemPromptTokens` once per assistant turn so the
+	// reported figure reflects task-driven prompt cost rather than fixed boilerplate.
 	const calls = Math.max(0, after.assistantMessages - before.assistantMessages);
 	const overhead = calls * systemPromptTokens;
-	const input = Math.max(0, after.tokens.input - before.tokens.input);
+	const beforePrompt = before.tokens.input + before.tokens.cacheRead + before.tokens.cacheWrite;
+	const afterPrompt = after.tokens.input + after.tokens.cacheRead + after.tokens.cacheWrite;
+	const input = Math.max(0, afterPrompt - beforePrompt - overhead);
 	const output = Math.max(0, after.tokens.output - before.tokens.output);
-	const total = Math.max(0, after.tokens.total - before.tokens.total - overhead);
+	const total = input + output;
 	return { input, output, total };
 }
+
+type SessionTokenStats = {
+	tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
+	assistantMessages: number;
+};
 
 function isTransportFailure(r: TaskRunResult): boolean {
 	if (r.success) return false;
@@ -2013,52 +2107,16 @@ export async function runTask(
 	return summarizeTaskRuns(task, runs);
 }
 
-export async function runBenchmark(
-	tasks: EditTask[],
-	config: BenchmarkConfig,
-	onProgress?: (event: ProgressEvent) => void,
-): Promise<BenchmarkResult> {
-	const startTime = new Date().toISOString();
+export function buildBenchmarkResult(params: {
+	tasks: EditTask[];
+	config: BenchmarkConfig;
+	resultsByTask: Map<string, TaskRunResult[]>;
+	startTime: string;
+	endTime?: string;
+}): BenchmarkResult {
+	const taskResults = params.tasks.map(task => summarizeTaskRuns(task, params.resultsByTask.get(task.id) ?? []));
 
-	// Discover shared infrastructure once for in-process mode
-	const useInProcess = config.inProcess !== false;
-	const shared = useInProcess
-		? await discoverSharedInfra({
-				editVariant: config.editVariant,
-				editFuzzy: config.editFuzzy,
-				editFuzzyThreshold: config.editFuzzyThreshold,
-			})
-		: undefined;
-
-	const runItems: TaskRunItem[] = tasks.flatMap(task =>
-		Array.from({ length: config.runsPerTask }, (_, runIndex) => ({ task, runIndex })),
-	);
-
-	const pending = shuffle(runItems);
-	const resultsByTask = new Map<string, TaskRunResult[]>();
-	const concurrency = Math.max(1, Math.floor(config.taskConcurrency));
-	const running: Promise<void>[] = [];
-
-	const runNext = async (): Promise<void> => {
-		const nextItem = pending.shift();
-		if (!nextItem) return;
-		const { task, result } = await runConcurrentBenchmarkRun(nextItem, config, onProgress, shared);
-		const list = resultsByTask.get(task.id) ?? [];
-		list.push(result);
-		resultsByTask.set(task.id, list);
-		await runNext();
-	};
-
-	const slots = Math.min(concurrency, pending.length);
-	for (let i = 0; i < slots; i++) {
-		running.push(runNext());
-	}
-
-	await Promise.all(running);
-
-	const taskResults = tasks.map(task => summarizeTaskRuns(task, resultsByTask.get(task.id) ?? []));
-
-	const endTime = new Date().toISOString();
+	const endTime = params.endTime ?? new Date().toISOString();
 
 	const allRuns = taskResults.flatMap(t => t.runs);
 	const totalRuns = allRuns.length;
@@ -2113,20 +2171,18 @@ export async function runBenchmark(
 		runsWithMutationIntent.length > 0
 			? runsWithMutationIntent.filter(r => r.mutationIntentMatched).length / runsWithMutationIntent.length
 			: undefined;
+	const editFailureCategories = countEditFailureCategories(nonGhostRuns);
 
 	const hashlineEditSubtypes: Record<string, number> | undefined =
-		config.editVariant === "hashline"
+		params.config.editVariant === "hashline"
 			? Object.fromEntries(
-					HASHLINE_SUBTYPES.map(key => [
-						key,
-						allRuns.reduce((sum, r) => sum + (r.hashlineEditSubtypes?.[key] ?? 0), 0),
-					]),
+					HL_SUBTYPES.map(key => [key, allRuns.reduce((sum, r) => sum + (r.hashlineEditSubtypes?.[key] ?? 0), 0)]),
 				)
 			: undefined;
 
 	const denom = effectiveRuns || 1;
 	const summary: BenchmarkSummary = {
-		totalTasks: tasks.length,
+		totalTasks: params.tasks.length,
 		totalRuns: effectiveRuns,
 		successfulRuns,
 		overallSuccessRate: successfulRuns / denom,
@@ -2164,14 +2220,63 @@ export async function runBenchmark(
 		ghostRuns,
 		transportFailureRuns,
 		mutationIntentMatchRate,
+		editFailureCategories,
 		hashlineEditSubtypes,
 	};
 
 	return {
-		config,
+		config: params.config,
 		tasks: taskResults,
 		summary,
-		startTime,
+		startTime: params.startTime,
 		endTime,
 	};
+}
+
+export async function runBenchmark(
+	tasks: EditTask[],
+	config: BenchmarkConfig,
+	onProgress?: (event: ProgressEvent) => void,
+	onResultSnapshot?: (result: BenchmarkResult) => void,
+): Promise<BenchmarkResult> {
+	const startTime = new Date().toISOString();
+
+	// Discover shared infrastructure once for in-process mode
+	const useInProcess = config.inProcess !== false;
+	const shared = useInProcess
+		? await discoverSharedInfra({
+				editVariant: config.editVariant,
+				editFuzzy: config.editFuzzy,
+				editFuzzyThreshold: config.editFuzzyThreshold,
+			})
+		: undefined;
+
+	const runItems: TaskRunItem[] = tasks.flatMap(task =>
+		Array.from({ length: config.runsPerTask }, (_, runIndex) => ({ task, runIndex })),
+	);
+
+	const pending = shuffle(runItems);
+	const resultsByTask = new Map<string, TaskRunResult[]>();
+	const concurrency = Math.max(1, Math.floor(config.taskConcurrency));
+	const running: Promise<void>[] = [];
+
+	const runNext = async (): Promise<void> => {
+		const nextItem = pending.shift();
+		if (!nextItem) return;
+		const { task, result } = await runConcurrentBenchmarkRun(nextItem, config, onProgress, shared);
+		const list = resultsByTask.get(task.id) ?? [];
+		list.push(result);
+		resultsByTask.set(task.id, list);
+		onResultSnapshot?.(buildBenchmarkResult({ tasks, config, resultsByTask, startTime }));
+		await runNext();
+	};
+
+	const slots = Math.min(concurrency, pending.length);
+	for (let i = 0; i < slots; i++) {
+		running.push(runNext());
+	}
+
+	await Promise.all(running);
+
+	return buildBenchmarkResult({ tasks, config, resultsByTask, startTime });
 }

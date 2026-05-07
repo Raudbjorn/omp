@@ -33,18 +33,6 @@ export type ServerMessage =
 	| { type: "output"; data: string }
 	| { type: "status"; state: ServerStatusState; message?: string };
 
-const MIN_TERMINAL_DIMENSION = 1;
-const MAX_TERMINAL_DIMENSION = 1000;
-
-function isTerminalDimension(value: unknown): value is number {
-	return (
-		typeof value === "number" &&
-		Number.isInteger(value) &&
-		value >= MIN_TERMINAL_DIMENSION &&
-		value <= MAX_TERMINAL_DIMENSION
-	);
-}
-
 function isNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value);
 }
@@ -137,7 +125,7 @@ export function parseClientMessage(raw: string): ClientMessage | null {
 		return typeof record.data === "string" ? { type: "input", data: record.data } : null;
 	}
 	if (record.type === "resize") {
-		return isTerminalDimension(record.cols) && isTerminalDimension(record.rows)
+		return isNumber(record.cols) && isNumber(record.rows)
 			? { type: "resize", cols: record.cols, rows: record.rows }
 			: null;
 	}

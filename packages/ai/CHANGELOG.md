@@ -1,6 +1,103 @@
 # Changelog
 
 ## [Unreleased]
+
+## [14.6.4] - 2026-05-03
+
+### Fixed
+
+- Fixed OpenAI Codex websocket continuations to retry with full context when `previous_response_id` expires server-side instead of surfacing `previous_response_not_found`.
+
+## [14.6.2] - 2026-05-03
+### Added
+
+- Added `EventStream.fail(err)` method to terminate the async iterator with an error, enabling consumers to catch stream-level failures via `for await` without hanging
+
+### Fixed
+
+- Fixed OpenAI Responses tool schema conversion to rewrite non-strict `oneOf` unions to `anyOf` before sending tools to the Responses API ([#920](https://github.com/can1357/oh-my-pi/issues/920))
+
+## [14.6.0] - 2026-05-02
+
+### Added
+
+- Added `disableReasoning` to stream and OpenAI completion options to force reasoning off for models that support it, sending `reasoning: { enabled: false }` for OpenRouter-compatible requests
+- Added `thinkingDisplay` option to Anthropic options to control whether adaptive and explicit reasoning is returned as `summarized` or `omitted`
+- Added Anthropic model compatibility flags `supportsEagerToolInputStreaming` and `supportsLongCacheRetention` for API-capability-specific request behavior
+
+### Changed
+
+- Changed Anthropic request payloads to send `thinking: { type: "disabled" }` when `thinkingEnabled` is explicitly `false` on reasoning-enabled models
+- Changed Anthropic cache retention handling so `cacheRetention: "long"` now uses `ttl: "1h"` only for canonical Anthropic endpoints with long-cache support
+- Changed Anthropic tool schema generation to include `eager_input_streaming` only on models that advertise support
+- Changed Anthropic OAuth login flow to include browser fallback guidance and richer error context when token exchange or refresh fails
+
+### Fixed
+
+- Fixed Anthropic non-thinking requests to include the caller-provided `temperature` value in request payloads
+- Fixed Anthropic `claude-opus-4-7` non-thinking payloads to omit sampling fields (`temperature`, `top_p`, and `top_k`)
+- Fixed OpenAI Codex base URL normalization so configured base URLs with or without `/codex` or `/codex/responses` now resolve to `/codex/responses`
+- Fixed OpenAI Codex websocket handling to parse JSON from non-string message payloads including `ArrayBuffer`, typed arrays, and `Blob` values
+- Fixed OpenAI Codex websocket handshakes to replace stale `openai-beta` values with the websocket beta and avoid sending request-body headers over websocket transport
+- Fixed abort tracking so caller-initiated cancellations are treated as user aborts even after local watchdog timeouts, preventing unintended automatic retries
+- Fixed Anthropic stream handling to parse raw SSE envelopes directly, ignore unrelated events, and repair malformed JSON in SSE payloads
+- Fixed Anthropic streaming to emit an explicit error when the SSE stream ends without a `message_stop` event
+- Fixed OpenAI Codex websocket continuations to send true `previous_response_id` deltas for `store: false` transcripts, expose request stats, and default text verbosity to `low` unless explicitly overridden.
+- Fixed OpenAI Codex websocket append reuse after `response.completed` terminal events.
+
+## [14.5.14] - 2026-05-01
+### Added
+
+- Added package-level `google-gemini-headers` exports (`getGeminiCliHeaders`, `getGeminiCliUserAgent`, `getAntigravityHeaders`, `extractRetryDelay`, and `ANTIGRAVITY_SYSTEM_INSTRUCTION`) for header and retry handling reuse without importing full Google providers
+
+### Changed
+
+- Changed package exports and streaming/provider wiring to load heavy Google/Kimi/GitLab/synthetic provider modules lazily through `register-builtins`, reducing startup import overhead from optional provider SDKs
+
+### Fixed
+
+- Fixed DeepSeek V4 tool-call follow-up 400 errors from three root causes:
+  - Mapped `reasoning_effort` "xhigh" to "max" for DeepSeek-family models on any provider (NVIDIA, OpenCode-Go, etc.), not just `deepseek`
+  - Recovered `reasoning_content` from thinking blocks with valid signatures that were filtered by the non-empty-text check
+- Added empty-string fallback when `reasoning_content` is genuinely absent (e.g. proxy-stripped) but the provider requires the field
+
+## [14.5.13] - 2026-05-01
+
+### Breaking Changes
+
+- Removed `utils/oauth` re-exports from the package entrypoint, so OAuth helper imports from the root module must be updated
+
+## [14.5.10] - 2026-04-30
+
+### Added
+
+- Added provider response metadata callbacks for Anthropic and OpenAI streaming requests.
+
+## [14.5.9] - 2026-04-30
+
+### Added
+
+- Added `usage.reasoningTokens` to OpenAI and Google usage output when providers report reasoning/thinking tokens
+- Added `usage.cttl.ephemeral5m` and `usage.cttl.ephemeral1h` to report Anthropic cache-write TTL token buckets
+- Added `usage.server.webSearch` and `usage.server.webFetch` to report Anthropic server tool-call request counts
+
+### Fixed
+
+- Fixed OpenAI usage attribution to avoid double-counting `reasoning_tokens` in output totals
+- Fixed Anthropic streaming usage handling so a previously populated cache TTL breakdown is preserved when later events omit `cache_creation`
+
+## [14.5.4] - 2026-04-28
+
+### Changed
+
+- Changed OpenAI custom Lark grammar payloads to strip comments and blank lines before sending provider requests.
+
+### Fixed
+
+- Fixed OpenAI Codex GPT model pricing by inheriting matching OpenAI catalog rates for zero-priced discovered Codex entries.
+
+## [14.5.3] - 2026-04-27
+
 ### Added
 
 - Added `fireworks` as a supported provider with API key login flow and credential storage
@@ -93,6 +190,7 @@
 - Preserved user-provided `session_id` and `x-client-request-id` headers in OpenAI Responses requests instead of overriding them with automatic session-derived values
 - Stopped sending `session_id` and `x-client-request-id` headers for OpenAI Responses requests when `cacheRetention` is set to `none`
 - Fixed direct OpenAI Responses requests to send `session_id` and `x-client-request-id` from the same session-derived value as `prompt_cache_key`, improving prompt cache affinity for append-only sessions
+
 ## [14.1.1] - 2026-04-14
 
 ### Added

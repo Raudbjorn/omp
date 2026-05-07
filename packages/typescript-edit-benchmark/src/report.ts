@@ -3,7 +3,7 @@
  */
 
 import { formatDuration, formatPercent, truncate } from "@oh-my-pi/pi-utils";
-import type { BenchmarkResult, TaskResult } from "./runner";
+import { type BenchmarkResult, EDIT_FAILURE_CATEGORIES, type TaskResult } from "./runner";
 
 function getStatusEmoji(successRate: number, runsPerTask: number): string {
 	const passing = Math.round(successRate * runsPerTask);
@@ -31,11 +31,21 @@ function escapeMarkdown(text: string): string {
 	return text.replace(/\|/g, "\\|").replace(/\n/g, " ");
 }
 
+function getStringField(value: unknown, field: string): string | null {
+	if (!value || typeof value !== "object") return null;
+	const fieldValue = (value as Record<string, unknown>)[field];
+	return typeof fieldValue === "string" ? fieldValue : null;
+}
+
 function formatEditArgsBlock(args: unknown): string {
 	if (!args || typeof args !== "object") return "—";
-	const diff = (args as { diff?: unknown }).diff;
-	if (typeof diff === "string") {
+	const diff = getStringField(args, "diff");
+	if (diff !== null) {
 		return diff;
+	}
+	const input = getStringField(args, "input");
+	if (input !== null) {
+		return input;
 	}
 	try {
 		return JSON.stringify(args, null, 2);
@@ -188,6 +198,24 @@ export function generateReport(result: BenchmarkResult): string {
 		}
 	}
 
+	const totalCategorizedEditFailures = EDIT_FAILURE_CATEGORIES.reduce(
+		(sum, category) => sum + (summary.editFailureCategories[category] ?? 0),
+		0,
+	);
+	if (totalCategorizedEditFailures > 0) {
+		lines.push("### Edit Failure Categories");
+		lines.push("");
+		lines.push("| Category | Count | % |");
+		lines.push("|----------|-------|---|");
+		for (const category of EDIT_FAILURE_CATEGORIES) {
+			const count = summary.editFailureCategories[category] ?? 0;
+			if (count === 0) continue;
+			lines.push(`| ${category} | ${count} | ${formatPercent(count / totalCategorizedEditFailures)} |`);
+		}
+		lines.push(`| **Total** | **${totalCategorizedEditFailures}** | 100% |`);
+		lines.push("");
+	}
+
 	lines.push("## Task Results");
 	lines.push("");
 	lines.push("| Task | File | Success | Edit Hit | R/E/W | Tokens (In/Out) | Time | Indent |");
@@ -231,6 +259,7 @@ export function generateReport(result: BenchmarkResult): string {
 					lines.push("");
 					lines.push(`- Path: ${escapeMarkdown(path)}`);
 					lines.push(`- Operation: ${escapeMarkdown(operation)}`);
+					lines.push(`- Category: ${escapeMarkdown(failure.category ?? "other")}`);
 					lines.push("");
 					lines.push("**Tool error**");
 					lines.push("");

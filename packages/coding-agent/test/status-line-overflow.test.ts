@@ -4,18 +4,24 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import { _resetSettingsForTest, Settings } from "../src/config/settings";
 import type { StatusLineSegmentId } from "../src/config/settings-schema";
+import { StatusLineComponent } from "../src/modes/components/status-line";
 import type { SegmentContext } from "../src/modes/components/status-line/segments";
 import { renderSegment } from "../src/modes/components/status-line/segments";
-import { initTheme } from "../src/modes/theme/theme";
+import { initTheme, theme } from "../src/modes/theme/theme";
+import { getSessionAccentAnsi, getSessionAccentHex } from "../src/utils/session-color";
 
 const originalProjectDir = getProjectDir();
 
 beforeAll(async () => {
+	_resetSettingsForTest();
+	await Settings.init({ inMemory: true });
 	await initTheme();
 });
 
 afterAll(() => {
+	_resetSettingsForTest();
 	setProjectDir(originalProjectDir);
 });
 
@@ -37,6 +43,7 @@ function createCtx(overrides?: { pathMaxLength?: number; branch?: string | null 
 			},
 		},
 		planMode: null,
+		loopMode: null,
 		usageStats: {
 			input: 0,
 			output: 0,
@@ -58,6 +65,60 @@ function createCtx(overrides?: { pathMaxLength?: number; branch?: string | null 
 		},
 	};
 }
+
+function createStatusLineSession(sessionName: string) {
+	return {
+		state: { messages: [] },
+		isStreaming: false,
+		getAsyncJobSnapshot: () => ({ running: [] }),
+		getCurrentModel: () => undefined,
+		isFastModeEnabled: () => false,
+		sessionManager: {
+			getSessionName: () => sessionName,
+			getUsageStatistics: () => ({
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				premiumRequests: 0,
+				cost: 0,
+			}),
+		},
+	} as unknown as ConstructorParameters<typeof StatusLineComponent>[0];
+}
+
+describe("status line session accent", () => {
+	function buildComponent(sessionAccent: boolean) {
+		const component = new StatusLineComponent(createStatusLineSession("Named session"));
+		component.updateSettings({
+			preset: "custom",
+			leftSegments: ["pi"],
+			rightSegments: ["session_name"],
+			separator: "powerline-thin",
+			sessionAccent,
+		});
+		return component;
+	}
+
+	const accentAnsi = getSessionAccentAnsi(getSessionAccentHex("Named session"));
+
+	it("paints the gap with the session accent when enabled", () => {
+		expect(accentAnsi).toBeDefined();
+		const border = buildComponent(true).getTopBorder(80).content;
+		expect(border).toContain(`${accentAnsi}${theme.boxRound.horizontal}`);
+	});
+
+	it("paints the gap with the border color and omits the session accent when disabled", () => {
+		expect(accentAnsi).toBeDefined();
+		const border = buildComponent(false).getTopBorder(80).content;
+		// Positive: gap is rendered with the theme border color.
+		expect(border).toContain(`${theme.getFgAnsi("border")}${theme.boxRound.horizontal}`);
+		// Negative: the gap-painting pattern (accent ANSI directly followed by a horizontal
+		// glyph) must not appear. The session_name segment may still emit the accent ANSI
+		// for its own text — we only care that the gap is not accent-painted.
+		expect(border).not.toContain(`${accentAnsi}${theme.boxRound.horizontal}`);
+	});
+});
 
 describe("path segment truncation at varying maxLength", () => {
 	let tmpDir: string;

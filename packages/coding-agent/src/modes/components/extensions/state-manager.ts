@@ -242,14 +242,11 @@ export async function loadAllExtensions(
 		const commands = await loadCapability<SlashCommand>("slash-commands", loadOpts);
 		addItems(commands.all, "slash-command", {
 			getDescription: c => {
-				if (!isTemplateSlashCommand(c)) {
-					return c.description || undefined;
-				}
 				const { frontmatter } = parseFrontmatter(c.content, { source: c.path, level: "off" });
 				if (typeof frontmatter.description === "string" && frontmatter.description.trim()) {
 					return frontmatter.description.trim();
 				}
-				const firstLine = c.content.split("\n").find((l: string) => l.trim() && !l.startsWith("---"));
+				const firstLine = c.content.split("\n").find(l => l.trim() && !l.startsWith("---"));
 				return firstLine?.slice(0, 80) || undefined;
 			},
 			getTrigger: c => `/${c.name}`,

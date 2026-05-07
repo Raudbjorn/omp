@@ -179,6 +179,37 @@ function applyPremiumMultiplierOverrides(models: readonly Model[]): Model[] {
 		};
 	});
 }
+function hasBillableCost(cost: Model["cost"]): boolean {
+	return cost.input !== 0 || cost.output !== 0 || cost.cacheRead !== 0 || cost.cacheWrite !== 0;
+}
+
+function applyCodexPricingFallback(models: readonly Model[]): Model[] {
+	const openAIModels = new Map(
+		models
+			.filter(model => model.provider === "openai" && hasBillableCost(model.cost))
+			.map(model => [model.id, model.cost]),
+	);
+
+	return models.map(model => {
+		if (model.provider !== "openai-codex" || model.api !== "openai-codex-responses") {
+			return model;
+		}
+		if (hasBillableCost(model.cost)) {
+			return model;
+		}
+
+		const openAICost = openAIModels.get(model.id);
+		if (!openAICost) {
+			return model;
+		}
+
+		return {
+			...model,
+			cost: { ...openAICost },
+		};
+	});
+}
+
 const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 
 async function getOAuthCredentialsFromStorage(provider: OAuthProvider): Promise<OAuthCredentials | null> {
@@ -288,9 +319,15 @@ async function generateModels() {
 		)
 	).flat();
 	const gitLabDuoModels = getGitLabDuoModels();
-	// Combine models (models.dev has priority)
+	// Combine models (models.dev generally has priority; UPB is an exception because
+	// ai-chat exposes its catalog dynamically and models.dev does not know UPB's dot-prefixed IDs).
 	let allModels = applyGlobalModelsDevFallback(
-		[...modelsDevModels, ...catalogProviderModels, ...gitLabDuoModels],
+		[
+			...catalogProviderModels.filter(model => model.provider === "upb"),
+			...modelsDevModels,
+			...catalogProviderModels.filter(model => model.provider !== "upb"),
+			...gitLabDuoModels,
+		],
 		modelsDevModels,
 	);
 
@@ -334,8 +371,17 @@ async function generateModels() {
 
 	allModels = applyGlobalModelsDevFallback(allModels, modelsDevModels);
 	allModels = applyPremiumMultiplierOverrides(allModels);
+	allModels = applyCodexPricingFallback(allModels);
 	applyGeneratedModelPolicies(allModels);
 	linkOpenAIPromotionTargets(allModels);
+
+	// UPB AI-Chat portal (LiteLLM proxy) requires reasoning.summary to surface reasoning tokens.
+	// Apply thinkingFormat compat to all UPB models since the proxy handles the parameter.
+	for (const model of allModels) {
+		if (model.provider === "upb" && model.api === "openai-completions") {
+			model.compat = { ...model.compat, thinkingFormat: "litellm" };
+		}
+	}
 
 	// Group by provider and sort each provider's models
 	const providers: Record<string, Record<string, Model>> = {};
@@ -366,7 +412,7 @@ async function generateModels() {
 	}
 
 	// Generate JSON file
-	await Bun.write(path.join(packageRoot, "src/models.json"), JSON.stringify(MODELS, null, "	"));
+	await Bun.write(path.join(packageRoot, "src/models.json"), JSON.stringify(MODELS, null, "\t"));
 	console.log("Generated src/models.json");
 
 	// Print statistics

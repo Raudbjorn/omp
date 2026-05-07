@@ -72,7 +72,7 @@ describe("ast_edit tool schema", () => {
 
 			const result = await tool!.execute("ast-edit-test", {
 				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
-				path: filePath,
+				paths: [filePath],
 			});
 			const text = result.content.find(content => content.type === "text")?.text ?? "";
 			const lines = text.split("\n");
@@ -108,7 +108,7 @@ describe("ast_edit tool schema", () => {
 
 			const previewResult = await tool!.execute("ast-edit-preview", {
 				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
-				path: filePath,
+				paths: [filePath],
 			});
 			expect(previewResult.details).toBeDefined();
 			expect((previewResult.details as { applied?: boolean }).applied).toBe(false);
@@ -153,7 +153,7 @@ describe("ast_edit tool schema", () => {
 
 			const previewResult = await tool!.execute("ast-edit-preview", {
 				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
-				path: filePath,
+				paths: [filePath],
 			});
 			expect((previewResult.details as { totalReplacements?: number } | undefined)?.totalReplacements).toBe(1);
 
@@ -203,7 +203,7 @@ describe("ast_edit tool schema", () => {
 
 			const previewResult = await tool!.execute("ast-edit-glob", {
 				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
-				path: `${packagesDir}/pkg-*/src/**/*.ts`,
+				paths: [`${packagesDir}/pkg-*/src/**/*.ts`],
 			});
 
 			const text = previewResult.content.find(content => content.type === "text")?.text ?? "";
@@ -218,8 +218,8 @@ describe("ast_edit tool schema", () => {
 			expect(details?.totalReplacements).toBe(2);
 			expect(details?.fileReplacements).toEqual(
 				expect.arrayContaining([
-					expect.objectContaining({ path: "pkg-123/src/root.ts", count: 1 }),
-					expect.objectContaining({ path: "pkg-123/src/nested/child.ts", count: 1 }),
+					expect.objectContaining({ path: "packages/pkg-123/src/root.ts", count: 1 }),
+					expect.objectContaining({ path: "packages/pkg-123/src/nested/child.ts", count: 1 }),
 				]),
 			);
 
@@ -259,7 +259,7 @@ describe("ast_edit tool schema", () => {
 
 			const previewResult = await tool!.execute("ast-edit-tlaplus", {
 				ops: [{ pat: "Init", out: "Start" }],
-				path: filePath,
+				paths: [filePath],
 			});
 
 			const text = previewResult.content.find(content => content.type === "text")?.text ?? "";

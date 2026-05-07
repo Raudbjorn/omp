@@ -1,20 +1,20 @@
-# Python Tool and IPython Runtime
+# Eval Tool Python Backend and IPython Runtime
 
 This document describes the current Python execution stack in `packages/coding-agent`.
 It covers tool behavior, kernel/gateway lifecycle, environment handling, execution semantics, output rendering, and operational failure modes.
 
 ## Scope and Key Files
 
-- Tool surface: `src/tools/python.ts`
-- Session/per-call kernel orchestration: `src/ipy/executor.ts`
-- Kernel protocol + gateway integration: `src/ipy/kernel.ts`
-- Shared local gateway coordinator: `src/ipy/gateway-coordinator.ts`
-- Interactive-mode renderer for user-triggered Python runs: `src/modes/components/python-execution.ts`
-- Runtime/env filtering and Python resolution: `src/ipy/runtime.ts`
+- Tool surface: `src/tools/eval.ts`
+- Session/per-call kernel orchestration: `src/eval/py/executor.ts`
+- Kernel protocol + gateway integration: `src/eval/py/kernel.ts`
+- Shared local gateway coordinator: `src/eval/py/gateway-coordinator.ts`
+- Interactive-mode renderer for user-triggered Python runs: `src/modes/components/eval-execution.ts`
+- Runtime/env filtering and Python resolution: `src/eval/py/runtime.ts`
 
-## What the Python tool is
+## What eval's Python backend is
 
-The `python` tool executes one or more Python cells through a Jupyter Kernel Gateway-backed kernel (not by spawning `python -c` directly per cell).
+The `eval` tool executes one or more Python cells through a Jupyter Kernel Gateway-backed kernel when `language: "python"` is selected or inferred (not by spawning `python -c` directly per cell).
 
 Tool params:
 
@@ -22,8 +22,7 @@ Tool params:
 {
   cells: Array<{ code: string; title?: string }>;
   timeout?: number; // seconds, clamped to 1..600, default 30
-  cwd?: string;
-  reset?: boolean; // reset kernel before first cell only
+  reset?: boolean; // reset selected runtime before the first cell only
 }
 ```
 
@@ -71,7 +70,7 @@ There are two gateway paths:
 
 ## Kernel lifecycle
 
-Each execution uses a kernel created via `POST /api/kernels` on the selected gateway.
+Kernels are created via `POST /api/kernels` on the selected gateway when a retained session needs a kernel or when `per-call` mode starts a request.
 
 Kernel startup sequence:
 
@@ -92,10 +91,10 @@ Kernel shutdown:
 
 ## Session persistence semantics
 
-`python.kernelMode` controls kernel reuse:
+`python.kernelMode` controls retained kernel reuse:
 
 - `session` (default)
-  - Reuses kernel sessions keyed by session identity + cwd.
+  - Reuses kernel sessions keyed by session file plus cwd when a session file exists; otherwise by cwd.
   - Execution is serialized per session via a queue.
   - Idle sessions are evicted after 5 minutes.
   - At most 4 sessions; oldest is evicted on overflow.
@@ -135,33 +134,37 @@ Runtime selection order:
 
 When a venv is selected, its bin/Scripts path is prepended to `PATH`.
 
-Kernel env initialization inside Python also:
+Kernel startup receives the optional session file path from the executor:
+
+- `PI_SESSION_FILE` (session state file path)
+
+`PythonKernel.#initializeKernelEnvironment(...)` then runs init script inside kernel to:
 
 - `os.chdir(cwd)`
-- injects provided env map into `os.environ`
+- injects provided env entries into `os.environ`
 - ensures cwd is in `sys.path`
 
 ## Tool availability and mode selection
 
-`python.toolMode` (default `both`) + optional `PI_PY` override controls exposure:
+`eval.py` / `eval.js` (both default `true`) plus optional `PI_PY` override controls eval backend exposure:
 
-- `ipy-only`
-- `bash-only`
-- `both`
+- Python backend only (`eval.py=true`, `eval.js=false`)
+- JavaScript backend only (`eval.py=false`, `eval.js=true`)
+- both backends
 
 `PI_PY` accepted values:
 
-- `0` / `bash` -> `bash-only`
-- `1` / `py` -> `ipy-only`
-- `mix` / `both` -> `both`
+- `0` / `bash` -> JavaScript backend only
+- `1` / `py` -> Python backend only
+- `mix` / `both` -> both backends
 
-If Python preflight fails, tool creation degrades to bash-only for that session.
+If Python preflight fails and `eval.js` is enabled, `eval` remains available and dispatches to JavaScript unless `language: "python"` is explicitly requested.
 
 ## Execution flow and cancellation/timeout
 
 ### Tool-level timeout
 
-`python` tool timeout is in seconds, default 30, clamped to `1..600`.
+`eval` timeout is in seconds, default 30, clamped to `1..600`.
 
 The tool combines:
 
@@ -221,11 +224,11 @@ Tool results can include truncation metadata and `artifact://<id>` for full outp
 
 ### Renderer behavior
 
-- Tool renderer (`python.ts`):
+- Tool renderer (`eval.ts`):
   - shows code-cell blocks with per-cell status
   - collapsed preview defaults to 10 lines
   - supports expanded mode for full output and richer status detail
-- Interactive renderer (`python-execution.ts`):
+- Interactive renderer (`eval-execution.ts`):
   - used for user-triggered Python execution in TUI
   - collapsed preview defaults to 20 lines
   - clamps very long individual lines to 4000 chars for display safety
@@ -250,9 +253,9 @@ Behavior differences from local shared gateway:
 
 ## Operational troubleshooting (current failure modes)
 
-- **Python tool not available**
-  - Check `python.toolMode` / `PI_PY`.
-  - If preflight fails, runtime falls back to bash-only.
+- **Python backend not available**
+  - Check `eval.py`, Python kernel dependencies, and `PI_PY`.
+  - If preflight fails and `eval.js` is enabled, omit `language` or pass `language: "js"` to use JavaScript.
 
 - **Kernel availability errors**
   - Local mode requires both `kernel_gateway` and `ipykernel` importable in resolved Python runtime.

@@ -160,6 +160,9 @@ function mapWithBundledReference<TApi extends Api>(
 		id: defaults.id,
 		name,
 		baseUrl: defaults.baseUrl,
+		// Endpoint discovery often omits capability metadata for proxied models. Keep the
+		// stronger bundled reference capabilities while still allowing explicit endpoint
+		// limits to override when provided.
 		contextWindow: toPositiveNumber(entry.context_length, reference.contextWindow),
 		maxTokens: toPositiveNumber(entry.max_completion_tokens, reference.maxTokens),
 	};
@@ -190,7 +193,10 @@ function toOllamaNativeBaseUrl(baseUrl: string): string {
 	return baseUrl.endsWith("/v1") ? baseUrl.slice(0, -3) : baseUrl;
 }
 
-async function fetchOllamaNativeModels(baseUrl: string): Promise<Model<"openai-responses">[] | null> {
+async function fetchOllamaNativeModels(
+	baseUrl: string,
+	resolveLimits: (modelId: string) => Promise<OllamaModelLimits>,
+): Promise<Model<"openai-responses">[] | null> {
 	const nativeBaseUrl = toOllamaNativeBaseUrl(baseUrl);
 	let response: Response;
 	try {
@@ -210,7 +216,7 @@ async function fetchOllamaNativeModels(baseUrl: string): Promise<Model<"openai-r
 		entries.map(async (entry): Promise<Model<"openai-responses"> | null> => {
 			const id = entry.model ?? entry.name;
 			if (!id) return null;
-			const { contextWindow, maxTokens } = await fetchOllamaModelLimits(nativeBaseUrl, id);
+			const { contextWindow, maxTokens } = await resolveLimits(id);
 			return {
 				id,
 				name: entry.name ?? id,
@@ -229,21 +235,27 @@ async function fetchOllamaNativeModels(baseUrl: string): Promise<Model<"openai-r
 	return models.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-/** Ollama's default `num_ctx` when the runtime request does not override it. */
-const OLLAMA_DEFAULT_CONTEXT_WINDOW = 4096;
+/**
+ * Fallback context window for Ollama models when `/api/show` is unavailable
+ * or omits a `model_info.<arch>.context_length` field. Matches the size
+ * Ollama's cloud catalog reports for stock models.
+ */
+const OLLAMA_FALLBACK_CONTEXT_WINDOW = 128_000;
 /** Cap max output tokens at a value that matches OMP's other openai-responses defaults. */
 const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 
+interface OllamaModelLimits {
+	contextWindow: number;
+	maxTokens: number;
+}
+
 /**
  * Query Ollama's `/api/show` endpoint for a single model and pull its native
- * context length out of `model_info.<arch>.context_length`. Falls back to
- * Ollama's default context window when the endpoint or field is unavailable
- * so discovery still succeeds against older Ollama builds.
+ * context length out of `model_info.<arch>.context_length`. Returns the
+ * discovered limits, or `undefined` when the endpoint or field is
+ * unavailable so callers can layer their own fallback.
  */
-async function fetchOllamaModelLimits(
-	nativeBaseUrl: string,
-	modelId: string,
-): Promise<{ contextWindow: number; maxTokens: number }> {
+async function fetchOllamaShowLimits(nativeBaseUrl: string, modelId: string): Promise<OllamaModelLimits | undefined> {
 	try {
 		const response = await fetch(`${nativeBaseUrl}/api/show`, {
 			method: "POST",
@@ -251,7 +263,7 @@ async function fetchOllamaModelLimits(
 			body: JSON.stringify({ model: modelId }),
 		});
 		if (!response.ok) {
-			return { contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
+			return undefined;
 		}
 		const payload = (await response.json()) as { model_info?: Record<string, unknown> };
 		const info = payload.model_info ?? {};
@@ -261,9 +273,34 @@ async function fetchOllamaModelLimits(
 			}
 		}
 	} catch {
-		// fall through to default
+		// fall through; caller decides on the fallback
 	}
-	return { contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
+	return undefined;
+}
+
+/**
+ * Build a resolver that fetches `/api/show` limits per model id and caches the
+ * result in-memory for the lifetime of the manager. Successful lookups are
+ * cached so repeated `fetchDynamicModels` calls do not refetch; failed
+ * lookups stay uncached so a later refresh can recover.
+ */
+function createOllamaLimitsResolver(nativeBaseUrl: string): (modelId: string) => Promise<OllamaModelLimits> {
+	const cache = new Map<string, Promise<OllamaModelLimits>>();
+	return modelId => {
+		const cached = cache.get(modelId);
+		if (cached) return cached;
+		const pending = (async () => {
+			const limits = await fetchOllamaShowLimits(nativeBaseUrl, modelId);
+			if (!limits) {
+				cache.delete(modelId);
+				return { contextWindow: OLLAMA_FALLBACK_CONTEXT_WINDOW, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
+			}
+			return limits;
+		})();
+		cache.set(modelId, pending);
+		void pending.catch(() => cache.delete(modelId));
+		return pending;
+	};
 }
 
 const OPENAI_NON_RESPONSES_PREFIXES = [
@@ -490,6 +527,21 @@ export interface XaiModelManagerConfig {
 export function xaiModelManagerOptions(config?: XaiModelManagerConfig): ModelManagerOptions<"openai-completions"> {
 	return createSimpleOpenAICompletionsOptions("xai", "https://api.x.ai/v1", config);
 }
+
+// ---------------------------------------------------------------------------
+// 6.5 DeepSeek
+// ---------------------------------------------------------------------------
+
+export interface DeepSeekModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function deepseekModelManagerOptions(
+	config?: DeepSeekModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createSimpleOpenAICompletionsOptions("deepseek", "https://api.deepseek.com", config);
+}
 // ---------------------------------------------------------------------------
 // 7.5 Fireworks
 // ---------------------------------------------------------------------------
@@ -562,16 +614,8 @@ export function fireworksModelManagerOptions(
 						toBoolean(entry.supports_chat) === true && toBoolean(entry.supports_tools) === true,
 					mapModel: (entry, defaults) => {
 						const publicModelId = toFireworksPublicModelId(defaults.id);
-						// Prefer bundled references over models.dev. Both reference sources
-						// dedupe by model id across all providers, so a shared id like `glm-5`
-						// could resolve to another provider's entry — pulling in its
-						// `compat`/`cost`/`headers`/`reasoning` fields and silently routing
-						// Z.ai-style thinking format or MiniMax pricing into Fireworks requests.
-						// Strip provider-scoped fields when the reference isn't actually a
-						// Fireworks entry.
-						const reference = bundledReferences(publicModelId) ?? modelsDevReferences.get(publicModelId);
+						const reference = modelsDevReferences.get(publicModelId) ?? bundledReferences(publicModelId);
 						const model = mapWithBundledReference(entry, defaults, reference);
-						const isFireworksReference = reference?.provider === "fireworks";
 						return {
 							...model,
 							id: publicModelId,
@@ -582,9 +626,6 @@ export function fireworksModelManagerOptions(
 							input: toBoolean(entry.supports_image_input) === true ? ["text", "image"] : ["text"],
 							contextWindow: toPositiveNumber(entry.context_length, model.contextWindow),
 							maxTokens: toPositiveNumber(entry.max_completion_tokens, model.maxTokens),
-							compat: isFireworksReference ? model.compat : undefined,
-							cost: isFireworksReference ? model.cost : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-							headers: isFireworksReference ? model.headers : undefined,
 						};
 					},
 				});
@@ -695,7 +736,9 @@ export interface OllamaModelManagerConfig {
 export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): ModelManagerOptions<"openai-responses"> {
 	const apiKey = config?.apiKey;
 	const baseUrl = normalizeOllamaBaseUrl(config?.baseUrl);
+	const nativeBaseUrl = toOllamaNativeBaseUrl(baseUrl);
 	const references = createBundledReferenceMap<"openai-responses">("ollama" as Parameters<typeof getBundledModels>[0]);
+	const resolveLimits = createOllamaLimitsResolver(nativeBaseUrl);
 	return {
 		providerId: "ollama",
 		fetchDynamicModels: async () => {
@@ -710,17 +753,23 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 						return {
 							...defaults,
 							name: toModelName(entry.name, defaults.name),
-							contextWindow: 128000,
-							maxTokens: 8192,
+							contextWindow: OLLAMA_FALLBACK_CONTEXT_WINDOW,
+							maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
 						};
 					}
 					return mapWithBundledReference(entry, defaults, reference);
 				},
 			});
 			if (openAiCompatible && openAiCompatible.length > 0) {
+				await Promise.all(
+					openAiCompatible.map(async model => {
+						const limits = await resolveLimits(model.id);
+						model.contextWindow = limits.contextWindow;
+					}),
+				);
 				return openAiCompatible;
 			}
-			const nativeFallback = await fetchOllamaNativeModels(baseUrl);
+			const nativeFallback = await fetchOllamaNativeModels(baseUrl, resolveLimits);
 			if (nativeFallback && nativeFallback.length > 0) {
 				return nativeFallback;
 			}
@@ -967,18 +1016,28 @@ export interface VercelAiGatewayModelManagerConfig {
 	baseUrl?: string;
 }
 
+function normalizeVercelAiGatewayBaseUrls(rawBaseUrl: string | undefined): { baseUrl: string; catalogBaseUrl: string } {
+	const baseUrl = (rawBaseUrl === undefined ? "https://ai-gateway.vercel.sh" : rawBaseUrl.trim()).replace(/\/+$/, "");
+	const catalogBaseUrl = baseUrl === "" || baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+
+	return {
+		baseUrl: baseUrl.endsWith("/v1") ? baseUrl.slice(0, -3) : baseUrl,
+		catalogBaseUrl,
+	};
+}
+
 export function vercelAiGatewayModelManagerOptions(
 	config?: VercelAiGatewayModelManagerConfig,
 ): ModelManagerOptions<"anthropic-messages"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://ai-gateway.vercel.sh";
+	const { baseUrl, catalogBaseUrl } = normalizeVercelAiGatewayBaseUrls(config?.baseUrl);
 	return {
 		providerId: "vercel-ai-gateway",
 		fetchDynamicModels: () =>
 			fetchOpenAICompatibleModels({
 				api: "anthropic-messages",
 				provider: "vercel-ai-gateway",
-				baseUrl,
+				baseUrl: catalogBaseUrl,
 				apiKey,
 				filterModel: (entry: OpenAICompatibleModelRecord) => {
 					const tags = entry.tags;
@@ -994,6 +1053,7 @@ export function vercelAiGatewayModelManagerOptions(
 
 					return {
 						...defaults,
+						baseUrl,
 						reasoning: tags.includes("reasoning"),
 						input: tags.includes("vision") ? ["text", "image"] : ["text"],
 						cost: {
@@ -1297,7 +1357,13 @@ export function xiaomiModelManagerOptions(
 	config?: XiaomiModelManagerConfig,
 ): ModelManagerOptions<"anthropic-messages"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = normalizeAnthropicBaseUrl(config?.baseUrl, "https://api.xiaomimimo.com/anthropic");
+	// Xiaomi splits API keys across two backends: standard `sk-` keys hit
+	// api.xiaomimimo.com; "token plan" `tp-` keys hit the EU token-plan host.
+	// Both expose the same Anthropic-compat layout under /anthropic/v1/*.
+	const defaultBaseUrl = apiKey?.startsWith("tp-")
+		? "https://token-plan-ams.xiaomimimo.com/anthropic"
+		: "https://api.xiaomimimo.com/anthropic";
+	const baseUrl = normalizeAnthropicBaseUrl(config?.baseUrl, defaultBaseUrl);
 	// Xiaomi hosts chat completions under /anthropic/* but exposes model
 	// discovery at the OpenAI-style /v1/models endpoint on the root host.
 	const discoveryRoot = baseUrl.endsWith("/anthropic") ? baseUrl.slice(0, -"/anthropic".length) : baseUrl;
@@ -1359,7 +1425,7 @@ export function litellmModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
-// UPB AI Gateway (Universität Paderborn — LiteLLM-based proxy)
+// UPB AI-Chat portal (Universität Paderborn — Open WebUI proxy with central funding)
 // ---------------------------------------------------------------------------
 
 export interface UPBModelManagerConfig {
@@ -1369,7 +1435,7 @@ export interface UPBModelManagerConfig {
 
 export function upbModelManagerOptions(config?: UPBModelManagerConfig): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://ai-gateway.uni-paderborn.de/v1";
+	const baseUrl = config?.baseUrl ?? "https://ai-chat.uni-paderborn.de/api/v1";
 	const references = createBundledReferenceMap<"openai-completions">("upb" as Parameters<typeof getBundledModels>[0]);
 	return {
 		providerId: "upb",
@@ -1382,7 +1448,17 @@ export function upbModelManagerOptions(config?: UPBModelManagerConfig): ModelMan
 					apiKey,
 					mapModel: (entry, defaults) => {
 						const reference = references.get(defaults.id);
-						return mapWithBundledReference(entry, defaults, reference);
+						const mapped = mapWithBundledReference(entry, defaults, reference);
+						if (defaults.id === "openai.gpt-5.5") {
+							mapped.contextWindow = 1_050_000;
+							mapped.maxTokens = 128_000;
+							mapped.reasoning = true;
+							mapped.input = ["text", "image"];
+						}
+						// LiteLLM proxy (UPB AI-Chat) requires reasoning.summary to surface reasoning tokens.
+						// Apply to all models since the proxy handles the parameter for any model.
+						mapped.compat = { ...mapped.compat, thinkingFormat: "litellm" };
+						return mapped;
 					},
 				}),
 		}),
@@ -1906,14 +1982,28 @@ function resolveApiByRules(
 	return fallback;
 }
 
-function createOpenCodeApiResolution(basePath: string): {
+function createOpenCodeApiResolution(
+	basePath: string,
+	idOverrides: Readonly<Record<string, Api>> = {},
+): {
 	defaultResolution: { api: Api; baseUrl: string };
 	rules: ApiResolutionRule[];
 } {
 	const completionsBaseUrl = `${basePath}/v1`;
+	// Per-API base URLs on the OpenCode-style endpoint:
+	// - openai-completions / openai-responses / google-generative-ai → /v1
+	// - anthropic-messages → bare basePath (the Anthropic client appends /v1/messages)
+	const baseUrlForApi = (api: Api): string => (api === "anthropic-messages" ? basePath : completionsBaseUrl);
+	const overrideRules: ApiResolutionRule[] = Object.entries(idOverrides).map(([id, api]) => ({
+		matches: modelId => modelId === id,
+		resolved: { api, baseUrl: baseUrlForApi(api) },
+	}));
 	return {
 		defaultResolution: { api: "openai-completions", baseUrl: completionsBaseUrl },
 		rules: [
+			// Per-id overrides take precedence over npm-based heuristics so we can
+			// correct upstream metadata mismatches (see OPENCODE_GO_API_RESOLUTION).
+			...overrideRules,
 			{
 				matches: (_modelId, raw) => raw.provider?.npm === "@ai-sdk/openai",
 				resolved: { api: "openai-responses", baseUrl: completionsBaseUrl },
@@ -1931,7 +2021,21 @@ function createOpenCodeApiResolution(basePath: string): {
 }
 
 const OPENCODE_ZEN_API_RESOLUTION = createOpenCodeApiResolution("https://opencode.ai/zen");
-const OPENCODE_GO_API_RESOLUTION = createOpenCodeApiResolution("https://opencode.ai/zen/go");
+// OpenCode Go: models.dev declares minimax-m2.7 / qwen3.5-plus / qwen3.6-plus
+// with `provider.npm = "@ai-sdk/anthropic"`, but the OpenCode Go gateway only
+// serves them at `https://opencode.ai/zen/go/v1/chat/completions` (verified
+// against https://opencode.ai/zen/go/v1/models and the upstream endpoint
+// table at https://opencode.ai/docs/go/#endpoints — minimax-m2.5 works the
+// same way and lacks an `npm` field on models.dev so it already falls through
+// to the openai-completions default). Without this override the resolver
+// would POST anthropic-style requests to /v1/messages and the gateway would
+// return its `Page Not Found` HTML (issue #887). Override the resolver so
+// regenerating models.json keeps the correct routing.
+const OPENCODE_GO_API_RESOLUTION = createOpenCodeApiResolution("https://opencode.ai/zen/go", {
+	"minimax-m2.7": "openai-completions",
+	"qwen3.5-plus": "openai-completions",
+	"qwen3.6-plus": "openai-completions",
+});
 
 const COPILOT_BASE_URL = "https://api.githubcopilot.com";
 
@@ -2058,6 +2162,26 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 	}),
 	// --- xAI ---
 	openAiCompletionsDescriptor("xai", "xai", "https://api.x.ai/v1"),
+	// --- DeepSeek ---
+	openAiCompletionsDescriptor("deepseek", "deepseek", "https://api.deepseek.com", {
+		// Only ship the v4 family as built-ins; older deepseek-chat / deepseek-reasoner
+		// ids are kept off the catalog until the issue thread asks for them.
+		filterModel: (id, m) => m.tool_call === true && id.startsWith("deepseek-v4"),
+		compat: {
+			// xhigh maps to DeepSeek's `max` reasoning_effort (#830 thread).
+			supportsReasoningEffort: true,
+			reasoningEffortMap: { xhigh: "max" },
+			// `tool_choice` returns 400 against DeepSeek when reasoning_effort is set
+			// (per the issue thread). Tool calls still work without the parameter.
+			supportsToolChoice: false,
+			// DeepSeek emits chain-of-thought via `reasoning_content` and requires it
+			// to round-trip on assistant tool-call messages so the model can resume
+			// from prior thinking (interleaved.field=reasoning_content on models.dev,
+			// matches the kimi/openrouter handling already in detectCompat).
+			reasoningContentField: "reasoning_content",
+			requiresReasoningContentForToolCalls: true,
+		},
+	}),
 ];
 
 const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDescriptor[] = [
@@ -2065,8 +2189,25 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDe
 	anthropicMessagesDescriptor("zai-coding-plan", "zai", "https://api.z.ai/api/anthropic"),
 	// --- Xiaomi ---
 	anthropicMessagesDescriptor("xiaomi", "xiaomi", "https://api.xiaomimimo.com/anthropic", {
-		defaultContextWindow: 262144,
-		defaultMaxTokens: 8192,
+		defaultContextWindow: 1_048_576,
+		defaultMaxTokens: 131_072,
+	}),
+	// --- Xiaomi MiMo Coding Plan ---
+	openAiCompletionsDescriptor("mimo-coding-plan", "mimo-code", "https://token-plan-ams.xiaomimimo.com/v1", {
+		defaultContextWindow: 1_048_576,
+		defaultMaxTokens: 131_072,
+		resolveApi: (modelId, raw) =>
+			resolveApiByRules(
+				modelId,
+				raw,
+				[
+					{
+						matches: (_id, raw) => raw.provider?.npm === "@ai-sdk/anthropic",
+						resolved: { api: "anthropic-messages", baseUrl: "https://token-plan-ams.xiaomimimo.com/anthropic" },
+					},
+				],
+				{ api: "openai-completions", baseUrl: "https://token-plan-ams.xiaomimimo.com/v1" },
+			),
 	}),
 	// --- MiniMax Coding Plan ---
 	openAiCompletionsDescriptor("minimax-coding-plan", "minimax-code", "https://api.minimax.io/v1", {

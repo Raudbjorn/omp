@@ -277,6 +277,11 @@ async function runPhase1(options: {
 			});
 
 			if (result.kind === "failed") {
+				logger.error("Memory phase1 stage1 job failed", {
+					threadId: claim.threadId,
+					rolloutPath: claim.rolloutPath,
+					reason: result.reason,
+				});
 				markStage1Failed(db, {
 					threadId: claim.threadId,
 					ownershipToken: claim.ownershipToken,
@@ -539,7 +544,7 @@ function shouldPersistResponseItemForMemories(message: AgentMessage): boolean {
 	}
 	if (role !== "toolResult") return false;
 	const toolName = (message as { toolName?: string }).toolName;
-	if (toolName === "bash" || toolName === "python" || toolName === "read" || toolName === "grep") {
+	if (toolName === "bash" || toolName === "eval" || toolName === "read" || toolName === "search") {
 		const text = extractMessageText(message);
 		return text.length > 0 && text.length <= 32_000;
 	}
@@ -1072,7 +1077,7 @@ async function resolveMemoryModel(options: {
 
 function loadMemoryConfig(settings: Settings): MemoryRuntimeConfig {
 	return {
-		enabled: settings.get("memories.enabled") ?? DEFAULTS.enabled,
+		enabled: settings.get("memory.backend") === "local" || settings.get("memories.enabled") === true,
 		maxRolloutsPerStartup: settings.get("memories.maxRolloutsPerStartup") ?? DEFAULTS.maxRolloutsPerStartup,
 		maxRolloutAgeDays: settings.get("memories.maxRolloutAgeDays") ?? DEFAULTS.maxRolloutAgeDays,
 		minRolloutIdleHours: settings.get("memories.minRolloutIdleHours") ?? DEFAULTS.minRolloutIdleHours,

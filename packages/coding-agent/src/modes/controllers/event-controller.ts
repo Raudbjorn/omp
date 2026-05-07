@@ -53,6 +53,8 @@ export class EventController {
 			ttsr_triggered: e => this.#handleTtsrTriggered(e),
 			todo_reminder: e => this.#handleTodoReminder(e),
 			todo_auto_clear: e => this.#handleTodoAutoClear(e),
+			irc_message: e => this.#handleIrcMessage(e),
+			notice: e => this.#handleNotice(e),
 		} satisfies AgentSessionEventHandlers;
 	}
 
@@ -116,8 +118,11 @@ export class EventController {
 		assistantComponent.setToolResultImages(toolCallId, images);
 		return true;
 	}
-	#updateWorkingMessageFromIntent(intent: string | undefined): void {
-		const trimmed = intent?.trim();
+	#updateWorkingMessageFromIntent(intent: unknown): void {
+		// Streamed JSON can deliver non-string `_i` (object, number, boolean) before
+		// schema validation; `?.` only guards null/undefined, so guard the type too.
+		if (typeof intent !== "string") return;
+		const trimmed = intent.trim();
 		if (!trimmed || trimmed === this.#lastIntent) return;
 		this.#lastIntent = trimmed;
 		this.ctx.setWorkingMessage(`${trimmed} (esc to interrupt)`);
@@ -180,18 +185,23 @@ export class EventController {
 
 			this.#resetReadGroup();
 			const wasOptimistic = this.ctx.optimisticUserMessageSignature === signature;
+			const wasLocallySubmitted = this.ctx.locallySubmittedUserSignatures.delete(signature) || wasOptimistic;
 			if (!wasOptimistic) {
 				this.ctx.addMessageToChat(event.message);
 			}
-			this.ctx.optimisticUserMessageSignature = undefined;
+			if (wasOptimistic) {
+				this.ctx.optimisticUserMessageSignature = undefined;
+			}
 
-			// Clear the editor only when the submission did not originate from this
-			// session's optimistic flow (which already cleared the editor at submit
-			// time). Clearing here on the optimistic path would race with the user
-			// typing the next prompt while the previous large redraw lands and erase
-			// their in-progress draft (#783).
-			if (!event.message.synthetic && !wasOptimistic) {
-				this.ctx.editor.setText("");
+			// Clear the editor only when the submission did not originate from a
+			// local submission (optimistic or queued-while-streaming). Both local
+			// paths already cleared the editor at submit time; clearing again here
+			// would race with the user typing the next prompt while the previous
+			// large redraw lands and erase their in-progress draft (#783).
+			if (!event.message.synthetic) {
+				if (!wasLocallySubmitted) {
+					this.ctx.editor.setText("");
+				}
 				this.ctx.updatePendingMessagesDisplay();
 			}
 			this.ctx.ui.requestRender();
@@ -207,6 +217,28 @@ export class EventController {
 			this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
 			this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
 			this.ctx.ui.requestRender();
+		}
+	}
+
+	async #handleIrcMessage(event: Extract<AgentSessionEvent, { type: "irc_message" }>): Promise<void> {
+		const signature = `${event.message.role}:${event.message.customType}:${event.message.timestamp}`;
+		if (this.#renderedCustomMessages.has(signature)) {
+			return;
+		}
+		this.#renderedCustomMessages.add(signature);
+		this.#resetReadGroup();
+		this.ctx.addMessageToChat(event.message);
+		this.ctx.ui.requestRender();
+	}
+
+	async #handleNotice(event: Extract<AgentSessionEvent, { type: "notice" }>): Promise<void> {
+		const message = event.source ? `${event.source}: ${event.message}` : event.message;
+		if (event.level === "error") {
+			this.ctx.showError(message);
+		} else if (event.level === "warning") {
+			this.ctx.showWarning(message);
+		} else {
+			this.ctx.showStatus(message);
 		}
 	}
 
@@ -278,7 +310,7 @@ export class EventController {
 				const args = content.arguments;
 				if (!args || typeof args !== "object") continue;
 				if (INTENT_FIELD in args) {
-					this.#updateWorkingMessageFromIntent(args[INTENT_FIELD] as string | undefined);
+					this.#updateWorkingMessageFromIntent(args[INTENT_FIELD]);
 					continue;
 				}
 				const tool = this.ctx.session.getToolByName(content.name);
@@ -675,8 +707,7 @@ export class EventController {
 		if (this.ctx.isBackgrounded === false) return;
 		const notify = settings.get("completion.notify");
 		if (notify === "off") return;
-		const title =
-			this.ctx.sessionManager.titleSource === "auto" ? undefined : this.ctx.sessionManager.getSessionName();
+		const title = this.ctx.sessionManager.getSessionName();
 		const message = title ? `${title}: Complete` : "Complete";
 		TERMINAL.sendNotification(message);
 	}

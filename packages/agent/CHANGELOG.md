@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [14.6.2] - 2026-05-03
+
+### Fixed
+
+- Fixed unhandled promise rejection when `getApiKey` or any other async error occurs during `streamAssistantResponse`: agent loop IIFEs now catch and route errors through `EventStream.fail()`, which terminates the `for await` loop and lets `Agent#runLoop`'s catch block create a proper error assistant message instead of crashing
+
+## [14.6.0] - 2026-05-02
+### Fixed
+
+- Fixed request cancellation before provider events by emitting an aborted assistant message and ending the stream with `stopReason: "aborted"`
+
+## [14.5.10] - 2026-04-30
+
+### Added
+
+- Added an `onResponse` stream option for observing provider response metadata after response headers arrive.
+
 ## [14.2.0] - 2026-04-23
 
 ### Changed

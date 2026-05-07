@@ -1,0 +1,37 @@
+%import common.LF
+%import common.WS_INLINE
+
+// Canonical Eval input. Each cell is introduced by a header line:
+//
+//   ===== <info> =====
+//
+// where each side is at least 5 equal signs. The info between the bars is
+// a list of space-separated tokens, all optional, in any order:
+//
+//   py | js | ts                  language for this cell
+//   py:"..." | js:"..." | ts:"..." language plus title shorthand
+//   id:"..."                      cell title (when language unchanged)
+//   t:<digits>(ms|s|m)?           per-cell timeout (default 30s)
+//   rst                           reset this language's kernel before running
+//
+// Everything between one header line and the next (or end of input) is
+// the cell's code, verbatim. The runtime additionally accepts content
+// before the first header as an implicit default-language cell, but that
+// is lenient fallback only and MUST NOT be relied on.
+
+start: cell+
+cell:  header LF code_line*
+
+header: BAR (WS_INLINE attr)+ WS_INLINE BAR
+      | BAR WS_INLINE? BAR
+
+attr: LANG_TITLE | LANG | ID_ATTR | T_ATTR | RST_FLAG
+
+code_line: /[^\r\n]*/ LF
+
+BAR:        /={5,}/
+LANG:       "py" | "js" | "ts"
+LANG_TITLE: ("py" | "js" | "ts") ":\"" /[^"\r\n]*/ "\""
+ID_ATTR:    "id:\"" /[^"\r\n]*/ "\""
+T_ATTR:     "t:" /\d+(ms|s|m)?/
+RST_FLAG:   "rst"

@@ -3,7 +3,10 @@ import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
 
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const processPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
+const originalWslDistroName = Bun.env.WSL_DISTRO_NAME;
+const originalWslInterop = Bun.env.WSL_INTEROP;
 
 function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
 	if (descriptor) {
@@ -11,6 +14,14 @@ function restoreProperty(target: object, key: string, descriptor: PropertyDescri
 		return;
 	}
 	delete (target as Record<string, unknown>)[key];
+}
+
+function restoreEnv(key: string, original: string | undefined): void {
+	if (original === undefined) {
+		delete Bun.env[key];
+		return;
+	}
+	Bun.env[key] = original;
 }
 
 describe("ProcessTerminal OSC 11 appearance detection", () => {
@@ -26,6 +37,9 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
 		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
 		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
+		restoreProperty(process, "platform", processPlatformDescriptor);
+		restoreEnv("WSL_INTEROP", originalWslInterop);
+		restoreEnv("WSL_DISTRO_NAME", originalWslDistroName);
 	});
 
 	function setupTerminal() {
@@ -152,7 +166,7 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		terminal.stop();
 	});
 
-	it("poll timer self-disables when Mode 2031 fires", () => {
+	it("poll timer self-disables when Mode 2031 fires outside WSL", () => {
 		vi.useFakeTimers();
 		const { terminal, queryCount } = setupTerminal();
 
@@ -182,6 +196,23 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		// Advance 4s — no additional poll queries should fire
 		vi.advanceTimersByTime(4000);
 		expect(queryCount()).toBe(afterMode2031);
+
+		terminal.stop();
+	});
+
+	it("does not start the OSC 11 poll timer under WSL", () => {
+		vi.useFakeTimers();
+		Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+		Bun.env.WSL_INTEROP = "/run/WSL/1_interop";
+		const { terminal, queryCount } = setupTerminal();
+
+		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
+		process.stdin.emit("data", "\x1b[?1;2c");
+		const afterInitial = queryCount();
+
+		vi.advanceTimersByTime(4000);
+
+		expect(queryCount()).toBe(afterInitial);
 
 		terminal.stop();
 	});

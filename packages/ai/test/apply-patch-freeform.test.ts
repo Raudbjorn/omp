@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-	convertTools as convertCodexTools,
+	convertOpenAICodexResponsesTools as convertCodexTools,
 	normalizeCodexToolChoice,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import {
@@ -17,7 +17,15 @@ import type { AssistantMessage, Model, Tool, ToolResultMessage } from "@oh-my-pi
 import { Type } from "@sinclair/typebox";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses";
 
-const GRAMMAR = 'start: "*** Begin Patch" LF';
+const GRAMMAR = [
+	"// top-level comment",
+	"",
+	'start: "*** Begin Patch" LF  // trailing comment',
+	"PATH: /https?:\\/\\/[^\\n]+/",
+	'LITERAL: "//"',
+	"",
+].join("\n");
+const COMPACT_GRAMMAR = 'start: "*** Begin Patch" LF\nPATH: /https?:\\/\\/[^\\n]+/\nLITERAL: "//"';
 
 function makeModel(overrides: Partial<Model<"openai-responses">> = {}): Model<"openai-responses"> {
 	return {
@@ -65,6 +73,39 @@ const plainTool: Tool = {
 	parameters: Type.Object({ path: Type.String() }),
 };
 
+const unionBranches = [
+	{
+		type: "object",
+		properties: { type: { enum: ["insert"] }, text: { type: "string" } },
+		required: ["type", "text"],
+	},
+	{
+		type: "object",
+		properties: { type: { enum: ["delete"] }, start: { type: "integer" } },
+		required: ["type", "start"],
+	},
+];
+
+function makeUnionTool(strict: boolean): Tool {
+	return {
+		name: "batch_update_doc",
+		description: "batch update",
+		strict,
+		parameters: {
+			type: "object",
+			properties: {
+				operations: {
+					type: "array",
+					items: {
+						oneOf: unionBranches,
+					},
+				},
+			},
+			required: ["operations"],
+		},
+	} as unknown as Tool;
+}
+
 describe("supportsFreeformApplyPatch", () => {
 	test("absent flag returns false", () => {
 		// No runtime auto-detection — requires generated model metadata.
@@ -96,7 +137,7 @@ describe("convertTools: freeform emission", () => {
 		const [out] = convertTools([editTool], false, freeformModel) as unknown as Array<Record<string, unknown>>;
 		expect(out.type).toBe("custom");
 		expect(out.name).toBe("apply_patch"); // wire name from tool.customWireName
-		expect(out.format).toEqual({ type: "grammar", syntax: "lark", definition: GRAMMAR });
+		expect(out.format).toEqual({ type: "grammar", syntax: "lark", definition: COMPACT_GRAMMAR });
 	});
 
 	test("regular tools remain function-type alongside a custom one", () => {
@@ -119,6 +160,35 @@ describe("convertTools: freeform emission", () => {
 			Record<string, unknown>
 		>;
 		expect(out.type).toBe("function");
+	});
+
+	test("rewrites oneOf to anyOf for non-strict Responses tool schemas", () => {
+		const unionTool = makeUnionTool(false);
+
+		const [out] = convertTools([unionTool], true, makeModel()) as unknown as Array<{
+			parameters: { properties: { operations: { items: Record<string, unknown> } } };
+			strict?: boolean;
+		}>;
+
+		const items = out.parameters.properties.operations.items;
+		expect(out.strict).toBeUndefined();
+		expect(items.oneOf).toBeUndefined();
+		expect(items.anyOf).toEqual(unionBranches);
+	});
+
+	test("rewrites oneOf to anyOf before strict schema enforcement", () => {
+		const unionTool = makeUnionTool(true);
+
+		const [out] = convertTools([unionTool], true, makeModel()) as unknown as Array<{
+			parameters: { properties: { operations: { items: Record<string, unknown> } } };
+			strict?: boolean;
+		}>;
+
+		const items = out.parameters.properties.operations.items;
+		expect(out.strict).toBe(true);
+		expect(items.oneOf).toBeUndefined();
+		expect(items.anyOf).toMatchObject(unionBranches);
+		expect((items.anyOf as Array<Record<string, unknown>>)[0]?.additionalProperties).toBe(false);
 	});
 });
 
@@ -316,7 +386,7 @@ describe("codex-backend convertTools (chatgpt.com/backend-api)", () => {
 		expect(out.type).toBe("custom");
 		expect(out.name).toBe("apply_patch");
 		if (out.type !== "custom") throw new Error("Expected custom tool payload");
-		expect(out.format).toEqual({ type: "grammar", syntax: "lark", definition: GRAMMAR });
+		expect(out.format).toEqual({ type: "grammar", syntax: "lark", definition: COMPACT_GRAMMAR });
 	});
 
 	test("wire shape matches direct-OpenAI convertTools (single serializer contract)", () => {

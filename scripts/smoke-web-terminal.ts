@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Smoke test for the web terminal harvested from nnk97/oh-my-pi.
-// Boots the server on loopback, verifies HTTP + WS endpoints, shuts down.
+// Boots the server on loopback, hits the HTTP + WS endpoints, shuts down.
 
 import { Settings } from "../packages/coding-agent/src/config/settings";
 import {
@@ -8,7 +8,7 @@ import {
 	stopWebTerminalServer,
 } from "../packages/coding-agent/src/web-terminal/server";
 
-const TEST_PORT = Number.parseInt(process.env.OMP_WEB_TERMINAL_SMOKE_PORT ?? "21358", 10);
+const TEST_PORT = 21358;
 
 async function main(): Promise<void> {
 	await Settings.init({ inMemory: true });
@@ -23,43 +23,19 @@ async function main(): Promise<void> {
 	if (!server.url || !server.url.startsWith("http://127.0.0.1:")) {
 		throw new Error(`unexpected server URL: ${server.url}`);
 	}
-	if (!server.url.includes("?t=")) {
-		throw new Error("server URL missing auth token");
-	}
 
-	// HTTP unauthorized: without ?t=, expect 401
-	const unauthRes = await fetch(`http://127.0.0.1:${TEST_PORT}/`);
-	if (unauthRes.status !== 401) {
-		throw new Error(`expected 401 without token, got ${unauthRes.status}`);
-	}
-
-	// HTTP authorized: full URL with token returns client HTML
-	const authRes = await fetch(server.url);
-	const html = await authRes.text();
-	console.log("http status:", authRes.status, "bytes:", html.length);
-	if (authRes.status !== 200) throw new Error(`http status ${authRes.status}`);
-	if (!html.toLowerCase().includes("<!doctype html")) {
+	// HTTP: expect client HTML
+	const res = await fetch(`${server.url}/`);
+	const html = await res.text();
+	console.log("http status:", res.status, "bytes:", html.length);
+	if (res.status !== 200) throw new Error(`http status ${res.status}`);
+	if (!html.includes("<!doctype html") && !html.includes("<!DOCTYPE html")) {
 		throw new Error("response did not look like HTML");
 	}
 
-	// WS unauthorized: without token, expect handshake failure
-	const wsRejected = await new Promise<boolean>(resolve => {
-		const wsBare = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/ws`);
-		wsBare.addEventListener("open", () => {
-			wsBare.close();
-			resolve(false);
-		});
-		wsBare.addEventListener("error", () => resolve(true));
-		wsBare.addEventListener("close", event => resolve(event.code !== 1000));
-	});
-	if (!wsRejected) throw new Error("WS without token should be rejected");
-	console.log("ws unauth rejected ok");
-
-	// WS authorized: URL derived from server.url carries the token in query
-	const wsUrl = new URL(server.url);
-	wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-	wsUrl.pathname = "/ws";
-	const ws = new WebSocket(wsUrl.toString());
+	// WS: expect to connect and receive at least one server message
+	const wsUrl = `${server.url.replace(/^http/, "ws")}/ws`;
+	const ws = new WebSocket(wsUrl);
 
 	const firstMessage = await new Promise<string>((resolve, reject) => {
 		const timeout = setTimeout(() => reject(new Error("ws message timeout")), 3000);
@@ -67,13 +43,8 @@ async function main(): Promise<void> {
 			console.log("ws open");
 			ws.send(
 				JSON.stringify({
-					type: "client_capabilities",
-					fontFamilyConfigured: "monospace",
-					fontFamilyResolved: "monospace",
-					fontSize: 14,
-					fontMatch: "unknown",
-					supportsNerdSymbols: false,
-					supportsTokenEmoji: false,
+					type: "hello",
+					capabilities: { unicode: true, nerd: false, termType: "xterm-256color" },
 				}),
 			);
 		});

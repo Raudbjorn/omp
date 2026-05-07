@@ -150,6 +150,7 @@ const SHORT_LIVED_GIT_CONFIG: readonly (readonly [key: string, value: string])[]
 	["core.fsmonitor", "false"],
 	["core.untrackedCache", "false"],
 ];
+const REMOTE_ALREADY_EXISTS = /remote .* already exists/i;
 
 interface CommandOptions {
 	readonly env?: Record<string, string | undefined>;
@@ -267,6 +268,51 @@ async function tryText(
 	return result.stdout;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Internal: per-repo write serialization
+// ════════════════════════════════════════════════════════════════════════════
+
+// Git uses lock files (`.git/config.lock`, commit-graph chain locks,
+// `packed-refs.lock`, …) for many of its mutating operations. Each is created
+// O_EXCL with no waiter, so concurrent in-process git invocations against the
+// same repository fail immediately rather than block. Worktrees share the
+// primary repo's `.git` directory, so racing across worktrees has the same
+// failure mode. We give callers a single per-repo serialization point keyed by
+// the primary repo root: any block that mutates repo state should hold this
+// lock so unrelated callers cannot collide on git's internal locks.
+const repoWriteChain = new Map<string, Promise<unknown>>();
+
+/**
+ * Serialize an async block that mutates a git repository against other
+ * in-process callers operating on the same repository. The lock is keyed by
+ * the primary repo root so worktrees of the same repo share a single queue.
+ * Failures in one block do not poison the queue for the next caller.
+ *
+ * Not reentrant: do NOT nest acquisitions for the same repo. Helpers in this
+ * module never auto-acquire — callers wrap the critical section themselves.
+ */
+export async function withRepoLock<T>(cwd: string, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+	const key = (await repo.primaryRoot(cwd, signal)) ?? cwd;
+	const prior = repoWriteChain.get(key);
+	const run = (async () => {
+		if (prior) {
+			try {
+				await prior;
+			} catch {
+				// A prior caller failing must not block us from running.
+			}
+		}
+		throwIfAborted(signal);
+		return fn();
+	})();
+	repoWriteChain.set(key, run);
+	try {
+		return await run;
+	} finally {
+		if (repoWriteChain.get(key) === run) repoWriteChain.delete(key);
+	}
+}
+
 function splitLines(text: string): string[] {
 	return text
 		.split("\n")
@@ -322,50 +368,68 @@ async function writeTempPatch(content: string): Promise<string> {
 
 type EntryType = "directory" | "file";
 
-function isOptionalGitMetadataUnavailable(err: unknown): boolean {
-	return isEnoent(err) || hasFsCode(err, "ENFILE") || hasFsCode(err, "EMFILE");
+function shouldRetry(err: unknown, n: number) {
+	if (isEnoent(err) || hasFsCode(err, "ENFILE") || hasFsCode(err, "EMFILE")) return false;
+	if (hasFsCode(err, "EINTR")) return n < EINTR_MAX_RETRIES;
+	if (n > EINTR_MAX_RETRIES) throw err;
+	throw err;
+}
+
+/**
+ * Bounded retry for synchronous I/O against `EINTR`. POSIX permits short syscalls
+ * to be interrupted by signals; when that happens libc traditionally retries.
+ * Node's sync wrappers surface the raw `EINTR` so we replicate the retry locally.
+ * Any other error (and persistent EINTR after `EINTR_MAX_RETRIES`) is rethrown
+ * for the caller's normal "optional metadata" classifier to handle.
+ */
+const EINTR_MAX_RETRIES = 3;
+function retryOnEintrSync<T>(op: () => T): T | null {
+	for (let attempt = 0; attempt <= EINTR_MAX_RETRIES; attempt += 1) {
+		try {
+			return op();
+		} catch (err) {
+			if (shouldRetry(err, attempt)) continue;
+			return null;
+		}
+	}
+	throw new Error("retryOnEintrSync: exhausted without resolution");
+}
+async function retryOnEintr<T>(op: () => Promise<T>): Promise<T | null> {
+	for (let attempt = 0; attempt <= EINTR_MAX_RETRIES; attempt += 1) {
+		try {
+			return await op();
+		} catch (err) {
+			if (shouldRetry(err, attempt)) continue;
+			return null;
+		}
+	}
+	throw new Error("retryOnEintr: exhausted without resolution");
 }
 
 function getEntryTypeSync(gitEntryPath: string): EntryType | null {
-	try {
+	return retryOnEintrSync(() => {
 		const stat = fs.statSync(gitEntryPath);
 		if (stat.isDirectory()) return "directory";
 		if (stat.isFile()) return "file";
 		return null;
-	} catch (err) {
-		if (isOptionalGitMetadataUnavailable(err)) return null;
-		throw err;
-	}
+	});
 }
 
 async function getEntryType(gitEntryPath: string): Promise<EntryType | null> {
-	try {
+	return retryOnEintr(async () => {
 		const stat = await fs.promises.stat(gitEntryPath);
 		if (stat.isDirectory()) return "directory";
 		if (stat.isFile()) return "file";
 		return null;
-	} catch (err) {
-		if (isOptionalGitMetadataUnavailable(err)) return null;
-		throw err;
-	}
+	});
 }
 
 function readOptionalTextSync(filePath: string): string | null {
-	try {
-		return fs.readFileSync(filePath, "utf8");
-	} catch (err) {
-		if (isOptionalGitMetadataUnavailable(err)) return null;
-		throw err;
-	}
+	return retryOnEintrSync(() => fs.readFileSync(filePath, "utf8"));
 }
 
 async function readOptionalText(filePath: string): Promise<string | null> {
-	try {
-		return await Bun.file(filePath).text();
-	} catch (err) {
-		if (isOptionalGitMetadataUnavailable(err)) return null;
-		throw err;
-	}
+	return retryOnEintr(async () => await Bun.file(filePath).text());
 }
 
 function parseGitDirPointer(content: string): string | null {
@@ -955,9 +1019,22 @@ export const remote = {
 		return trimScalar(await tryText(cwd, ["remote", "get-url", name], { readOnly: true, signal }));
 	},
 
-	/** Add a new remote. */
+	/**
+	 * Add a remote pointing at `url`. Idempotent: if a remote named `name`
+	 * already exists with the same URL (e.g. an in-process race or a leftover
+	 * remote from a previous run), this is treated as success. Throws when the
+	 * remote exists with a different URL — that's a real conflict the caller
+	 * needs to resolve, not paper over.
+	 */
 	async add(cwd: string, name: string, url: string, signal?: AbortSignal): Promise<void> {
-		await runEffect(cwd, ["remote", "add", name, url], { signal });
+		const result = await runCommand(cwd, ["remote", "add", name, url], { signal });
+		if (result.exitCode === 0) return;
+		if (REMOTE_ALREADY_EXISTS.test(result.stderr)) {
+			const existing = await remote.url(cwd, name, signal);
+			if (existing === url) return;
+			throw new ToolError(`remote ${name} already exists with URL ${existing ?? "(unset)"}, expected ${url}`);
+		}
+		throw new GitCommandError(["remote", "add", name, url], result);
 	},
 };
 
@@ -1196,6 +1273,23 @@ export async function restore(cwd: string, options: RestoreOptions = {}): Promis
 	if (options.staged) args.push("--staged");
 	if (options.worktree) args.push("--worktree");
 	if (options.files?.length) args.push("--", ...options.files);
+	await runEffect(cwd, args, { signal: options.signal });
+}
+
+/**
+ * Run `git reset` with options. Default is a soft reset (no flag); pass `hard: true` for a destructive reset.
+ *
+ * NOTE: stage.reset() handles the per-file unstaging case. This helper exists for tree-wide resets.
+ */
+export async function reset(
+	cwd: string,
+	options: { hard?: boolean; mixed?: boolean; soft?: boolean; target?: string; signal?: AbortSignal } = {},
+): Promise<void> {
+	const args = ["reset"];
+	if (options.hard) args.push("--hard");
+	else if (options.mixed) args.push("--mixed");
+	else if (options.soft) args.push("--soft");
+	if (options.target) args.push(options.target);
 	await runEffect(cwd, args, { signal: options.signal });
 }
 

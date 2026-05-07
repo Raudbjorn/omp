@@ -11,7 +11,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
-import { Ajv, type ErrorObject, type ValidateFunction } from "ajv";
+import type { ErrorObject } from "ajv";
 import { JSONC, YAML } from "bun";
 import { expandTilde } from "./tools/path-utils";
 
@@ -143,7 +143,6 @@ export type LoadResult<T> =
 	| { value: T; error?: undefined; status: "ok" }
 	| { value?: null; error?: unknown; status: "not-found" };
 
-const ajv = new Ajv();
 export class ConfigFile<T> implements IConfigFile<T> {
 	readonly #basePath: string;
 	#cache?: LoadResult<T>;
@@ -173,6 +172,15 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		const result = new ConfigFile<T>(this.id, this.schema, path);
 		result.#auxValidate = this.#auxValidate;
 		return result;
+	}
+
+	getMtimeMs(): number | null {
+		try {
+			return fs.statSync(this.path()).mtimeMs;
+		} catch (err) {
+			if (isEnoent(err)) return null;
+			throw err;
+		}
 	}
 
 	withValidation(name: string, validate: (value: T) => void): this {
@@ -212,13 +220,17 @@ export class ConfigFile<T> implements IConfigFile<T> {
 				throw new Error(`Invalid config file path: ${this.#basePath}`);
 			}
 
-			const validate = ajv.compile(this.schema) as ValidateFunction<T>;
-			if (!validate(parsed)) {
-				const error = new ConfigError(this.id, validate.errors);
+			if (!Value.Check(this.schema, parsed)) {
+				const schemaErrors: ErrorObject[] = [];
+				for (const err of Value.Errors(this.schema, parsed)) {
+					schemaErrors.push({ instancePath: err.path, message: err.message } as ErrorObject);
+					if (schemaErrors.length >= 50) break;
+				}
+				const error = new ConfigError(this.id, schemaErrors);
 				logger.warn("Failed to parse config file", { path: this.path(), error });
 				return this.#storeCache({ error, status: "error" });
 			}
-			return this.#storeCache({ value: parsed, status: "ok" });
+			return this.#storeCache({ value: parsed as T, status: "ok" });
 		} catch (error) {
 			if (isEnoent(error)) {
 				return this.#storeCache({ status: "not-found" });

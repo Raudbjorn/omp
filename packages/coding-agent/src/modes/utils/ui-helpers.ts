@@ -9,7 +9,7 @@ import { BranchSummaryMessageComponent } from "../../modes/components/branch-sum
 import { CompactionSummaryMessageComponent } from "../../modes/components/compaction-summary-message";
 import { CustomMessageComponent } from "../../modes/components/custom-message";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
-import { PythonExecutionComponent } from "../../modes/components/python-execution";
+import { EvalExecutionComponent } from "../../modes/components/eval-execution";
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
 import { SkillMessageComponent } from "../../modes/components/skill-message";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
@@ -92,7 +92,7 @@ export class UiHelpers {
 				break;
 			}
 			case "pythonExecution": {
-				const component = new PythonExecutionComponent(message.code, this.ctx.ui, message.excludeFromContext);
+				const component = new EvalExecutionComponent(message.code, this.ctx.ui, message.excludeFromContext);
 				if (message.output) {
 					component.appendOutput(message.output);
 				}
@@ -135,27 +135,38 @@ export class UiHelpers {
 						this.ctx.chatContainer.addChild(component);
 						break;
 					}
-					if (message.customType === MULTI_BLOCK_TEXT_MESSAGE_TYPE) {
-						const textContent = this.#getCustomMessageText(message);
-						const userComponent = new UserMessageComponent(textContent, true);
-						this.ctx.chatContainer.addChild(userComponent);
-						break;
-					}
-					if (message.customType === MULTI_BLOCK_COMMAND_MESSAGE_TYPE) {
-						const renderer = this.ctx.session.extensionRunner?.getMessageRenderer(message.customType);
-						const commandComponent = new CustomMessageComponent(message as CustomMessage<unknown>, renderer);
-						commandComponent.setExpanded(this.ctx.toolOutputExpanded);
-						this.ctx.chatContainer.addChild(commandComponent);
-						break;
-					}
-					if (message.customType === "irc:incoming" || message.customType === "irc:autoreply") {
+					if (
+						message.customType === "irc:incoming" ||
+						message.customType === "irc:autoreply" ||
+						message.customType === "irc:relay"
+					) {
 						const details = (
-							message as CustomMessage<{ from?: string; to?: string; message?: string; reply?: string }>
+							message as CustomMessage<{
+								from?: string;
+								to?: string;
+								message?: string;
+								reply?: string;
+								body?: string;
+								kind?: "message" | "reply";
+							}>
 						).details;
-						const isIncoming = message.customType === "irc:incoming";
-						const peer = isIncoming ? (details?.from ?? "?") : (details?.to ?? "?");
-						const body = isIncoming ? (details?.message ?? "") : (details?.reply ?? "");
-						const arrow = isIncoming ? `\u21e6 ${peer}` : `\u21e8 ${peer} (auto)`;
+						let arrow: string;
+						let body: string;
+						if (message.customType === "irc:incoming") {
+							const peer = details?.from ?? "?";
+							body = details?.message ?? "";
+							arrow = `\u21e6 ${peer}`;
+						} else if (message.customType === "irc:autoreply") {
+							const peer = details?.to ?? "?";
+							body = details?.reply ?? "";
+							arrow = `\u21e8 ${peer} (auto)`;
+						} else {
+							const from = details?.from ?? "?";
+							const to = details?.to ?? "?";
+							body = details?.body ?? "";
+							const suffix = details?.kind === "reply" ? " (auto)" : "";
+							arrow = `${from} \u21e8 ${to}${suffix}`;
+						}
 						const header = `${theme.fg("accent", `[IRC] ${arrow}`)}`;
 						this.ctx.chatContainer.addChild(new Text(header, 1, 0));
 						if (body) {
@@ -247,7 +258,7 @@ export class UiHelpers {
 		sessionContext: SessionContext,
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
-		this.ctx.optimisticUserMessageSignature = undefined;
+		// Preserved: message_start handler owns this lifecycle (see #783)
 		this.ctx.pendingTools.clear();
 
 		if (options.updateFooter) {
@@ -414,7 +425,7 @@ export class UiHelpers {
 		this.ctx.ui.requestRender();
 	}
 
-	renderInitialMessages(): void {
+	renderInitialMessages(prebuiltContext?: SessionContext): void {
 		// This path is used to rebuild the visible chat transcript (e.g. after custom/debug UI).
 		// Clear existing rendered chat first to avoid duplicating the full session in the container.
 		this.ctx.chatContainer.clear();
@@ -422,8 +433,8 @@ export class UiHelpers {
 		this.ctx.pendingBashComponents = [];
 		this.ctx.pendingPythonComponents = [];
 
-		// Get aligned messages and entries from session context
-		const context = this.ctx.sessionManager.buildSessionContext();
+		// Reuse a pre-built context when available (e.g. from navigateTree) to avoid a second O(N) walk.
+		const context = prebuiltContext ?? this.ctx.sessionManager.buildSessionContext();
 		this.ctx.renderSessionContext(context, {
 			updateFooter: true,
 			populateHistory: true,
@@ -534,6 +545,16 @@ export class UiHelpers {
 		this.ctx.showStatus("Queued message for after compaction");
 	}
 
+	async #deliverQueuedMessage(message: CompactionQueuedMessage): Promise<void> {
+		if (this.ctx.isKnownSlashCommand(message.text)) {
+			await this.ctx.session.prompt(message.text);
+			return;
+		}
+		await this.ctx.withLocalSubmission(message.text, () =>
+			message.mode === "followUp" ? this.ctx.session.followUp(message.text) : this.ctx.session.steer(message.text),
+		);
+	}
+
 	isKnownSlashCommand(text: string): boolean {
 		if (!text.startsWith("/")) return false;
 		const spaceIndex = text.indexOf(" ");
@@ -576,13 +597,7 @@ export class UiHelpers {
 		try {
 			if (options?.willRetry) {
 				for (const message of queuedMessages) {
-					if (this.ctx.isKnownSlashCommand(message.text)) {
-						await this.ctx.session.prompt(message.text);
-					} else if (message.mode === "followUp") {
-						await this.ctx.session.followUp(message.text);
-					} else {
-						await this.ctx.session.steer(message.text);
-					}
+					await this.#deliverQueuedMessage(message);
 				}
 				this.ctx.updatePendingMessagesDisplay();
 				return;
@@ -607,21 +622,37 @@ export class UiHelpers {
 			const rest = queuedMessages.slice(firstPromptIndex + 1);
 
 			for (const message of preCommands) {
-				await this.ctx.session.prompt(message.text);
+				// preCommands are all slash commands; #deliverQueuedMessage handles
+				// that branch (no local-submission marking needed since slash
+				// commands don't generate a matching user message_start).
+				await this.#deliverQueuedMessage(message);
 			}
 
-			const promptPromise = this.ctx.session.prompt(firstPrompt.text).catch((error: unknown) => {
-				restoreQueue(error);
-			});
+			// Pass streamingBehavior so that if the session is still streaming when
+			// compaction-end fires (race window between isStreaming flipping false and
+			// the event landing here), prompt() routes the message into the steer/
+			// follow-up queue instead of throwing AgentBusyError. When the session is
+			// genuinely idle, streamingBehavior is ignored and a fresh prompt runs as
+			// before. This keeps the steer preview honest: if delivery has to be
+			// deferred, the message lands in the same queue every other consumer
+			// (Alt+Up dequeue, post-stream drain) already drains, instead of being
+			// stranded in compactionQueuedMessages with no drainer.
+			//
+			// firstPrompt is fire-and-forget — its rejection is funneled through
+			// `restoreQueue` rather than rethrown, so we use the primitive
+			// recordLocalSubmission and dispose manually in the catch.
+			const disposeFirstPrompt = this.ctx.recordLocalSubmission(firstPrompt.text);
+			const promptPromise = this.ctx.session
+				.prompt(firstPrompt.text, {
+					streamingBehavior: firstPrompt.mode === "followUp" ? "followUp" : "steer",
+				})
+				.catch((error: unknown) => {
+					disposeFirstPrompt();
+					restoreQueue(error);
+				});
 
 			for (const message of rest) {
-				if (this.ctx.isKnownSlashCommand(message.text)) {
-					await this.ctx.session.prompt(message.text);
-				} else if (message.mode === "followUp") {
-					await this.ctx.session.followUp(message.text);
-				} else {
-					await this.ctx.session.steer(message.text);
-				}
+				await this.#deliverQueuedMessage(message);
 			}
 			this.ctx.updatePendingMessagesDisplay();
 			void promptPromise;

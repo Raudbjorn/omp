@@ -127,7 +127,7 @@ fn apply_identity(
 			};
 		let label = program_label(&identity.program);
 		let overlaid = apply_pipeline_overlay(config, &identity.program, rust_output, label);
-		return overlaid.with_original(captured);
+		return ensure_success_visible(overlaid, exit_code).with_original(captured);
 	}
 
 	if let Some(pipeline) = resolve_pipeline(config, &identity.program, subcommand) {
@@ -139,13 +139,23 @@ fn apply_identity(
 		if text == captured {
 			return MinimizerOutput::passthrough(captured).labeled("pipeline-noop");
 		}
-		return MinimizerOutput::transformed(text, captured.len())
-			.labeled("pipeline")
-			.with_original(captured);
+		return ensure_success_visible(
+			MinimizerOutput::transformed(text, captured.len()).labeled("pipeline"),
+			exit_code,
+		)
+		.with_original(captured);
 	}
 
 	record_unknown_command(command);
 	MinimizerOutput::passthrough(captured).labeled("unsupported")
+}
+
+fn ensure_success_visible(output: MinimizerOutput, exit_code: i32) -> MinimizerOutput {
+	if exit_code == 0 && output.changed && output.text.trim().is_empty() {
+		output.with_text("OK\n".to_string())
+	} else {
+		output
+	}
 }
 
 /// Per-program label for telemetry. Returns one of a fixed static set so the
@@ -159,6 +169,12 @@ fn program_label(program: &str) -> &'static str {
 		"bunx" => "bunx",
 		"cargo" => "cargo",
 		"go" => "go",
+		"cmake" => "cmake",
+		"ctest" => "ctest",
+		"ninja" => "ninja",
+		"gtest" => "gtest",
+		"gtest-parallel" => "gtest",
+		program if filters::cpp::is_gtest_binary_name(program) => "gtest",
 		"golangci-lint" => "golangci-lint",
 		"dotnet" => "dotnet",
 		"docker" => "docker",
@@ -316,6 +332,33 @@ mod tests {
 	}
 
 	#[test]
+	fn successful_minimization_keeps_visible_ok_when_filter_removes_all_lines() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let out = apply(
+			"cargo build",
+			"   Compiling app v0.1.0\n    Finished `dev` profile [unoptimized + debuginfo] target(s) \
+			 in 1.23s\n",
+			0,
+			&cfg,
+		);
+
+		assert!(out.changed);
+		assert_eq!(out.text, "OK\n");
+		assert_eq!(out.output_bytes, out.text.len());
+		assert!(out.original_text.is_some());
+	}
+
+	#[test]
+	fn failed_minimization_does_not_invent_ok_for_empty_output() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let out = apply("cargo build", "   Compiling app v0.1.0\n", 1, &cfg);
+
+		assert!(out.changed);
+		assert_eq!(out.text, "");
+		assert!(out.original_text.is_some());
+	}
+
+	#[test]
 	fn unknown_command_is_passthrough() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		assert!(!should_minimize("echo hello", &cfg));
@@ -330,6 +373,37 @@ mod tests {
 		assert_eq!(mode_for("echo start ; git status", &cfg), MinimizerMode::None);
 		assert_eq!(mode_for("false && git status", &cfg), MinimizerMode::None);
 		assert_eq!(mode_for("git status | cat", &cfg), MinimizerMode::None);
+	}
+
+	#[test]
+	fn cpp_tools_minimize_through_dispatch() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		assert!(should_minimize("ctest --output-on-failure", &cfg));
+		assert!(should_minimize("./build/foo_test --gtest_filter=Foo.*", &cfg));
+
+		let ctest = apply(
+			"ctest --output-on-failure",
+			"Test project /tmp/build\n1/2 Test #1: ok ........   Passed    0.01 sec\n2/2 Test #2: \
+			 bad .......***Failed    0.02 sec\nThe following tests FAILED:\n",
+			8,
+			&cfg,
+		);
+		assert!(ctest.changed);
+		assert_eq!(ctest.filter, "ctest");
+		assert!(!ctest.text.contains("Test #1"));
+		assert!(ctest.text.contains("Test #2: bad"));
+
+		let gtest = apply(
+			"./build/foo_test",
+			"[ RUN      ] Foo.Pass\n[       OK ] Foo.Pass (0 ms)\nfoo_test.cc:42: Failure\nExpected: \
+			 1\n[  FAILED  ] Foo.Fails\n",
+			1,
+			&cfg,
+		);
+		assert!(gtest.changed);
+		assert_eq!(gtest.filter, "gtest");
+		assert!(!gtest.text.contains("Foo.Pass"));
+		assert!(gtest.text.contains("foo_test.cc:42: Failure"));
 	}
 }
 

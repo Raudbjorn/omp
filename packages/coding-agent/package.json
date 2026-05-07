@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-coding-agent",
-	"version": "14.5.2",
+	"version": "14.6.5",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"homepage": "https://github.com/can1357/oh-my-pi",
 	"author": "Can Boluk",
@@ -355,9 +355,17 @@
 			"types": "./src/internal-urls/*.ts",
 			"import": "./src/internal-urls/*.ts"
 		},
-		"./ipy/*": {
-			"types": "./src/ipy/*.ts",
-			"import": "./src/ipy/*.ts"
+		"./eval": {
+			"types": "./src/eval/index.ts",
+			"import": "./src/eval/index.ts"
+		},
+		"./eval/js/*": {
+			"types": "./src/eval/js/*.ts",
+			"import": "./src/eval/js/*.ts"
+		},
+		"./eval/py/*": {
+			"types": "./src/eval/py/*.ts",
+			"import": "./src/eval/py/*.ts"
 		},
 		"./lsp": {
 			"types": "./src/lsp/index.ts",
@@ -398,6 +406,22 @@
 		"./memories/*": {
 			"types": "./src/memories/*.ts",
 			"import": "./src/memories/*.ts"
+		},
+		"./memory-backend": {
+			"types": "./src/memory-backend/index.ts",
+			"import": "./src/memory-backend/index.ts"
+		},
+		"./memory-backend/*": {
+			"types": "./src/memory-backend/*.ts",
+			"import": "./src/memory-backend/*.ts"
+		},
+		"./hindsight": {
+			"types": "./src/hindsight/index.ts",
+			"import": "./src/hindsight/index.ts"
+		},
+		"./hindsight/*": {
+			"types": "./src/hindsight/*.ts",
+			"import": "./src/hindsight/*.ts"
 		},
 		"./modes": {
 			"types": "./src/modes/index.ts",
@@ -552,14 +576,7 @@
 			"types": "./src/web/search/providers/*.ts",
 			"import": "./src/web/search/providers/*.ts"
 		},
-		"./hooks": {
-			"types": "./src/extensibility/hooks/index.ts",
-			"import": "./src/extensibility/hooks/index.ts"
-		},
-		"./hooks/*": {
-			"types": "./src/extensibility/hooks/*.ts",
-			"import": "./src/extensibility/hooks/*.ts"
-		},
+
 		"./*.js": "./src/*.ts"
 	}
 }

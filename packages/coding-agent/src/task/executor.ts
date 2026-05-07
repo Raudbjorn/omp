@@ -3,6 +3,7 @@
  *
  * Runs each subagent on the main thread and forwards AgentEvents for progress tracking.
  */
+
 import path from "node:path";
 import type { AgentEvent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
@@ -16,6 +17,8 @@ import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import type { Skill } from "../extensibility/skills";
+import type { HindsightSessionState } from "../hindsight/state";
+import type { LocalProtocolOptions } from "../internal-urls";
 import { callTool } from "../mcp/client";
 import type { MCPManager } from "../mcp/manager";
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
@@ -159,6 +162,9 @@ export interface ExecutorOptions {
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
+	/** Override local:// protocol options so subagent shares parent's local:// root */
+	localProtocolOptions?: LocalProtocolOptions;
+	parentHindsightSessionState?: HindsightSessionState;
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -528,16 +534,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (atMaxDepth && toolNames?.includes("task")) {
 		toolNames = toolNames.filter(name => name !== "task");
 	}
-	const pythonToolMode = settings.get("python.toolMode") ?? "both";
 	if (toolNames?.includes("exec")) {
+		const allowEvalPy = settings.get("eval.py") ?? true;
+		const allowEvalJs = settings.get("eval.js") ?? true;
 		const expanded = toolNames.filter(name => name !== "exec");
-		if (pythonToolMode === "bash-only") {
-			expanded.push("bash");
-		} else if (pythonToolMode === "ipy-only") {
-			expanded.push("python");
-		} else {
-			expanded.push("python", "bash");
-		}
+		if (allowEvalPy || allowEvalJs) expanded.push("eval");
+		expanded.push("bash");
 		toolNames = Array.from(new Set(expanded));
 	}
 
@@ -553,7 +555,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	const lspEnabled = enableLsp ?? true;
 	const ircEnabled = subagentSettings.get("irc.enabled") === true;
-	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("python");
+	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("eval");
 
 	const outputChunks: string[] = [];
 	const finalOutputChunks: string[] = [];
@@ -979,6 +981,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				hasUI: false,
 				spawns: spawnsEnv,
 				taskDepth: childDepth,
+				parentHindsightSessionState: options.parentHindsightSessionState,
 				parentTaskPrefix: id,
 				agentId: id,
 				agentDisplayName: agent.name,
@@ -987,6 +990,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				enableMCP,
 				mcpManager: options.mcpManager,
 				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
+				localProtocolOptions: options.localProtocolOptions,
 			});
 
 			activeSession = session;

@@ -9,21 +9,38 @@ import {
 	mapEffortToGoogleThinkingLevel,
 	requireSupportedEffort,
 } from "./model-thinking";
-import { type BedrockOptions, streamBedrock } from "./providers/amazon-bedrock";
-import { type AnthropicOptions, streamAnthropic } from "./providers/anthropic";
-import { streamAzureOpenAIResponses } from "./providers/azure-openai-responses";
-import { type CursorOptions, streamCursor } from "./providers/cursor";
+import type { BedrockOptions } from "./providers/amazon-bedrock";
+import type { AnthropicOptions } from "./providers/anthropic";
+import type { CursorOptions } from "./providers/cursor";
 import { type DevinOptions, streamDevin } from "./providers/devin";
 import { isGitLabDuoModel, streamGitLabDuo } from "./providers/gitlab-duo";
-import { type GoogleOptions, streamGoogle } from "./providers/google";
-import { type GoogleGeminiCliOptions, streamGoogleGeminiCli } from "./providers/google-gemini-cli";
-import { type GoogleVertexOptions, streamGoogleVertex } from "./providers/google-vertex";
+import type { GoogleOptions } from "./providers/google";
+import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
+import type { GoogleVertexOptions } from "./providers/google-vertex";
 import { isKimiModel, streamKimi } from "./providers/kimi";
-import { type AcpAgentOptions, streamAcp } from "./providers/acp";
-import { type OllamaChatOptions, streamOllama } from "./providers/ollama";
-import { streamOpenAICodexResponses } from "./providers/openai-codex-responses";
-import { type OpenAICompletionsOptions, streamOpenAICompletions } from "./providers/openai-completions";
-import { streamOpenAIResponses } from "./providers/openai-responses";
+import type { OllamaChatOptions } from "./providers/ollama";
+import type { OpenAICompletionsOptions } from "./providers/openai-completions";
+// Heavy provider stream functions are imported lazily via register-builtins,
+// which wraps each provider module in a dynamic import. This keeps the
+// AWS SDK, google-auth-library, @google/genai, @bufbuild/protobuf, and
+// other provider SDKs out of the CLI startup parse graph. The
+// gitlab-duo / kimi / synthetic providers stay eager because their modules
+// export routing predicates (isGitLabDuoModel, isKimiModel, isSyntheticModel)
+// that must be callable synchronously before streaming begins, and their
+// modules are thin wrappers with no heavy SDK dependencies.
+import {
+	streamAnthropic,
+	streamAzureOpenAIResponses,
+	streamBedrock,
+	streamCursor,
+	streamGoogle,
+	streamGoogleGeminiCli,
+	streamGoogleVertex,
+	streamOllama,
+	streamOpenAICodexResponses,
+	streamOpenAICompletions,
+	streamOpenAIResponses,
+} from "./providers/register-builtins";
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
 import { streamWarp, type WarpOptions } from "./providers/warp";
 import type {
@@ -152,6 +169,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	xiaomi: "XIAOMI_API_KEY",
 	devin: "DEVIN_API_KEY",
 	warp: "WARP_API_KEY",
+	deepseek: "DEEPSEEK_API_KEY",
 };
 
 /**
@@ -218,8 +236,13 @@ export function stream<TApi extends Api>(
 
 	const api: Api = model.api;
 	switch (api) {
-		case "anthropic-messages":
-			return streamAnthropic(model as Model<"anthropic-messages">, context, providerOptions);
+		case "anthropic-messages": {
+			const anthropicOptions = providerOptions as AnthropicOptions;
+			return streamAnthropic(model as Model<"anthropic-messages">, context, {
+				...anthropicOptions,
+				isOAuth: anthropicOptions.isOAuth ?? model.isOAuth,
+			});
+		}
 
 		case "openai-completions":
 			return streamOpenAICompletions(model as Model<"openai-completions">, context, providerOptions as any);
@@ -254,9 +277,6 @@ export function stream<TApi extends Api>(
 
 		case "warp-agent":
 			return streamWarp(model as Model<"warp-agent">, context, providerOptions as WarpOptions);
-
-		case "acp-agent":
-			return streamAcp(model as Model<"acp-agent">, context, providerOptions as AcpAgentOptions);
 
 		default:
 			throw new Error(`Unhandled API: ${api}`);
@@ -457,6 +477,7 @@ function mapOptionsForApi<TApi extends Api>(
 		sessionId: options?.sessionId,
 		providerSessionState: options?.providerSessionState,
 		onPayload: options?.onPayload,
+		onResponse: options?.onResponse,
 		execHandlers: options?.execHandlers,
 	};
 
@@ -560,6 +581,7 @@ function mapOptionsForApi<TApi extends Api>(
 			return castApi<"openai-completions">({
 				...base,
 				reasoning: resolveOpenAiReasoningEffort(model, options),
+				disableReasoning: options?.disableReasoning,
 				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
 				serviceTier: options?.serviceTier,
 			});

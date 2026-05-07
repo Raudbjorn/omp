@@ -155,6 +155,27 @@ describe("Markdown component", () => {
 		});
 	});
 
+	describe("Code blocks", () => {
+		it("renders fenced code at the content left edge by default", () => {
+			const markdown = new Markdown(
+				`~~~typescript
+function example() {
+	return 1;
+}
+~~~`,
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+
+			const lines = markdown.render(80);
+			const plainLines = lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""));
+
+			expect(plainLines.some(line => line.startsWith("function example() {"))).toBeTruthy();
+			expect(plainLines.some(line => line.startsWith("   return 1;"))).toBeTruthy();
+		});
+	});
+
 	describe("Tables", () => {
 		it("should render simple table", () => {
 			const markdown = new Markdown(
@@ -656,7 +677,7 @@ code block
 
 more text`,
 			];
-			const expectedLines = ["hello this is text", "", "```", "  code block", "```", "", "more text"];
+			const expectedLines = ["hello this is text", "", "```", "code block", "```", "", "more text"];
 
 			for (const text of cases) {
 				const markdown = new Markdown(text, 0, 0, defaultMarkdownTheme);
@@ -713,7 +734,7 @@ more text`,
 			});
 
 			expect(seenSources).toEqual([invalidSource]);
-			expect(plainLines).toEqual(["```mermaid", "  flowchart TD", "    A --", "```"]);
+			expect(plainLines).toEqual(["```mermaid", "flowchart TD", "  A --", "```"]);
 		});
 	});
 
@@ -1140,5 +1161,37 @@ bar`,
 				"Should render HTML in code blocks",
 			).toBeTruthy();
 		});
+	});
+});
+
+describe("Module-level LRU render cache", () => {
+	it("invokes highlightCode only once for two distinct instances with identical (text, width, theme)", () => {
+		// Build a theme with a spy on highlightCode. The theme object reference
+		// is stable across both instances so objectId() returns the same ID,
+		// meaning the L2 cache key is identical for both renders.
+		let highlightCallCount = 0;
+		const themeWithSpy = {
+			...defaultMarkdownTheme,
+			highlightCode: (code: string, _lang?: string): string[] => {
+				highlightCallCount++;
+				return [code]; // trivial passthrough
+			},
+		};
+
+		const text = "```js\nconst x = 1;\n```";
+		const width = 80;
+
+		// First instance: cold cache → highlightCode MUST be called.
+		const md1 = new Markdown(text, 0, 0, themeWithSpy);
+		const lines1 = md1.render(width);
+		expect(highlightCallCount, "First render should call highlightCode exactly once").toBe(1);
+
+		// Second distinct instance with identical inputs: L2 cache hit → highlightCode must NOT be called again.
+		const md2 = new Markdown(text, 0, 0, themeWithSpy);
+		const lines2 = md2.render(width);
+		expect(highlightCallCount, "Second render (different instance, same key) must use L2 cache").toBe(1);
+
+		// Output must be byte-identical — cache is transparent to callers.
+		expect(lines2).toEqual(lines1);
 	});
 });

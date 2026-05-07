@@ -1,14 +1,13 @@
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { getOAuthProviders } from "@oh-my-pi/pi-ai";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import { getConfigDirName, getPlansDir } from "@oh-my-pi/pi-utils";
 import { invalidate as invalidateFsCache } from "../capability/fs";
 import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
 import { dangerPiBundledBuiltinSlashCommands } from "../danger-pi/slash-commands";
 import {
-	clearClaudePluginRootsCache,
 	clearPluginRootsAndCaches,
 	resolveActiveProjectRegistryPath,
 	resolveOrDefaultProjectRegistryPath,
@@ -122,6 +121,15 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		allowBatch: true,
 		handle: async (command, runtime) => {
 			await runtime.ctx.handlePlanModeCommand(command.args || undefined);
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "loop",
+		description:
+			"Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Esc cancels the current iteration; /loop again to disable.",
+		handle: async (_command, runtime) => {
+			await runtime.ctx.handleLoopCommand();
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -342,12 +350,13 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 	},
 	{
 		name: "copy",
-		description: "Copy last agent message to clipboard",
+		description: "Copy exact text from the session to clipboard",
 		subcommands: [
 			{ name: "last", description: "Copy full last agent message" },
 			{ name: "code", description: "Copy last code block" },
 			{ name: "all", description: "Copy all code blocks from last message" },
 			{ name: "cmd", description: "Copy last bash/python command" },
+			{ name: "tool", description: "Copy last text tool result" },
 		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
@@ -443,6 +452,14 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		description: "Show tools currently visible to the agent",
 		handle: (_command, runtime) => {
 			runtime.ctx.handleToolsCommand();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "context",
+		description: "Show estimated context usage breakdown",
+		handle: (_command, runtime) => {
+			runtime.ctx.handleContextCommand();
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -737,6 +754,16 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 				description: "Enqueue memory consolidation maintenance",
 			},
 			{ name: "rebuild", description: "Alias for enqueue" },
+			{ name: "mm list", description: "List mental models on the active bank" },
+			{ name: "mm show", description: "Show one mental model (id required)" },
+			{
+				name: "mm refresh",
+				description: "Refresh auto-refresh models bank-wide, or one model by id",
+			},
+			{ name: "mm history", description: "Diff the change history of a mental model" },
+			{ name: "mm seed", description: "Create any built-in mental models that are missing" },
+			{ name: "mm delete", description: "Delete a mental model from the bank (id required)" },
+			{ name: "mm reload", description: "Re-pull the cached <mental_models> block" },
 		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
@@ -1131,14 +1158,10 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		name: "reload-plugins",
 		description: "Reload all plugins (skills, commands, hooks, tools, agents, MCP)",
 		handle: async (_command, runtime) => {
-			// Invalidate the fs content cache for all registry files so
+			// Invalidate registry fs caches and the plugin roots cache so
 			// listClaudePluginRoots re-reads from disk on next access.
-			const home = os.homedir();
-			invalidateFsCache(path.join(home, ".claude", "plugins", "installed_plugins.json"));
-			invalidateFsCache(path.join(home, getConfigDirName(), "plugins", "installed_plugins.json"));
 			const projectPath = await resolveActiveProjectRegistryPath(runtime.ctx.sessionManager.getCwd());
-			if (projectPath) invalidateFsCache(projectPath);
-			clearClaudePluginRootsCache();
+			clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
 			await runtime.ctx.refreshSlashCommandState();
 			runtime.ctx.showStatus("Plugins reloaded.");
 			runtime.ctx.editor.setText("");

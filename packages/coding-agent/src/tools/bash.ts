@@ -222,15 +222,6 @@ function extractPartialBashEnv(partialJson: string | undefined): Record<string, 
 	return Object.keys(env).length > 0 ? env : undefined;
 }
 
-function getBashEnvForDisplay(args: BashRenderArgs): Record<string, string> | undefined {
-	// During streaming, partial-json parsing often does not surface env values until the object closes.
-	// Recover them from the raw JSON buffer so the pending bash preview can show `NAME="..." cmd` immediately,
-	// instead of rendering only the command and making the env assignment appear at the very end.
-	const partialEnv = extractPartialBashEnv(args.__partialJson);
-	if (partialEnv && args.env) return { ...partialEnv, ...args.env };
-	return args.env ?? partialEnv;
-}
-
 function formatTimeoutClampNotice(requestedTimeoutSec: number, effectiveTimeoutSec: number): string | undefined {
 	return requestedTimeoutSec !== effectiveTimeoutSec
 		? `Timeout clamped to ${effectiveTimeoutSec}s (requested ${requestedTimeoutSec}s; allowed range ${TOOL_TIMEOUTS.bash.min}-${TOOL_TIMEOUTS.bash.max}s).`
@@ -269,7 +260,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			autoBackgroundThresholdSeconds: Math.max(0, Math.floor(this.#autoBackgroundThresholdMs / 1000)),
 			hasAstGrep: this.session.settings.get("astGrep.enabled"),
 			hasAstEdit: this.session.settings.get("astEdit.enabled"),
-			hasGrep: this.session.settings.get("grep.enabled"),
+			hasSearch: this.session.settings.get("search.enabled"),
 			hasFind: this.session.settings.get("find.enabled"),
 		});
 	}
@@ -517,12 +508,17 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const headLines = head;
 		const tailLines = tail;
 
-		// Check interception if enabled and available tools are known
+		// Check both the original command and the cwd-normalized command so
+		// leading `cd ... &&` wrappers do not hide either shell-navigation rules
+		// or the dedicated-tool command that follows the directory change.
 		if (this.session.settings.get("bashInterceptor.enabled")) {
 			const rules = this.session.settings.getBashInterceptorRules();
-			const interception = checkBashInterception(command, ctx?.toolNames ?? [], rules);
-			if (interception.block) {
-				throw new ToolError(interception.message ?? "Command blocked");
+			const commandsToCheck = rawCommand === command ? [command] : [rawCommand, command];
+			for (const commandToCheck of commandsToCheck) {
+				const interception = checkBashInterception(commandToCheck, ctx?.toolNames ?? [], rules);
+				if (interception.block) {
+					throw new ToolError(interception.message ?? "Command blocked");
+				}
 			}
 		}
 
@@ -688,8 +684,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 // =============================================================================
 // TUI Renderer
 // =============================================================================
-
-interface BashRenderArgs {
+export interface BashRenderArgs {
 	command?: string;
 	env?: Record<string, string>;
 	timeout?: number;
@@ -698,7 +693,7 @@ interface BashRenderArgs {
 	[key: string]: unknown;
 }
 
-interface BashRenderContext {
+export interface BashRenderContext {
 	/** Raw output text */
 	output?: string;
 	/** Whether output came from artifact storage */
@@ -711,7 +706,29 @@ interface BashRenderContext {
 	timeout?: number;
 }
 
-function formatBashCommand(args: BashRenderArgs): string {
+export interface ShellRendererConfig<TArgs> {
+	resolveTitle: (args: TArgs | undefined, options: RenderResultOptions) => string;
+	resolveCommand?: (args: TArgs | undefined) => string | undefined;
+	resolveCwd?: (args: TArgs | undefined) => string | undefined;
+	resolveEnv?: (args: TArgs | undefined) => Record<string, string> | undefined;
+}
+
+function getPartialJson<TArgs>(args: TArgs | undefined): string | undefined {
+	if (!args || typeof args !== "object" || !("__partialJson" in args)) return undefined;
+	const value = (args as { __partialJson?: unknown }).__partialJson;
+	return typeof value === "string" ? value : undefined;
+}
+
+export function getBashEnvForDisplay(args: BashRenderArgs): Record<string, string> | undefined {
+	// During streaming, partial-json parsing often does not surface env values until the object closes.
+	// Recover them from the raw JSON buffer so the pending bash preview can show `NAME="..." cmd` immediately,
+	// instead of rendering only the command and making the env assignment appear at the very end.
+	const partialEnv = extractPartialBashEnv(args.__partialJson);
+	if (partialEnv && args.env) return { ...partialEnv, ...args.env };
+	return args.env ?? partialEnv;
+}
+
+export function formatBashCommand(args: BashRenderArgs): string {
 	const command = replaceTabs(args.command || "…");
 	const prompt = "$";
 	const cwd = getProjectDir();
@@ -720,113 +737,135 @@ function formatBashCommand(args: BashRenderArgs): string {
 	return displayWorkdir ? `${prompt} cd ${displayWorkdir} && ${renderedCommand}` : `${prompt} ${renderedCommand}`;
 }
 
-export const bashToolRenderer = {
-	renderCall(args: BashRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const cmdText = formatBashCommand(args);
-		const text = renderStatusLine({ icon: "pending", title: "Bash", description: cmdText }, uiTheme);
-		return new Text(text, 0, 0);
-	},
+function toBashRenderArgs<TArgs>(args: TArgs | undefined, config: ShellRendererConfig<TArgs>): BashRenderArgs {
+	return {
+		command: config.resolveCommand?.(args),
+		cwd: config.resolveCwd?.(args),
+		env: config.resolveEnv?.(args),
+		__partialJson: getPartialJson(args),
+	};
+}
 
-	renderResult(
-		result: {
-			content: Array<{ type: string; text?: string }>;
-			details?: BashToolDetails;
-			isError?: boolean;
+export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
+	return {
+		renderCall(args: TArgs, options: RenderResultOptions, uiTheme: Theme): Component {
+			const renderArgs = toBashRenderArgs(args, config);
+			const cmdText = formatBashCommand(renderArgs);
+			const title = config.resolveTitle(args, options);
+			const text = renderStatusLine({ icon: "pending", title, description: cmdText }, uiTheme);
+			return new Text(text, 0, 0);
 		},
-		options: RenderResultOptions & { renderContext?: BashRenderContext },
-		uiTheme: Theme,
-		args?: BashRenderArgs,
-	): Component {
-		const cmdText = args ? formatBashCommand(args) : undefined;
-		const isError = result.isError === true;
-		const icon = options.isPartial ? "pending" : isError ? "error" : "success";
-		const header = renderStatusLine({ icon, title: "Bash" }, uiTheme);
-		const details = result.details;
-		const outputBlock = new CachedOutputBlock();
 
-		return {
-			render: (width: number): string[] => {
-				// REACTIVE: read mutable options at render time
-				const { renderContext } = options;
-				const expanded = renderContext?.expanded ?? options.expanded;
-				const previewLines = renderContext?.previewLines ?? BASH_DEFAULT_PREVIEW_LINES;
+		renderResult(
+			result: {
+				content: Array<{ type: string; text?: string }>;
+				details?: BashToolDetails;
+				isError?: boolean;
+			},
+			options: RenderResultOptions & { renderContext?: BashRenderContext },
+			uiTheme: Theme,
+			args?: TArgs,
+		): Component {
+			const renderArgs = toBashRenderArgs(args, config);
+			const cmdText = args ? formatBashCommand(renderArgs) : undefined;
+			const isError = result.isError === true;
+			const icon = options.isPartial ? "pending" : isError ? "error" : "success";
+			const title = config.resolveTitle(args, options);
+			const header = renderStatusLine({ icon, title }, uiTheme);
+			const details = result.details;
+			const outputBlock = new CachedOutputBlock();
 
-				// Get output from context (preferred) or fall back to result content
-				const output = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
-				const displayOutput = output.trimEnd();
-				const showingFullOutput = expanded && renderContext?.isFullOutput === true;
+			return {
+				render: (width: number): string[] => {
+					// REACTIVE: read mutable options at render time
+					const { renderContext } = options;
+					const expanded = renderContext?.expanded ?? options.expanded;
+					const previewLines = renderContext?.previewLines ?? BASH_DEFAULT_PREVIEW_LINES;
 
-				// Build truncation warning
-				const timeoutSeconds = details?.timeoutSeconds ?? renderContext?.timeout;
-				const requestedTimeoutSeconds = details?.requestedTimeoutSeconds;
-				const timeoutLabel =
-					typeof timeoutSeconds === "number"
-						? requestedTimeoutSeconds !== undefined && requestedTimeoutSeconds !== timeoutSeconds
-							? `Timeout: ${timeoutSeconds}s (requested ${requestedTimeoutSeconds}s clamped)`
-							: `Timeout: ${timeoutSeconds}s`
-						: undefined;
-				const timeoutLine =
-					timeoutLabel !== undefined
-						? uiTheme.fg("dim", `${uiTheme.format.bracketLeft}${timeoutLabel}${uiTheme.format.bracketRight}`)
-						: undefined;
-				let warningLine: string | undefined;
-				if (details?.meta?.truncation && !showingFullOutput) {
-					warningLine = formatStyledTruncationWarning(details.meta, uiTheme) ?? undefined;
-				}
+					// Get output from context (preferred) or fall back to result content
+					const output = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
+					const displayOutput = output.trimEnd();
+					const showingFullOutput = expanded && renderContext?.isFullOutput === true;
 
-				const outputLines: string[] = [];
-				const hasOutput = displayOutput.trim().length > 0;
-				const rawOutputLines = displayOutput.split("\n");
-				const sixelLineMask =
-					TERMINAL.imageProtocol === ImageProtocol.Sixel ? getSixelLineMask(rawOutputLines) : undefined;
-				const hasSixelOutput = sixelLineMask?.some(Boolean) ?? false;
-				if (hasOutput) {
-					if (hasSixelOutput) {
-						outputLines.push(
-							...rawOutputLines.map((line, index) =>
-								sixelLineMask?.[index] ? line : uiTheme.fg("toolOutput", replaceTabs(line)),
-							),
-						);
-					} else if (expanded) {
-						outputLines.push(...rawOutputLines.map(line => uiTheme.fg("toolOutput", replaceTabs(line))));
-					} else {
-						const styledOutput = rawOutputLines
-							.map(line => uiTheme.fg("toolOutput", replaceTabs(line)))
-							.join("\n");
-						const textContent = styledOutput;
-						const result = truncateToVisualLines(textContent, previewLines, width);
-						if (result.skippedCount > 0) {
+					// Build truncation warning
+					const timeoutSeconds = details?.timeoutSeconds ?? renderContext?.timeout;
+					const requestedTimeoutSeconds = details?.requestedTimeoutSeconds;
+					const timeoutLabel =
+						typeof timeoutSeconds === "number"
+							? requestedTimeoutSeconds !== undefined && requestedTimeoutSeconds !== timeoutSeconds
+								? `Timeout: ${timeoutSeconds}s (requested ${requestedTimeoutSeconds}s clamped)`
+								: `Timeout: ${timeoutSeconds}s`
+							: undefined;
+					const timeoutLine =
+						timeoutLabel !== undefined
+							? uiTheme.fg("dim", `${uiTheme.format.bracketLeft}${timeoutLabel}${uiTheme.format.bracketRight}`)
+							: undefined;
+					let warningLine: string | undefined;
+					if (details?.meta?.truncation && !showingFullOutput) {
+						warningLine = formatStyledTruncationWarning(details.meta, uiTheme) ?? undefined;
+					}
+
+					const outputLines: string[] = [];
+					const hasOutput = displayOutput.trim().length > 0;
+					const rawOutputLines = displayOutput.split("\n");
+					const sixelLineMask =
+						TERMINAL.imageProtocol === ImageProtocol.Sixel ? getSixelLineMask(rawOutputLines) : undefined;
+					const hasSixelOutput = sixelLineMask?.some(Boolean) ?? false;
+					if (hasOutput) {
+						if (hasSixelOutput) {
 							outputLines.push(
-								uiTheme.fg(
-									"dim",
-									`… (${result.skippedCount} earlier lines, showing ${result.visualLines.length} of ${result.skippedCount + result.visualLines.length}) (ctrl+o to expand)`,
+								...rawOutputLines.map((line, index) =>
+									sixelLineMask?.[index] ? line : uiTheme.fg("toolOutput", replaceTabs(line)),
 								),
 							);
+						} else if (expanded) {
+							outputLines.push(...rawOutputLines.map(line => uiTheme.fg("toolOutput", replaceTabs(line))));
+						} else {
+							const styledOutput = rawOutputLines
+								.map(line => uiTheme.fg("toolOutput", replaceTabs(line)))
+								.join("\n");
+							const textContent = styledOutput;
+							const result = truncateToVisualLines(textContent, previewLines, width);
+							if (result.skippedCount > 0) {
+								outputLines.push(
+									uiTheme.fg(
+										"dim",
+										`… (${result.skippedCount} earlier lines, showing ${result.visualLines.length} of ${result.skippedCount + result.visualLines.length}) (ctrl+o to expand)`,
+									),
+								);
+							}
+							outputLines.push(...result.visualLines);
 						}
-						outputLines.push(...result.visualLines);
 					}
-				}
-				if (timeoutLine) outputLines.push(timeoutLine);
-				if (warningLine) outputLines.push(warningLine);
+					if (timeoutLine) outputLines.push(timeoutLine);
+					if (warningLine) outputLines.push(warningLine);
 
-				return outputBlock.render(
-					{
-						header,
-						state: options.isPartial ? "pending" : isError ? "error" : "success",
-						sections: [
-							{ lines: cmdText ? [uiTheme.fg("dim", cmdText)] : [] },
-							{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
-						],
-						width,
-					},
-					uiTheme,
-				);
-			},
-			invalidate: () => {
-				outputBlock.invalidate();
-			},
-		};
-	},
-	mergeCallAndResult: true,
-	inline: true,
-};
+					return outputBlock.render(
+						{
+							header,
+							state: options.isPartial ? "pending" : isError ? "error" : "success",
+							sections: [
+								{ lines: cmdText ? [uiTheme.fg("dim", cmdText)] : [] },
+								{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
+							],
+							width,
+						},
+						uiTheme,
+					);
+				},
+				invalidate: () => {
+					outputBlock.invalidate();
+				},
+			};
+		},
+		mergeCallAndResult: true,
+		inline: true,
+	};
+}
+
+export const bashToolRenderer = createShellRenderer<BashRenderArgs>({
+	resolveTitle: () => "Bash",
+	resolveCommand: args => args?.command,
+	resolveCwd: args => args?.cwd,
+	resolveEnv: args => args?.env,
+});

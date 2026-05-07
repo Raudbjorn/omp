@@ -232,6 +232,7 @@ function collectDebugInfo(): ClientDebugInfo {
 
 function debugWebTerminal(reason = "manual"): ClientDebugInfo {
 	const info = collectDebugInfo();
+	console.log("[web-terminal] debug", { reason, info });
 	sendMessage({ type: "client_debug", reason, info });
 	return info;
 }
@@ -272,6 +273,7 @@ function computeDimensions(): { cols: number; rows: number } | null {
 function sendResize(): void {
 	const dimensions = computeDimensions();
 	if (!dimensions) {
+		console.log("[web-terminal] resize skipped", collectSizing());
 		return;
 	}
 	if (dimensions.cols === lastSentCols && dimensions.rows === lastSentRows) {
@@ -283,11 +285,13 @@ function sendResize(): void {
 	lastSentCols = dimensions.cols;
 	lastSentRows = dimensions.rows;
 	const payload = { type: "resize", cols: dimensions.cols, rows: dimensions.rows };
+	console.log("[web-terminal] resize", payload, collectSizing());
 	sendMessage(payload);
 }
 
-function scheduleResize(_reason: string): void {
+function scheduleResize(reason: string): void {
 	if (resizeTimer !== null) return;
+	console.log("[web-terminal] scheduleResize", { reason });
 	resizeTimer = window.setTimeout(() => {
 		resizeTimer = null;
 		sendResize();
@@ -317,10 +321,9 @@ function attachResizeHooks(): void {
 function startWebSocket(): void {
 	const wsUrl = new URL("/ws", window.location.href);
 	wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-	const authToken = new URL(window.location.href).searchParams.get("t");
-	if (authToken) wsUrl.searchParams.set("t", authToken);
 	ws = new WebSocket(wsUrl.toString());
 	ws.addEventListener("open", () => {
+		console.log("[web-terminal] websocket open", wsUrl.toString());
 		requestAnimationFrame(() => sendResize());
 		sendCapabilities();
 		debugWebTerminal("websocket-open");

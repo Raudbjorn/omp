@@ -14,12 +14,22 @@ import {
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
 import type { Component, SlashCommand } from "@oh-my-pi/pi-tui";
-import { Container, Loader, Markdown, Spacer, Text, TUI, visibleWidth } from "@oh-my-pi/pi-tui";
-import { APP_NAME, hsvToRgb, isEnoent, logger, postmortem, prompt } from "@oh-my-pi/pi-utils";
+import {
+	Container,
+	clearRenderCache,
+	Loader,
+	Markdown,
+	ProcessTerminal,
+	Spacer,
+	Text,
+	TUI,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui";
+import { APP_NAME, getProjectDir, hsvToRgb, isEnoent, logger, postmortem, prompt } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { reset as resetCapabilities } from "../capability";
 import { KeybindingsManager } from "../config/keybindings";
-import { type Settings, settings } from "../config/settings";
+import { isSettingsInitialized, type Settings, settings } from "../config/settings";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
@@ -28,11 +38,7 @@ import type {
 } from "../extensibility/extensions";
 import type { CompactOptions } from "../extensibility/extensions/types";
 import { loadSkills, type Skill } from "../extensibility/skills";
-import {
-	BUILTIN_SLASH_COMMANDS,
-	loadSlashCommandSet,
-	renderSlashCommandWarnings,
-} from "../extensibility/slash-commands";
+import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
@@ -44,9 +50,10 @@ import { getRecentSessions } from "../session/session-manager";
 import { STTController, type SttState } from "../stt";
 import type { ExitPlanModeDetails, LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
+import { formatPhaseDisplayName } from "../tools/todo-write";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
-import { getSessionAccentAnsi, getSessionAccentHexForTitle } from "../utils/session-color";
+import { getSessionAccentAnsi, getSessionAccentHex } from "../utils/session-color";
 import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle } from "../utils/title-generator";
 import { setWebTerminalServerCallbacks } from "../web-terminal/server";
 import { createWebTerminalBridge, MirroredTerminal, setActiveWebTerminalBridge } from "../web-terminal/terminal-bridge";
@@ -54,10 +61,10 @@ import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import { CustomEditor } from "./components/custom-editor";
 import { DynamicBorder } from "./components/dynamic-border";
+import type { EvalExecutionComponent } from "./components/eval-execution";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
-import type { PythonExecutionComponent } from "./components/python-execution";
 import { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent, type LspServerInfo as WelcomeLspServerInfo } from "./components/welcome";
@@ -155,6 +162,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	planModeEnabled = false;
 	planModePaused = false;
 	planModePlanFilePath: string | undefined = undefined;
+	loopModeEnabled = false;
+	loopPrompt: string | undefined = undefined;
+	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
@@ -162,8 +172,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	pendingTools = new Map<string, ToolExecutionHandle>();
 	pendingBashComponents: BashExecutionComponent[] = [];
 	bashComponent: BashExecutionComponent | undefined = undefined;
-	pendingPythonComponents: PythonExecutionComponent[] = [];
-	pythonComponent: PythonExecutionComponent | undefined = undefined;
+	pendingPythonComponents: EvalExecutionComponent[] = [];
+	pythonComponent: EvalExecutionComponent | undefined = undefined;
 	isPythonMode = false;
 	streamingComponent: AssistantMessageComponent | undefined = undefined;
 	streamingMessage: AssistantMessage | undefined = undefined;
@@ -177,7 +187,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	unsubscribe?: () => void;
 	onInputCallback?: (input: SubmittedUserInput) => void;
 	optimisticUserMessageSignature: string | undefined = undefined;
+	locallySubmittedUserSignatures: Set<string> = new Set();
 	#pendingSubmittedInput: SubmittedUserInput | undefined;
+	#pendingSubmissionDispose: (() => void) | undefined;
 	lastSigintTime = 0;
 	lastEscapeTime = 0;
 	shutdownRequested = false;
@@ -275,6 +287,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncEditorMaxHeight();
 		this.#resizeHandler = () => {
 			this.#syncEditorMaxHeight();
+			this.updateEditorTopBorder();
 		};
 		process.stdout.on("resize", this.#resizeHandler);
 		try {
@@ -443,11 +456,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Start the UI
 		this.ui.start();
 		pushTerminalTitle();
-		setSessionTerminalTitle(
-			this.sessionManager.getSessionName(),
-			this.sessionManager.getCwd(),
-			this.sessionManager.titleSource,
-		);
+		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.updateEditorBorderColor();
 		this.#syncEditorMaxHeight();
 		this.isInitialized = true;
@@ -489,7 +498,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#subscribeToAgent();
 
 		// Set up theme file watcher
-		this.#themeChangeUnsubscribe = onThemeChange(() => {
+		onThemeChange(() => {
+			clearRenderCache();
 			this.ui.invalidate();
 			this.updateEditorBorderColor();
 			this.ui.requestRender();
@@ -596,13 +606,169 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.handleMCPCommand("/mcp reload");
 	}
 
+	/** Refresh slash-command and skill runtime state from current discovery sources. */
+	async refreshRuntimeCommandState(cwd?: string): Promise<void> {
+		const basePath = cwd ?? this.sessionManager.getCwd();
+		resetCapabilities();
+		await this.#refreshSkillCommandState(basePath);
+		await this.refreshSlashCommandState(basePath);
+	}
+
+	#syncSkillCommandMap(skills: readonly Skill[]): void {
+		this.skillCommands.clear();
+		this.#skillSlashCommands = [];
+		if (!settings.get("skills.enableSkillCommands")) {
+			return;
+		}
+		for (const skill of skills) {
+			const commandName = `skill:${skill.name}`;
+			this.skillCommands.set(commandName, {
+				filePath: skill.filePath,
+				isNative: skill._source?.provider === "native",
+			});
+			this.#skillSlashCommands.push({
+				name: commandName,
+				description: skill.description,
+			});
+		}
+	}
+
+	async #refreshSkillCommandState(cwd: string): Promise<void> {
+		const skillSettings = this.session.skillsSettings ?? {};
+		const { skills, warnings } = await loadSkills({
+			...skillSettings,
+			cwd,
+		});
+		this.session.setSkills(skills, warnings);
+		this.#syncSkillCommandMap(skills);
+	}
+
+	async #syncOmpLiveReload(options: { cwd: string; triggerRefresh: boolean }): Promise<void> {
+		const mode = this.settings.get("commands.liveReloadMode") as OmpLiveReloadMode;
+		await this.#ompLiveReload.configure({
+			mode,
+			projectDir: options.cwd,
+			userAgentDir: this.settings.getAgentDir(),
+		});
+		if (mode === "omp" && options.triggerRefresh) {
+			await this.refreshRuntimeCommandState(options.cwd);
+		}
+	}
+
+	async syncOmpLiveReloadState(cwd?: string, options?: { triggerRefresh?: boolean }): Promise<void> {
+		await this.#syncOmpLiveReload({
+			cwd: cwd ?? this.sessionManager.getCwd(),
+			triggerRefresh: options?.triggerRefresh ?? false,
+		});
+	}
+
+	async handleReloadCommand(): Promise<void> {
+		const cwd = this.sessionManager.getCwd();
+		await this.syncOmpLiveReloadState(cwd, { triggerRefresh: false });
+		await this.refreshRuntimeCommandState(cwd);
+		await this.handleMCPCommand("/mcp reload");
+	}
+
 	async getUserInput(): Promise<SubmittedUserInput> {
 		const { promise, resolve } = Promise.withResolvers<SubmittedUserInput>();
 		this.onInputCallback = input => {
 			this.onInputCallback = undefined;
 			resolve(input);
 		};
+		this.#scheduleLoopAutoSubmit();
 		return promise;
+	}
+
+	#scheduleLoopAutoSubmit(): void {
+		this.#cancelLoopAutoSubmit();
+		if (!this.loopModeEnabled || !this.loopPrompt) return;
+		const prompt = this.loopPrompt;
+		const loopAction = settings.get("loop.mode");
+		// Brief delay so the user has a chance to press Esc between iterations.
+		this.#loopAutoSubmitTimer = setTimeout(() => {
+			this.#loopAutoSubmitTimer = undefined;
+			if (!this.loopModeEnabled || !this.onInputCallback) return;
+			void this.#runLoopIteration(loopAction, prompt);
+		}, 800);
+	}
+
+	#cancelLoopAutoSubmit(): void {
+		if (this.#loopAutoSubmitTimer) {
+			clearTimeout(this.#loopAutoSubmitTimer);
+			this.#loopAutoSubmitTimer = undefined;
+		}
+	}
+
+	async #runLoopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
+		if (action === "compact") {
+			await this.handleCompactCommand();
+		} else if (action === "reset") {
+			await this.handleClearCommand();
+		}
+		if (!this.loopModeEnabled || !this.onInputCallback) return;
+		this.onInputCallback(this.startPendingSubmission({ text: prompt }));
+	}
+
+	disableLoopMode(): void {
+		const wasEnabled = this.loopModeEnabled;
+		this.loopModeEnabled = false;
+		this.loopPrompt = undefined;
+		this.#cancelLoopAutoSubmit();
+		this.statusLine.setLoopModeStatus(undefined);
+		this.updateEditorTopBorder();
+		this.ui.requestRender();
+		if (wasEnabled) {
+			this.showStatus("Loop mode disabled.");
+		}
+	}
+
+	/**
+	 * Pause the loop without exiting it: drops the captured prompt and any
+	 * pending auto-resubmit. Loop mode stays enabled — the next prompt the
+	 * user submits becomes the new loop prompt and resumes iteration.
+	 */
+	pauseLoop(): void {
+		this.loopPrompt = undefined;
+		this.#cancelLoopAutoSubmit();
+	}
+
+	async handleLoopCommand(): Promise<void> {
+		if (this.loopModeEnabled) {
+			this.disableLoopMode();
+			return;
+		}
+		this.loopModeEnabled = true;
+		this.loopPrompt = undefined;
+		this.statusLine.setLoopModeStatus({ enabled: true });
+		this.updateEditorTopBorder();
+		this.ui.requestRender();
+		this.showStatus(
+			"Loop mode enabled. Your next prompt will repeat after each turn. Esc cancels the current iteration; /loop again to disable.",
+		);
+	}
+
+	recordLocalSubmission(text: string, imageCount = 0): () => void {
+		if (this.isKnownSlashCommand(text)) {
+			return () => {};
+		}
+		const signature = `${text}\u0000${imageCount}`;
+		this.locallySubmittedUserSignatures.add(signature);
+		let disposed = false;
+		return () => {
+			if (disposed) return;
+			disposed = true;
+			this.locallySubmittedUserSignatures.delete(signature);
+		};
+	}
+
+	async withLocalSubmission<T>(text: string, fn: () => Promise<T>, options?: { imageCount?: number }): Promise<T> {
+		const dispose = this.recordLocalSubmission(text, options?.imageCount ?? 0);
+		try {
+			return await fn();
+		} catch (err) {
+			dispose();
+			throw err;
+		}
 	}
 
 	startPendingSubmission(input: { text: string; images?: ImageContent[] }): SubmittedUserInput {
@@ -613,7 +779,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			started: false,
 		};
 		this.#pendingSubmittedInput = submission;
-		this.optimisticUserMessageSignature = `${submission.text}\u0000${submission.images?.length ?? 0}`;
+		const imageCount = submission.images?.length ?? 0;
+		this.optimisticUserMessageSignature = `${submission.text}\u0000${imageCount}`;
+		this.#pendingSubmissionDispose = this.recordLocalSubmission(submission.text, imageCount);
 		this.addMessageToChat({
 			role: "user",
 			content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
@@ -635,6 +803,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		submission.cancelled = true;
 		this.#pendingSubmittedInput = undefined;
 		this.optimisticUserMessageSignature = undefined;
+		this.#pendingSubmissionDispose?.();
+		this.#pendingSubmissionDispose = undefined;
 		this.#pendingWorkingMessage = undefined;
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
@@ -660,6 +830,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	finishPendingSubmission(input: SubmittedUserInput): void {
 		if (this.#pendingSubmittedInput === input) {
 			this.#pendingSubmittedInput = undefined;
+			this.#pendingSubmissionDispose = undefined;
 		}
 	}
 
@@ -680,7 +851,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		} else if (this.isPythonMode) {
 			this.editor.borderColor = theme.getPythonModeBorderColor();
 		} else {
-			const hex = getSessionAccentHexForTitle(this.sessionManager.getSessionName(), this.sessionManager.titleSource);
+			const accentEnabled = !isSettingsInitialized() || settings.get("statusLine.sessionAccent") !== false;
+			const sessionName = accentEnabled ? this.sessionManager.getSessionName() : undefined;
+			const hex = sessionName ? getSessionAccentHex(sessionName) : undefined;
 			const ansi = getSessionAccentAnsi(hex);
 			if (ansi) {
 				this.editor.borderColor = (str: string) => `${ansi}${str}\x1b[39m`;
@@ -740,9 +913,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		const lines = ["", indent + theme.bold(theme.fg("accent", "Todos"))];
 
 		if (!this.todoExpanded) {
-			const activePhase = this.#getActivePhase(phases);
+			const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
+			const activePhase = phases[activeIdx];
 			if (!activePhase) return;
-			lines.push(`${indent}${theme.fg("accent", `${hook} ${activePhase.name}`)}`);
+			lines.push(
+				`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(activePhase.name, activeIdx + 1)}`)}`,
+			);
 			const visibleTasks = activePhase.tasks.slice(0, 5);
 			visibleTasks.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
@@ -756,13 +932,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		for (const phase of phases) {
-			lines.push(`${indent}${theme.fg("accent", `${hook} ${phase.name}`)}`);
+		phases.forEach((phase, phaseIndex) => {
+			lines.push(`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(phase.name, phaseIndex + 1)}`)}`);
 			phase.tasks.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
 				lines.push(this.#formatTodoLine(todo, prefix));
 			});
-		}
+		});
 
 		this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
 	}
@@ -910,6 +1086,19 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.#pendingModelSwitch = { model: prev.model, thinkingLevel: prev.thinkingLevel };
 			} else {
 				await this.session.setModelTemporary(prev.model, prev.thinkingLevel);
+			}
+			// If #applyPlanModeModel queued a deferred switch to the plan-role model
+			// (because the session was streaming on entry), drop it now: we are
+			// leaving plan mode, so flushing it on the next agent_end would land the
+			// session on the plan-role model after the user has exited plan mode
+			// (issue #816). Only clear when the pending target matches the plan-role
+			// model — leave any unrelated user-queued switch intact.
+			const pending = this.#pendingModelSwitch;
+			if (pending) {
+				const planResolution = this.session.resolveRoleModelWithThinking("plan");
+				if (planResolution.model && modelsAreEqual(pending.model, planResolution.model)) {
+					this.#pendingModelSwitch = undefined;
+				}
 			}
 		}
 		this.session.setPlanModeState(undefined);
@@ -1199,6 +1388,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		setWebTerminalServerCallbacks(null);
 		if (this.isInitialized) {
+			if (this.ui.terminal instanceof MirroredTerminal) {
+				setActiveWebTerminalBridge(null);
+			}
 			this.ui.stop();
 			this.isInitialized = false;
 		}
@@ -1308,6 +1500,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	showError(message: string): void {
 		this.#pendingSubmittedInput = undefined;
 		this.optimisticUserMessageSignature = undefined;
+		this.#pendingSubmissionDispose?.();
+		this.#pendingSubmissionDispose = undefined;
 		this.#pendingWorkingMessage = undefined;
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
@@ -1445,8 +1639,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#uiHelpers.renderSessionContext(sessionContext, options);
 	}
 
-	renderInitialMessages(): void {
-		this.#uiHelpers.renderInitialMessages();
+	renderInitialMessages(prebuiltContext?: SessionContext): void {
+		this.#uiHelpers.renderInitialMessages(prebuiltContext);
 	}
 
 	getUserMessageText(message: Message): string {
@@ -1508,6 +1702,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleToolsCommand(): void {
 		this.#commandController.handleToolsCommand();
+	}
+
+	handleContextCommand(): void {
+		this.#commandController.handleContextCommand();
 	}
 
 	#prepareSessionSwitch(): void {
@@ -1799,7 +1997,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		} else {
 			this.todoPhases = [
 				{
-					id: "default",
 					name: "Todos",
 					tasks: todos as TodoItem[],
 				},

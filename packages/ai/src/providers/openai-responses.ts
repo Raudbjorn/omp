@@ -38,14 +38,16 @@ import {
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
+import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
-import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
+import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses } from "../utils/schema";
 import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
 	resolveGitHubCopilotBaseUrl,
 } from "./github-copilot-headers";
+import { compactGrammarDefinition } from "./grammar";
 import {
 	appendResponsesToolResultMessages,
 	collectCustomCallIds,
@@ -195,7 +197,13 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				body: params,
 			};
 			const openaiStream = await callWithCopilotModelRetry(
-				() => client.responses.create(params, { signal: requestSignal }),
+				async () => {
+					const { data, response, request_id } = await client.responses
+						.create(params, { signal: requestSignal })
+						.withResponse();
+					await notifyProviderResponse(options, response, model, request_id);
+					return data;
+				},
 				{ provider: model.provider, signal: requestSignal },
 			);
 			const firstEventWatchdog = createWatchdog(
@@ -212,6 +220,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					watchdog: firstEventWatchdog,
 					errorMessage: "OpenAI responses stream stalled while waiting for the next event",
 					onIdle: () => requestAbortController.abort(),
+					abortSignal: options?.signal,
 				}),
 				output,
 				stream,
@@ -577,13 +586,14 @@ export function convertTools(tools: Tool[], strictMode: boolean, model: Model<"o
 				format: {
 					type: "grammar",
 					syntax: tool.customFormat.syntax,
-					definition: tool.customFormat.definition,
+					definition: compactGrammarDefinition(tool.customFormat.syntax, tool.customFormat.definition),
 				},
 			} as unknown as OpenAITool;
 		}
 		const strict = !NO_STRICT && strictMode && tool.strict !== false;
 		const baseParameters = tool.parameters as unknown as Record<string, unknown>;
-		const { schema: parameters, strict: effectiveStrict } = adaptSchemaForStrict(baseParameters, strict);
+		const responseParameters = sanitizeSchemaForOpenAIResponses(baseParameters);
+		const { schema: parameters, strict: effectiveStrict } = adaptSchemaForStrict(responseParameters, strict);
 		return {
 			type: "function",
 			name: tool.name,

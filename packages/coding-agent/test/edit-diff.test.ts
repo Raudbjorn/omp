@@ -9,6 +9,7 @@ import {
 	DEFAULT_FUZZY_THRESHOLD,
 	findMatch,
 } from "@oh-my-pi/pi-coding-agent/edit";
+import { HL_EDIT_SEP } from "@oh-my-pi/pi-coding-agent/edit/line-hash";
 
 describe("findMatch", () => {
 	describe("exact matching", () => {
@@ -234,28 +235,25 @@ describe("computeHashlineDiff", () => {
 		const sourcePath = path.join(tempDir, "source.txt");
 		await Bun.write(sourcePath, "unchanged content\n");
 
-		const result = await computeHashlineDiff({ path: sourcePath, edits: [] }, tempDir);
+		const result = await computeHashlineDiff({ input: `@${sourcePath}\n` }, tempDir);
 		expect("error" in result).toBe(true);
 		if ("error" in result) {
 			expect(result.error).toContain("No changes would be made");
 		}
 	});
 
-	test("accepts hashline tool edits without resolved op/lines", async () => {
+	test("accepts hashline input edits", async () => {
 		const sourcePath = path.join(tempDir, "source.txt");
 		await Bun.write(sourcePath, "first\n");
 
-		const result = await computeHashlineDiff(
-			{ path: sourcePath, edits: [{ path: sourcePath, loc: "append", content: ["second"] }] },
-			tempDir,
-		);
+		const result = await computeHashlineDiff({ input: `@${sourcePath}\n+ EOF\n${HL_EDIT_SEP}second` }, tempDir);
 		expect("diff" in result).toBe(true);
 		if ("diff" in result) {
 			expect(result.diff).toContain("second");
 		}
 	});
 	test("returns a handled error when the source path is a local URL", async () => {
-		const result = await computeHashlineDiff({ path: "local://PLAN.md", edits: [] }, tempDir);
+		const result = await computeHashlineDiff({ input: "@local://PLAN.md\n" }, tempDir);
 
 		expect("error" in result).toBe(true);
 		if ("error" in result) {

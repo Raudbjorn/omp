@@ -23,7 +23,7 @@ import {
 } from "../../tools/render-utils";
 import { renderStatusLine, renderTreeList } from "../../tui";
 import { CachedOutputBlock } from "../../tui/output-block";
-import { getSearchProvider } from "./provider";
+import { getSearchProviderLabel } from "./provider";
 import type { SearchResponse } from "./types";
 
 function getVerboseSetting(): boolean {
@@ -142,7 +142,7 @@ export function renderSearchResult(
 		: [];
 	const totalAnswerLines = answerLines.length;
 
-	const providerLabel = provider !== "none" ? getSearchProvider(provider).label : "None";
+	const providerLabel = provider !== "none" ? getSearchProviderLabel(provider) : "None";
 	const queryPreview = args?.query
 		? truncateToWidth(args.query, 80)
 		: searchQueries[0]

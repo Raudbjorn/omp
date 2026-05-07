@@ -5,7 +5,7 @@ import path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Theme, theme } from "../modes/theme/theme";
 import { formatGroupedFiles } from "../tools/grouped-file-output";
-import { resolveToCwd } from "../tools/path-utils";
+import { formatPathRelativeToCwd, resolveToCwd } from "../tools/path-utils";
 import type {
 	CodeAction,
 	Command,
@@ -229,7 +229,7 @@ export function formatDiagnosticsSummary(diagnostics: Diagnostic[]): string {
  * Format a location as file:line:col relative to cwd.
  */
 export function formatLocation(location: Location, cwd: string): string {
-	const file = path.relative(cwd, uriToFile(location.uri));
+	const file = formatPathRelativeToCwd(uriToFile(location.uri), cwd);
 	const line = location.range.start.line + 1;
 	const col = location.range.start.character + 1;
 	return `${file}:${line}:${col}`;
@@ -255,7 +255,7 @@ export function formatWorkspaceEdit(edit: WorkspaceEdit, cwd: string): string[] 
 	// Handle changes map (legacy format)
 	if (edit.changes) {
 		for (const [uri, textEdits] of Object.entries(edit.changes)) {
-			const file = path.relative(cwd, uriToFile(uri));
+			const file = formatPathRelativeToCwd(uriToFile(uri), cwd);
 			results.push(`${file}: ${textEdits.length} edit${textEdits.length > 1 ? "s" : ""}`);
 		}
 	}
@@ -264,20 +264,20 @@ export function formatWorkspaceEdit(edit: WorkspaceEdit, cwd: string): string[] 
 	if (edit.documentChanges) {
 		for (const change of edit.documentChanges) {
 			if ("edits" in change && change.textDocument) {
-				const file = path.relative(cwd, uriToFile(change.textDocument.uri));
+				const file = formatPathRelativeToCwd(uriToFile(change.textDocument.uri), cwd);
 				results.push(`${file}: ${change.edits.length} edit${change.edits.length > 1 ? "s" : ""}`);
 			} else if ("kind" in change) {
 				switch (change.kind) {
 					case "create":
-						results.push(`CREATE: ${path.relative(cwd, uriToFile(change.uri))}`);
+						results.push(`CREATE: ${formatPathRelativeToCwd(uriToFile(change.uri), cwd)}`);
 						break;
 					case "rename":
 						results.push(
-							`RENAME: ${path.relative(cwd, uriToFile(change.oldUri))} ${theme.nav.cursor} ${path.relative(cwd, uriToFile(change.newUri))}`,
+							`RENAME: ${formatPathRelativeToCwd(uriToFile(change.oldUri), cwd)} ${theme.nav.cursor} ${formatPathRelativeToCwd(uriToFile(change.newUri), cwd)}`,
 						);
 						break;
 					case "delete":
-						results.push(`DELETE: ${path.relative(cwd, uriToFile(change.uri))}`);
+						results.push(`DELETE: ${formatPathRelativeToCwd(uriToFile(change.uri), cwd)}`);
 						break;
 				}
 			}
@@ -596,38 +596,42 @@ function findSymbolMatchIndexes(lineText: string, symbol: string, caseInsensitiv
 	return indexes;
 }
 
-function normalizeOccurrence(occurrence?: number): number {
-	if (occurrence === undefined || !Number.isFinite(occurrence)) return 1;
-	return Math.max(1, Math.trunc(occurrence));
+/**
+ * Parses a symbol spec of the form `name` or `name#N` where N is the 1-indexed
+ * occurrence on the target line. Returns `name` and `occurrence` (default 1).
+ *
+ * Greedy match on `.+` so `#name#2` parses as symbol=`#name` (TS private field)
+ * with occurrence 2. Specs without a trailing `#\d+` are treated as literal.
+ */
+function parseSymbolSpec(spec: string): { symbol: string; occurrence: number } {
+	const match = spec.match(/^(.+)#(\d+)$/);
+	if (!match) return { symbol: spec, occurrence: 1 };
+	const occurrence = Math.max(1, Number.parseInt(match[2], 10));
+	return { symbol: match[1], occurrence };
 }
 
-export async function resolveSymbolColumn(
-	filePath: string,
-	line: number,
-	symbol?: string,
-	occurrence?: number,
-): Promise<number> {
+export async function resolveSymbolColumn(filePath: string, line: number, symbolSpec?: string): Promise<number> {
 	const lineNumber = Math.max(1, line);
-	const matchOccurrence = normalizeOccurrence(occurrence);
 	try {
 		const fileText = await Bun.file(filePath).text();
 		const lines = fileText.split("\n");
 		const targetLine = lines[lineNumber - 1] ?? "";
-		if (!symbol) {
+		if (!symbolSpec) {
 			return firstNonWhitespaceColumn(targetLine);
 		}
 
+		const { symbol, occurrence } = parseSymbolSpec(symbolSpec);
 		const exactIndexes = findSymbolMatchIndexes(targetLine, symbol);
 		const fallbackIndexes = exactIndexes.length > 0 ? exactIndexes : findSymbolMatchIndexes(targetLine, symbol, true);
 		if (fallbackIndexes.length === 0) {
 			throw new Error(`Symbol "${symbol}" not found on line ${lineNumber}`);
 		}
-		if (matchOccurrence > fallbackIndexes.length) {
+		if (occurrence > fallbackIndexes.length) {
 			throw new Error(
-				`Symbol "${symbol}" occurrence ${matchOccurrence} is out of bounds on line ${lineNumber} (found ${fallbackIndexes.length})`,
+				`Symbol "${symbol}" occurrence ${occurrence} is out of bounds on line ${lineNumber} (found ${fallbackIndexes.length})`,
 			);
 		}
-		return fallbackIndexes[matchOccurrence - 1];
+		return fallbackIndexes[occurrence - 1];
 	} catch (error) {
 		if (isEnoent(error)) {
 			throw new Error(`File not found: ${filePath}`);

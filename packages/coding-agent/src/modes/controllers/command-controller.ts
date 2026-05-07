@@ -2,10 +2,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	type AssistantMessage,
 	getEnvApiKey,
 	getProviderDetails,
 	type ProviderDetails,
 	type ToolCall,
+	type ToolResultMessage,
 	type UsageLimit,
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
@@ -16,16 +18,26 @@ import { reset as resetCapabilities } from "../../capability";
 import { settings } from "../../config/settings";
 import { buildUsageAccountOrder, resolveUsageAccountKey } from "../../danger-pi/usage-account-order";
 import { clearClaudePluginRootsCache } from "../../discovery/helpers";
+import { getGatewayStatus } from "../../eval/py/gateway-coordinator";
 import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
-import { getGatewayStatus } from "../../ipy/gateway-coordinator";
-import { buildMemoryToolDeveloperInstructions, clearMemoryData, enqueueMemoryConsolidation } from "../../memories";
+import {
+	diffMentalModelContent,
+	type HindsightApi,
+	type HindsightSessionState,
+	loadHindsightConfig,
+	reloadMentalModelsForSession,
+	resolveSeedsForScope,
+	summarizeMentalModel,
+} from "../../hindsight";
+import { resolveMemoryBackend } from "../../memory-backend";
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BorderedLoader } from "../../modes/components/bordered-loader";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
-import { PythonExecutionComponent } from "../../modes/components/python-execution";
+import { EvalExecutionComponent } from "../../modes/components/eval-execution";
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
+import { computeContextBreakdown, renderContextUsage } from "../../modes/utils/context-usage";
 import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
 import { buildToolsMarkdown } from "../../modes/utils/tools-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
@@ -49,6 +61,33 @@ function showMarkdownPanel(ctx: InteractiveModeContext, title: string, markdown:
 	ctx.chatContainer.addChild(new Markdown(markdown.trim(), 1, 1, getMarkdownTheme()));
 	ctx.chatContainer.addChild(new DynamicBorder());
 	ctx.ui.requestRender();
+}
+
+export interface CopyableToolResult {
+	toolName: string;
+	text: string;
+}
+
+function isTextToolResultMessage(message: unknown): message is ToolResultMessage {
+	if (!message || typeof message !== "object") return false;
+	const candidate = message as Partial<ToolResultMessage>;
+	return candidate.role === "toolResult" && Array.isArray(candidate.content);
+}
+
+export function findLastTextToolResultForCopy(messages: readonly unknown[]): CopyableToolResult | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (!isTextToolResultMessage(msg)) continue;
+		const toolResult = msg;
+		const text = toolResult.content
+			.filter(content => content.type === "text")
+			.map(content => content.text)
+			.join("\n");
+		if (text.length > 0) {
+			return { toolName: toolResult.toolName, text };
+		}
+	}
+	return undefined;
 }
 
 export class CommandController {
@@ -236,34 +275,36 @@ export class CommandController {
 	handleCopyCommand(sub?: string) {
 		switch (sub) {
 			case "code":
-				return this.#copyCode();
+				return this.#copyLastAssistantCodeBlock();
 			case "all":
-				return this.#copyAllCode();
+				return this.#copyAllAssistantCodeBlocks();
 			case "cmd":
 				return this.#copyLastCommand();
+			case "tool":
+				return this.#copyLastToolResult();
 			case "last":
 			case undefined:
-				return this.#copyLastMessage();
+				return this.#copyLastAssistantMessage();
 			default:
-				this.ctx.showError(`Unknown subcommand: ${sub}. Use code, all, cmd, or last.`);
+				this.ctx.showError(`Unknown subcommand: ${sub}. Use code, all, cmd, tool, or last.`);
 		}
 	}
 
-	#copyLastMessage() {
-		const text = this.ctx.session.getLastAssistantText();
+	#copyLastAssistantMessage() {
+		const message = this.ctx.findLastAssistantMessage();
+		const text = message ? this.ctx.extractAssistantText(message) : undefined;
 		if (!text) {
 			this.ctx.showError("No agent messages to copy yet.");
 			return;
 		}
+
 		this.#doCopy(text, "Copied last agent message to clipboard");
 	}
 
-	#copyCode() {
-		const text = this.ctx.session.getLastAssistantText();
-		if (!text) {
-			this.ctx.showError("No agent messages to copy yet.");
-			return;
-		}
+	#copyLastAssistantCodeBlock() {
+		const text = this.#getLastAssistantText();
+		if (!text) return;
+
 		const matches = [...text.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gm)];
 		const lastMatch = matches.at(-1);
 		if (!lastMatch) {
@@ -273,12 +314,10 @@ export class CommandController {
 		this.#doCopy(lastMatch[1].replace(/\n$/, ""), "Copied last code block to clipboard");
 	}
 
-	#copyAllCode() {
-		const text = this.ctx.session.getLastAssistantText();
-		if (!text) {
-			this.ctx.showError("No agent messages to copy yet.");
-			return;
-		}
+	#copyAllAssistantCodeBlocks() {
+		const text = this.#getLastAssistantText();
+		if (!text) return;
+
 		const matches = [...text.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gm)];
 		if (matches.length === 0) {
 			this.ctx.showWarning("No code blocks found in the last agent message.");
@@ -288,34 +327,106 @@ export class CommandController {
 		this.#doCopy(combined, `Copied ${matches.length} code block${matches.length > 1 ? "s" : ""} to clipboard`);
 	}
 
+	#extractEvalCode(args: unknown): string | undefined {
+		if (!args || typeof args !== "object") return undefined;
+		const cells = (args as { cells?: unknown }).cells;
+		if (!Array.isArray(cells)) return undefined;
+
+		const codeBlocks: string[] = [];
+		for (const cell of cells) {
+			if (!cell || typeof cell !== "object") continue;
+			const code = (cell as { code?: unknown }).code;
+			if (typeof code === "string" && code.length > 0) {
+				codeBlocks.push(code);
+			}
+		}
+
+		return codeBlocks.length > 0 ? codeBlocks.join("\n\n") : undefined;
+	}
+
+	#copyLastToolResult() {
+		const result = findLastTextToolResultForCopy(this.ctx.session.messages);
+		if (!result) {
+			this.ctx.showWarning("No text tool result found in the conversation.");
+			return;
+		}
+
+		this.#doCopy(result.text, `Copied last ${result.toolName} result to clipboard`);
+	}
+
 	#copyLastCommand() {
 		const messages = this.ctx.session.messages;
-		// Walk backwards to find the last bash/python tool call
+		// Walk backwards to find the last bash/eval tool call
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const msg = messages[i];
 			if (msg.role !== "assistant") continue;
-			const toolCalls = msg.content.filter((c): c is ToolCall => c.type === "toolCall");
+			const toolCalls = (msg as AssistantMessage).content.filter((c): c is ToolCall => c.type === "toolCall");
 			for (let j = toolCalls.length - 1; j >= 0; j--) {
 				const tc = toolCalls[j];
 				if (tc.name === "bash" && typeof tc.arguments.command === "string") {
 					this.#doCopy(tc.arguments.command, "Copied last bash command to clipboard");
 					return;
 				}
-				if (tc.name === "python" && typeof tc.arguments.code === "string") {
-					this.#doCopy(tc.arguments.code, "Copied last python code to clipboard");
-					return;
+				if (tc.name === "eval") {
+					const code = this.#extractEvalCode(tc.arguments);
+					if (code) {
+						this.#doCopy(code, "Copied last eval code to clipboard");
+						return;
+					}
 				}
 			}
 		}
-		this.ctx.showWarning("No bash or python command found in the conversation.");
+		this.ctx.showWarning("No bash or eval command found in the conversation.");
+	}
+
+	#getLastAssistantText(): string | undefined {
+		const message = this.ctx.findLastAssistantMessage();
+		const text = message ? this.ctx.extractAssistantText(message) : undefined;
+		if (!text) {
+			this.ctx.showError("No agent messages to copy yet.");
+			return undefined;
+		}
+		return text;
 	}
 
 	#doCopy(content: string, label: string) {
+		void copyToClipboard(content);
+		this.ctx.showStatus(label);
+	}
+
+	async handleWebTerminalCommand(): Promise<void> {
 		try {
-			copyToClipboard(content);
-			this.ctx.showStatus(label);
+			if (!settings.get("webTerminal.enabled")) {
+				this.ctx.showError("Web terminal is disabled in settings.");
+				return;
+			}
+			const existing = getWebTerminalServer();
+			if (existing?.isRunning) {
+				stopWebTerminalServer("Web terminal stopped via /web_terminal");
+				return;
+			}
+			const server = await getOrStartWebTerminalServer({ cwd: this.ctx.sessionManager.getCwd() });
+			const urls = server.urls;
+			const lines = ["Web terminal URLs:"];
+			urls.forEach((url, index) => {
+				lines.push(`  ${url}`);
+				const qr = renderQrCode(url);
+				if (qr.trim().length > 0) {
+					lines.push(qr);
+				}
+				if (index < urls.length - 1) {
+					lines.push("");
+				}
+			});
+			if (server.bindingErrors.length > 0) {
+				lines.push("", "Failed bindings:");
+				for (const error of server.bindingErrors) {
+					lines.push(`  ${error.binding.label} - ${error.error}`);
+				}
+			}
+			this.ctx.showStatus(lines.join("\n"), { dim: false });
 		} catch (error) {
-			this.ctx.showError(error instanceof Error ? error.message : String(error));
+			this.ctx.showError(`Failed to start web terminal: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
@@ -569,15 +680,32 @@ export class CommandController {
 		showMarkdownPanel(this.ctx, "Available Tools", tools);
 	}
 
+	handleContextCommand(): void {
+		const breakdown = computeContextBreakdown(this.ctx.session);
+		if (breakdown.contextWindow <= 0) {
+			this.ctx.showWarning("Context usage is unavailable: no model is selected for this session.");
+			return;
+		}
+		const output = renderContextUsage(breakdown, theme);
+		this.ctx.chatContainer.addChild(new Spacer(1));
+		this.ctx.chatContainer.addChild(new DynamicBorder());
+		this.ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Context Usage")), 1, 0));
+		this.ctx.chatContainer.addChild(new Spacer(1));
+		this.ctx.chatContainer.addChild(new Text(output, 1, 0));
+		this.ctx.chatContainer.addChild(new DynamicBorder());
+		this.ctx.ui.requestRender();
+	}
+
 	async handleMemoryCommand(text: string): Promise<void> {
 		const argumentText = text.slice(7).trim();
 		const action = argumentText.split(/\s+/, 1)[0]?.toLowerCase() || "view";
 		const agentDir = this.ctx.settings.getAgentDir();
+		const backend = resolveMemoryBackend(this.ctx.settings);
 
 		if (action === "view") {
-			const payload = await buildMemoryToolDeveloperInstructions(agentDir, this.ctx.settings);
+			const payload = await backend.buildDeveloperInstructions(agentDir, this.ctx.settings, this.ctx.session);
 			if (!payload) {
-				this.ctx.showWarning("Memory payload is empty (memories disabled or no memory summary found).");
+				this.ctx.showWarning("Memory payload is empty (memory backend off, disabled, or no memory available).");
 				return;
 			}
 			this.ctx.chatContainer.addChild(new Spacer(1));
@@ -592,7 +720,7 @@ export class CommandController {
 
 		if (action === "reset" || action === "clear") {
 			try {
-				await clearMemoryData(agentDir, this.ctx.sessionManager.getCwd());
+				await backend.clear(agentDir, this.ctx.sessionManager.getCwd(), this.ctx.session);
 				await this.ctx.session.refreshBaseSystemPrompt();
 				this.ctx.showStatus("Memory data cleared and system prompt refreshed.");
 			} catch (error) {
@@ -603,7 +731,7 @@ export class CommandController {
 
 		if (action === "enqueue" || action === "rebuild") {
 			try {
-				enqueueMemoryConsolidation(agentDir, this.ctx.sessionManager.getCwd());
+				await backend.enqueue(agentDir, this.ctx.sessionManager.getCwd(), this.ctx.session);
 				this.ctx.showStatus("Memory consolidation enqueued.");
 			} catch (error) {
 				this.ctx.showError(`Memory enqueue failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -611,7 +739,257 @@ export class CommandController {
 			return;
 		}
 
-		this.ctx.showError("Usage: /memory <view|clear|reset|enqueue|rebuild>");
+		if (action === "mm") {
+			await this.#handleMentalModelsSubcommand(argumentText);
+			return;
+		}
+
+		this.ctx.showError("Usage: /memory <view|clear|reset|enqueue|rebuild|mm ...>");
+	}
+
+	async #handleMentalModelsSubcommand(argumentText: string): Promise<void> {
+		// Parse: "mm <verb> [arg]"
+		const parts = argumentText.split(/\s+/).slice(1);
+		const verb = parts[0]?.toLowerCase() ?? "list";
+		const arg = parts[1];
+
+		const state = this.ctx.session.getHindsightSessionState();
+		const primary = state && !state.aliasOf ? state : undefined;
+		if (!primary) {
+			this.ctx.showError("Hindsight backend is not active for this session.");
+			return;
+		}
+		if (!primary.config.mentalModelsEnabled) {
+			this.ctx.showError("Mental models are disabled (hindsight.mentalModelsEnabled = false).");
+			return;
+		}
+
+		switch (verb) {
+			case "list":
+				await this.#mmList(primary);
+				return;
+			case "show":
+				if (!arg) return this.ctx.showError("Usage: /memory mm show <id>");
+				await this.#mmShow(primary, arg);
+				return;
+			case "refresh":
+				await this.#mmRefresh(primary, arg);
+				return;
+			case "history":
+				if (!arg) return this.ctx.showError("Usage: /memory mm history <id>");
+				await this.#mmHistory(primary, arg);
+				return;
+			case "seed":
+				await this.#mmSeed(primary);
+				return;
+			case "reload":
+				await this.#mmReload(primary);
+				return;
+			case "delete":
+			case "remove":
+				if (!arg) return this.ctx.showError("Usage: /memory mm delete <id>");
+				await this.#mmDelete(primary, arg);
+				return;
+			default:
+				this.ctx.showError("Usage: /memory mm <list|show|refresh|history|seed|reload|delete>");
+		}
+	}
+
+	async #mmList(state: HindsightSessionState): Promise<void> {
+		const client: HindsightApi = state.client;
+		try {
+			const response = await client.listMentalModels(state.bankId, { detail: "metadata" });
+			const items = response.items ?? [];
+			if (items.length === 0) {
+				this.ctx.showStatus(`No mental models on bank ${state.bankId}.`);
+				return;
+			}
+			const lines = items
+				.slice()
+				.sort((a, b) => a.id.localeCompare(b.id))
+				.map(summarizeMentalModel);
+			showMarkdownPanel(this.ctx, `Mental Models — ${state.bankId}`, lines.join("\n"));
+		} catch (error) {
+			this.ctx.showError(`mm list failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	async #mmShow(state: HindsightSessionState, id: string): Promise<void> {
+		try {
+			const model = await state.client.getMentalModel(state.bankId, id, { detail: "content" });
+			if (!model) {
+				this.ctx.showError(`Mental model not found: ${id}`);
+				return;
+			}
+			const tags = model.tags && model.tags.length > 0 ? `\n_tags: ${model.tags.join(", ")}_` : "";
+			const refreshed = model.last_refreshed_at ? `\n_last refreshed: ${model.last_refreshed_at}_` : "";
+			const sourceQuery = model.source_query ? `\n\n**Source query:** ${model.source_query}` : "";
+			const content = (model.content ?? "_(empty — background reflect may still be running)_").trim();
+			showMarkdownPanel(
+				this.ctx,
+				model.name,
+				`**id:** \`${model.id}\`${tags}${refreshed}${sourceQuery}\n\n${content}`,
+			);
+		} catch (error) {
+			this.ctx.showError(`mm show failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	async #mmRefresh(state: HindsightSessionState, id: string | undefined): Promise<void> {
+		try {
+			if (id) {
+				// Single-model refresh is explicit operator intent: bypass the
+				// auto-refresh filter so curated/manual models can still be
+				// refreshed on demand.
+				await state.client.refreshMentalModel(state.bankId, id);
+				this.ctx.showStatus(`Refresh queued for mental model ${id}.`);
+			} else {
+				// Bulk refresh: only touch models that opted into automatic
+				// refresh via `trigger.refresh_after_consolidation`. Curated
+				// models are reviewed before publishing and must not be
+				// silently regenerated by a bank-wide refresh sweep. Reading
+				// `detail: "content"` here is required because the trigger
+				// field is excluded from `detail: "metadata"`.
+				const list = await state.client.listMentalModels(state.bankId, { detail: "content" });
+				const items = list.items ?? [];
+				if (items.length === 0) {
+					this.ctx.showStatus(`No mental models on bank ${state.bankId}.`);
+					return;
+				}
+				const targets = items.filter(m => m.trigger?.refresh_after_consolidation === true);
+				const skipped = items.length - targets.length;
+				if (targets.length === 0) {
+					this.ctx.showStatus(
+						`No mental models opted into auto-refresh; ${skipped} curated model(s) left untouched. Pass an explicit id to refresh one of them.`,
+					);
+					return;
+				}
+				let queued = 0;
+				for (const item of targets) {
+					try {
+						await state.client.refreshMentalModel(state.bankId, item.id);
+						queued++;
+					} catch (error) {
+						this.ctx.showWarning(
+							`Refresh failed for ${item.id}: ${error instanceof Error ? error.message : String(error)}`,
+						);
+					}
+				}
+				const skippedSuffix = skipped > 0 ? `; skipped ${skipped} curated model(s)` : "";
+				this.ctx.showStatus(
+					`Refresh queued for ${queued}/${targets.length} auto-refresh model(s)${skippedSuffix}.`,
+				);
+			}
+			// Reload the cache after a brief grace so the new content (if the refresh
+			// completes synchronously on the server) flows into the system prompt.
+			await Bun.sleep(500);
+			await reloadMentalModelsForSession(state.session);
+		} catch (error) {
+			this.ctx.showError(`mm refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	async #mmHistory(state: HindsightSessionState, id: string): Promise<void> {
+		try {
+			const [model, history] = await Promise.all([
+				state.client.getMentalModel(state.bankId, id, { detail: "content" }),
+				state.client.getMentalModelHistory(state.bankId, id),
+			]);
+			if (!model) {
+				this.ctx.showError(`Mental model not found: ${id}`);
+				return;
+			}
+			if (history.length === 0) {
+				this.ctx.showStatus(`No history recorded for ${id}.`);
+				return;
+			}
+			// History is most-recent first. Each entry stores the content BEFORE that
+			// change. To diff "what changed at entry N", compare entry N's
+			// previous_content (= state before that change) with entry N-1's
+			// previous_content (= state after that change, which was state before
+			// the next change). For the most recent change, compare against the
+			// model's CURRENT content.
+			const sections: string[] = [];
+			for (let i = 0; i < history.length; i++) {
+				const before = history[i].previous_content ?? "";
+				const after = i === 0 ? (model.content ?? "") : (history[i - 1].previous_content ?? "");
+				const diff = diffMentalModelContent(before, after);
+				sections.push(`### ${history[i].changed_at}\n\n\`\`\`diff\n${diff}\n\`\`\``);
+			}
+			showMarkdownPanel(this.ctx, `History — ${model.name}`, sections.join("\n\n"));
+		} catch (error) {
+			this.ctx.showError(`mm history failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	async #mmSeed(state: HindsightSessionState): Promise<void> {
+		try {
+			const config = loadHindsightConfig(this.ctx.settings);
+			const seeds = resolveSeedsForScope(
+				{
+					bankId: state.bankId,
+					retainTags: state.retainTags,
+					recallTags: state.recallTags,
+					recallTagsMatch: state.recallTagsMatch,
+				},
+				config.scoping,
+			);
+			if (seeds.length === 0) {
+				this.ctx.showStatus(`No built-in seeds apply to scoping=${config.scoping}.`);
+				return;
+			}
+			const list = await state.client.listMentalModels(state.bankId, { detail: "metadata" });
+			const existing = new Set((list.items ?? []).map(m => m.id));
+			let created = 0;
+			let skipped = 0;
+			for (const seed of seeds) {
+				if (existing.has(seed.id)) {
+					skipped++;
+					continue;
+				}
+				try {
+					await state.client.createMentalModel(state.bankId, seed.name, seed.sourceQuery, {
+						id: seed.id,
+						tags: seed.tags.length > 0 ? seed.tags : undefined,
+						maxTokens: seed.maxTokens,
+						trigger: seed.trigger,
+					});
+					created++;
+				} catch (error) {
+					this.ctx.showWarning(
+						`Seed failed for ${seed.id}: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			}
+			this.ctx.showStatus(`Seeded ${created} new mental model(s); ${skipped} already present.`);
+		} catch (error) {
+			this.ctx.showError(`mm seed failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	async #mmReload(state: HindsightSessionState): Promise<void> {
+		const ok = await reloadMentalModelsForSession(state.session);
+		if (ok) {
+			this.ctx.showStatus("Mental-model cache reloaded.");
+		} else {
+			this.ctx.showError("Reload failed (Hindsight backend not active or mental models disabled).");
+		}
+	}
+
+	async #mmDelete(state: HindsightSessionState, id: string): Promise<void> {
+		try {
+			const removed = await state.client.deleteMentalModel(state.bankId, id);
+			if (!removed) {
+				this.ctx.showError(`Mental model not found: ${id}`);
+				return;
+			}
+			// Drop the cached snippet so the closing tag does not silently keep
+			// stale content in the system prompt until the next agent_end TTL.
+			await reloadMentalModelsForSession(state.session);
+			this.ctx.showStatus(`Deleted mental model ${id} from bank ${state.bankId}.`);
+		} catch (error) {
+			this.ctx.showError(`mm delete failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	async #runNewSessionFlow(options?: NewSessionOptions, label: string = "New session started"): Promise<void> {
@@ -629,11 +1007,7 @@ export class CommandController {
 		}
 		if (!(await this.ctx.session.newSession(options))) return;
 		this.ctx.resetObserverRegistry();
-		setSessionTerminalTitle(
-			this.ctx.sessionManager.getSessionName(),
-			this.ctx.sessionManager.getCwd(),
-			this.ctx.sessionManager.titleSource,
-		);
+		setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 
 		this.ctx.statusLine.invalidate();
 		this.ctx.statusLine.setSessionStartTime(Date.now());
@@ -752,7 +1126,7 @@ export class CommandController {
 				return;
 			}
 			const name = this.ctx.sessionManager.getSessionName()!;
-			setSessionTerminalTitle(name, this.ctx.sessionManager.getCwd(), this.ctx.sessionManager.titleSource);
+			setSessionTerminalTitle(name, this.ctx.sessionManager.getCwd());
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
 			this.ctx.showStatus(`Session renamed to "${name}".`);
@@ -804,7 +1178,7 @@ export class CommandController {
 
 	async handlePythonCommand(code: string, excludeFromContext = false): Promise<void> {
 		const isDeferred = this.ctx.session.isStreaming;
-		this.ctx.pythonComponent = new PythonExecutionComponent(code, this.ctx.ui, excludeFromContext);
+		this.ctx.pythonComponent = new EvalExecutionComponent(code, this.ctx.ui, excludeFromContext);
 
 		if (isDeferred) {
 			this.ctx.pendingMessagesContainer.addChild(this.ctx.pythonComponent);

@@ -15,12 +15,12 @@ import awaitDescription from "../tools/await.md" with { type: "text" };
 import bashDescription from "../tools/bash.md" with { type: "text" };
 import browserDescription from "../tools/browser.md" with { type: "text" };
 import calculatorDescription from "../tools/calculator.md" with { type: "text" };
-import jobDescription from "../tools/job.md" with { type: "text" };
+import cancelJobDescription from "../tools/cancel-job.md" with { type: "text" };
 import checkpointDescription from "../tools/checkpoint.md" with { type: "text" };
 import exitPlanModeDescription from "../tools/exit-plan-mode.md" with { type: "text" };
 import fetchDescription from "../tools/fetch.md" with { type: "text" };
 import findDescription from "../tools/find.md" with { type: "text" };
-import imageGenDescription from "../tools/image-gen.md" with { type: "text" };
+import geminiImageDescription from "../tools/gemini-image.md" with { type: "text" };
 import grepDescription from "../tools/grep.md" with { type: "text" };
 import hashlineDescription from "../tools/hashline.md" with { type: "text" };
 import inspectImageDescription from "../tools/inspect-image.md" with { type: "text" };
@@ -66,10 +66,10 @@ const TOOL_DOCS = new Map<string, string>([
 	["bash", bashDescription],
 	["browser", browserDescription],
 	["calc", calculatorDescription],
-	["job", jobDescription],
+	["cancel_job", cancelJobDescription],
 	["checkpoint", checkpointDescription],
 	["exit_plan_mode", exitPlanModeDescription],
-	["generate_image", imageGenDescription],
+	["generate_image", geminiImageDescription],
 	["fetch", fetchDescription],
 	["find", findDescription],
 	["grep", grepDescription],

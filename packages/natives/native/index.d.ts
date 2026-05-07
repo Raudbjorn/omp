@@ -60,6 +60,48 @@ export declare class PhotonImage {
   resize(width: number, height: number, filter: SamplingFilter): ImageTask
 }
 
+/** Stable process reference. */
+export declare class Process {
+  /** Open a stable process reference from a PID. */
+  static fromPid(pid: number): Process | null
+  /** Open stable process references whose executable path matches exactly. */
+  static fromPath(path: string): Array<Process>
+  /** Operating-system process identifier for this process reference. */
+  get pid(): number
+  /** Parent process id for this process, when available. */
+  get ppid(): number | null
+  /** Launch arguments for this process. */
+  args(): Array<string>
+  /**
+   * Send `signal` to this process and its descendants, children first.
+   *
+   * On Linux and macOS the signal is forwarded as-is. On Windows there is no
+   * signal abstraction, so the `signal` argument is ignored and the entire
+   * tree is hard-killed via `TerminateProcess`. Defaults to the POSIX
+   * hard-kill signal.
+   */
+  killTree(signal?: number | undefined | null): number
+  /**
+   * Gracefully terminate this process and its descendants.
+   *
+   * By default this waits 1000ms after polite termination before
+   * hard-killing. Pass `graceful_ms < 0` to skip the graceful phase.
+   */
+  terminate(options?: ProcessTerminateOptions | undefined | null): Promise<boolean>
+  /**
+   * Wait until this process exits.
+   *
+   * When `options.timeout_ms` is omitted, waits until the process exits.
+   */
+  waitForExit(options?: ProcessWaitOptions | undefined | null): Promise<boolean>
+  /** Process group id for this process, when supported by the platform. */
+  groupId(): number | null
+  /** Direct children of this process as stable process references. */
+  children(): Array<Process>
+  /** Current status of this process reference. */
+  status(): ProcessStatus
+}
+
 /** Stateful PTY session for interactive stdin/stdout passthrough. */
 export declare class PtySession {
   constructor()
@@ -311,6 +353,20 @@ export interface ContextLine {
 export declare function copyToClipboard(text: string): void
 
 /**
+ * Count tokens in `input`.
+ *
+ * `input` may be a single string or an array of strings; an array returns
+ * the sum across all elements (encoded in parallel via rayon). Always
+ * returns a single token total — use this for any aggregate budget question
+ * without paying a per-element napi crossing.
+ *
+ * Uses ordinary encoding (no special-token handling), which is the right
+ * choice for measuring user/model content rather than wire-protocol tokens.
+ * Defaults to `o200k_base`; pass `Cl100kBase` for older `OpenAI` models.
+ */
+export declare function countTokens(input: string | Array<string>, encoding?: Encoding | undefined | null): number
+
+/**
  * Detect macOS system appearance via CoreFoundation.
  * Returns `"dark"` or `"light"` on macOS, `null` on other platforms.
  */
@@ -336,6 +392,14 @@ export declare enum Ellipsis {
  * Returns an error if decoding, resizing, or SIXEL encoding fails.
  */
 export declare function encodeSixel(bytes: Uint8Array, targetWidthPx: number, targetHeightPx: number): string
+
+/** Tokenizer encoding to use. */
+export declare enum Encoding {
+  /** GPT-4o / o1 / GPT-5 (default). */
+  O200kBase = 'O200kBase',
+  /** GPT-3.5 / GPT-4 / older. */
+  Cl100kBase = 'Cl100kBase'
+}
 
 /**
  * Execute a brush shell command.
@@ -700,22 +764,6 @@ export declare enum KeyEventType {
 }
 
 /**
- * Kill a process tree (the process and all its descendants).
- *
- * Arguments: `pid` is the root process and `signal` is the kill signal.
- * Kills children first (bottom-up) to prevent orphan re-parenting issues.
- * Returns the number of processes successfully killed.
- */
-export declare function killTree(pid: number, signal: number): number
-
-/**
- * List all descendant PIDs of `pid`.
- *
- * Returns an empty array if the process has no children or doesn't exist.
- */
-export declare function listDescendants(pid: number): Array<number>
-
-/**
  * System UI appearance reported by native macOS APIs (`detectMacOSAppearance`
  * and observer).
  */
@@ -855,6 +903,37 @@ export declare function parseKey(data: string, kittyProtocolActive: boolean): st
  * Returns a structured parse result when the input is a valid Kitty sequence.
  */
 export declare function parseKittySequence(data: string): ParsedKittyResult | null
+
+/** Current state of a process reference. */
+export declare enum ProcessStatus {
+  /** The referenced process is still running. */
+  Running = 'running',
+  /** The referenced process has exited or is no longer observable. */
+  Exited = 'exited'
+}
+
+export interface ProcessTerminateOptions {
+  /** Also signal the process group when supported by the platform. */
+  group?: boolean
+  /**
+   * Milliseconds to wait after polite termination before hard-killing.
+   * Omit to use the default grace period. Pass a negative value to skip the
+   * graceful phase and hard-kill immediately.
+   */
+  gracefulMs?: number
+  /** Milliseconds to wait after hard-kill for the process tree to exit. */
+  timeoutMs?: number
+  /** Abort signal for cancelling termination while waiting. */
+  signal?: unknown
+}
+
+/** Options for waiting on a process exit. */
+export interface ProcessWaitOptions {
+  /** Milliseconds to wait before returning false. Omit to wait indefinitely. */
+  timeoutMs?: number
+  /** Abort signal for cancelling the wait. */
+  signal?: unknown
+}
 
 /** Probe whether `ProjFS` overlay virtualization can be started on this system. */
 export declare function projfsOverlayProbe(): ProjfsOverlayProbeResult

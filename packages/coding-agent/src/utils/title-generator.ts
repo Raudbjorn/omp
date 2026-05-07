@@ -2,15 +2,14 @@
  * Generate session titles using a smol, fast model.
  */
 import * as path from "node:path";
+
+import { type Api, completeSimple, type Model } from "@oh-my-pi/pi-ai";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
-import { completeSimple } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
-import { toReasoningEffort } from "../thinking";
 
 const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
 
@@ -27,14 +26,10 @@ export function getTitleModel(
 	const availableModels = registry.getAvailable();
 	if (availableModels.length === 0) return undefined;
 
-	const titleModel = resolveRoleSelection(["commit", "smol"], settings, availableModels, registry);
-	if (titleModel) {
-		return { model: titleModel.model, thinkingLevel: titleModel.thinkingLevel };
-	}
+	const titleModel = resolveRoleSelection(["commit", "smol"], settings, availableModels, registry)?.model;
+	if (titleModel) return { model: titleModel };
 
-	if (currentModel) {
-		return { model: currentModel };
-	}
+	if (currentModel) return { model: currentModel };
 
 	return undefined;
 }
@@ -44,7 +39,7 @@ export function getTitleModel(
  *
  * @param firstMessage The first user message
  * @param registry Model registry
- * @param settings Settings used to resolve the smol role, including per-role thinking
+ * @param settings Settings used to resolve the smol role
  * @param sessionId Optional session id for sticky API key selection
  */
 export async function generateSessionTitle(
@@ -54,11 +49,12 @@ export async function generateSessionTitle(
 	sessionId?: string,
 	currentModel?: Model<Api>,
 ): Promise<string | null> {
-	const candidate = getTitleModel(registry, settings, currentModel);
-	if (!candidate) {
+	const titleResult = getTitleModel(registry, settings, currentModel);
+	if (!titleResult) {
 		logger.debug("title-generator: no title model found");
 		return null;
 	}
+	const model = titleResult.model;
 
 	// Truncate message if too long
 	const truncatedMessage =
@@ -67,17 +63,20 @@ export async function generateSessionTitle(
 ${truncatedMessage}
 </user-message>`;
 
-	const apiKey = await registry.getApiKey(candidate.model, sessionId);
+	const apiKey = await registry.getApiKey(model, sessionId);
 	if (!apiKey) {
 		logger.debug("title-generator: no API key for smol model", {
-			provider: candidate.model.provider,
-			id: candidate.model.id,
+			provider: model.provider,
+			id: model.id,
 		});
 		return null;
 	}
 
+	// Title generation is a 3-6 word task; force reasoning off so reasoning models
+	// don't burn the entire output budget on internal thinking and return an empty
+	// string. With reasoning disabled, 30 tokens of output is plenty.
 	const request = {
-		model: `${candidate.model.provider}/${candidate.model.id}`,
+		model: `${model.provider}/${model.id}`,
 		systemPrompt: TITLE_SYSTEM_PROMPT,
 		userMessage,
 		maxTokens: 30,
@@ -86,7 +85,7 @@ ${truncatedMessage}
 
 	try {
 		const response = await completeSimple(
-			candidate.model,
+			model,
 			{
 				systemPrompt: request.systemPrompt,
 				messages: [{ role: "user", content: request.userMessage, timestamp: Date.now() }],
@@ -94,7 +93,7 @@ ${truncatedMessage}
 			{
 				apiKey,
 				maxTokens: 30,
-				reasoning: toReasoningEffort(candidate.thinkingLevel),
+				disableReasoning: true,
 			},
 		);
 
@@ -153,13 +152,8 @@ function getFallbackTerminalTitle(cwd: string | undefined): string | undefined {
 	return sanitizeTerminalTitlePart(baseName);
 }
 
-export function formatSessionTerminalTitle(
-	sessionName: string | undefined,
-	cwd?: string,
-	titleSource?: "auto" | "user" | undefined,
-): string {
-	const label =
-		sanitizeTerminalTitlePart(titleSource === "auto" ? undefined : sessionName) ?? getFallbackTerminalTitle(cwd);
+export function formatSessionTerminalTitle(sessionName: string | undefined, cwd?: string): string {
+	const label = sanitizeTerminalTitlePart(sessionName) ?? getFallbackTerminalTitle(cwd);
 	return label ? `${DEFAULT_TERMINAL_TITLE}: ${label}` : DEFAULT_TERMINAL_TITLE;
 }
 
@@ -170,12 +164,8 @@ export function setTerminalTitle(title: string): void {
 	process.stdout.write(`\x1b]0;${sanitizeTerminalTitlePart(title) ?? DEFAULT_TERMINAL_TITLE}\x07`);
 }
 
-export function setSessionTerminalTitle(
-	sessionName: string | undefined,
-	cwd?: string,
-	titleSource?: "auto" | "user" | undefined,
-): void {
-	setTerminalTitle(formatSessionTerminalTitle(sessionName, cwd, titleSource));
+export function setSessionTerminalTitle(sessionName: string | undefined, cwd?: string): void {
+	setTerminalTitle(formatSessionTerminalTitle(sessionName, cwd));
 }
 
 /**

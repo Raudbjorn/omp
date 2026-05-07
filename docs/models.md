@@ -55,6 +55,7 @@ providers:
       X-Team: platform
     authHeader: true
     auth: apiKey
+    disableStrictTools: false  # set true for Anthropic-compatible endpoints that reject the strict field
     discovery:
       type: ollama
     modelOverrides:
@@ -101,8 +102,8 @@ providers:
 
 ### Allowed auth/discovery values
 
-- `auth`: `apiKey` (default) or `none`
-- `discovery.type`: `ollama`
+- `auth`: `apiKey` (default), `none`, or `oauth`; for `models.yml` custom models, `oauth` is accepted by schema but does not waive the `apiKey` requirement
+- `discovery.type`: `ollama`, `llama.cpp`, or `lm-studio`
 
 ## Validation rules (current)
 
@@ -119,6 +120,9 @@ Required:
 Must define at least one of:
 
 - `baseUrl`
+- `headers`
+- `compat`
+- `disableStrictTools`
 - `modelOverrides`
 - `discovery`
 
@@ -137,12 +141,12 @@ ModelRegistry pipeline (on refresh):
 
 1. Load built-in providers/models from `@oh-my-pi/pi-ai`.
 2. Load `models.yml` custom config.
-3. Apply provider overrides (`baseUrl`, `headers`) to built-in models.
+3. Apply provider overrides (`baseUrl`, `headers`, `disableStrictTools`) to built-in models.
 4. Apply `modelOverrides` (per provider + model id).
 5. Merge custom `models`:
    - same `provider + id` replaces existing
    - otherwise append
-6. Apply runtime-discovered models (currently Ollama and LM Studio), then re-apply model overrides.
+6. Load cached/runtime-discovered models (Ollama, llama.cpp, LM Studio, plus built-in provider managers), then re-apply model overrides.
 
 ## Canonical model equivalence and coalescing
 
@@ -153,6 +157,7 @@ Canonical ids are official upstream ids only, for example:
 - `claude-opus-4-6`
 - `claude-haiku-4-5`
 - `gpt-5.3-codex`
+
 ### `models.yml` equivalence config
 
 Example:
@@ -223,23 +228,22 @@ Provider defaults vs per-model overrides:
 If `ollama` is not explicitly configured, registry adds an implicit discoverable provider:
 
 - provider: `ollama`
-- api: `openai-completions`
+- api: `openai-responses`
 - base URL: `OLLAMA_BASE_URL` or `http://127.0.0.1:11434`
 - auth mode: keyless (`auth: none` behavior)
 
-Runtime discovery calls `GET /api/tags` on Ollama and synthesizes model entries with local defaults.
+Runtime discovery calls Ollama endpoints and normalizes discovered OpenAI-compatible models to `openai-responses`.
 
 ### Implicit llama.cpp discovery
 
 If `llama.cpp` is not explicitly configured, registry adds an implicit discoverable provider:
-Note: it's using the newer antropic messages api instead of the openai-competions.
 
 - provider: `llama.cpp`
 - api: `openai-responses`
 - base URL: `LLAMA_CPP_BASE_URL` or `http://127.0.0.1:8080`
 - auth mode: keyless (`auth: none` behavior)
 
-Runtime discovery calls `GET models` on llama.cpp and synthesizes model entries with local defaults.
+Runtime discovery calls llama.cpp model endpoints and synthesizes model entries with local defaults.
 
 ### Implicit LM Studio discovery
 
@@ -260,11 +264,11 @@ You can configure discovery yourself:
 providers:
   ollama:
     baseUrl: http://127.0.0.1:11434
-    api: openai-completions
+    api: openai-responses
     auth: none
     discovery:
       type: ollama
-      
+
   llama.cpp:
     baseUrl: http://127.0.0.1:8080
     api: openai-responses
@@ -348,7 +352,7 @@ Resolution precedence for exact selectors:
 
 Supported model roles:
 
-- `default`, `smol`, `slow`, `plan`, `commit`
+- `default`, `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `task`
 
 Role aliases like `pi/smol` expand through `settings.modelRoles`. Each role value can also append a thinking selector such as `:minimal`, `:low`, `:medium`, or `:high`.
 
@@ -439,17 +443,76 @@ The built-in model generator also assigns this automatically for `*-spark` model
 
 ## Compatibility and routing fields
 
-`models.yml` supports this `compat` subset:
+The `compat` block on a provider or model overrides the URL-based auto-detection in `packages/ai/src/providers/openai-completions-compat.ts`. It is validated by `OpenAICompatSchema` in `packages/coding-agent/src/config/model-registry.ts` and consumed by every `openai-completions` transport (`packages/ai/src/providers/openai-completions.ts`). The canonical type is `OpenAICompat` in `packages/ai/src/types.ts`.
 
-- `supportsStore`
-- `supportsDeveloperRole`
-- `supportsReasoningEffort`
-- `maxTokensField` (`max_completion_tokens` or `max_tokens`)
-- `openRouterRouting.only` / `openRouterRouting.order`
-- `vercelGatewayRouting.only` / `vercelGatewayRouting.order`
+`models.yml` accepts the following keys (all optional; unset falls back to URL detection):
 
-These are consumed by the OpenAI-completions transport logic and combined with URL-based auto-detection.
+Request shaping:
 
+- `supportsStore` — emit `store: false` on requests. Default: auto (off for non-standard endpoints).
+- `supportsDeveloperRole` — use the `developer` system role for reasoning models instead of `system`. Default: auto.
+- `supportsUsageInStreaming` — send `stream_options: { include_usage: true }` to receive token usage on streaming responses. Default: `true`.
+- `maxTokensField` — `"max_completion_tokens"` or `"max_tokens"`. Default: auto.
+- `supportsToolChoice` — emit the `tool_choice` parameter when the caller forces a specific tool. Default: `true`. Set `false` for endpoints that 400 on `tool_choice` (e.g. DeepSeek when reasoning is on).
+- `disableReasoningOnForcedToolChoice` — drop `reasoning_effort` / OpenRouter `reasoning` whenever `tool_choice` forces a call. Default: auto (Kimi/Anthropic-fronted endpoints).
+- `extraBody` — extra top-level fields merged into every request body (gateway hints, controller selectors, etc.).
+
+Reasoning / thinking:
+
+- `supportsReasoningEffort` — accept `reasoning_effort`. Default: auto (off for Grok and zAI).
+- `reasoningEffortMap` — partial map from internal effort levels (`minimal|low|medium|high|xhigh`) to provider-specific strings (e.g. DeepSeek maps `xhigh -> "max"`).
+- `thinkingFormat` — request shape for thinking: `"openai"` (`reasoning_effort`), `"openrouter"` (`reasoning: { effort }`), `"zai"` (`thinking: { type: "enabled" }`), `"qwen"` (top-level `enable_thinking`), or `"qwen-chat-template"` (`chat_template_kwargs.enable_thinking`). Default: `"openai"`.
+- `reasoningContentField` — assistant field carrying chain-of-thought: `"reasoning_content"`, `"reasoning"`, or `"reasoning_text"`. Default: auto.
+- `requiresReasoningContentForToolCalls` — assistant tool-call turns must round-trip the reasoning field (DeepSeek-R1, Kimi, OpenRouter when reasoning is on). Default: `false`.
+- `requiresAssistantContentForToolCalls` — assistant tool-call turns must include non-empty text content (Kimi). Default: `false`.
+
+Tool / message normalization:
+
+- `requiresToolResultName` — tool-result messages need a `name` field (Mistral). Default: auto.
+- `requiresAssistantAfterToolResult` — a user message after a tool result needs an assistant turn in between. Default: auto.
+- `requiresThinkingAsText` — convert thinking blocks to text wrapped in `<thinking>` delimiters (Mistral). Default: auto.
+- `requiresMistralToolIds` — normalize tool-call ids to exactly 9 alphanumeric chars. Default: auto.
+- `supportsStrictMode` — accept the per-tool `strict` field on tool schemas. Default: conservative auto-detect per provider/baseUrl.
+- `toolStrictMode` — `"all_strict"` forces strict on every tool, `"none"` forces it off; unset keeps the existing per-tool mixed behavior.
+
+Gateway routing (only applied when `baseUrl` matches the gateway):
+
+- `openRouterRouting.only` / `openRouterRouting.order` — provider routing on `openrouter.ai` (see <https://openrouter.ai/docs/provider-routing>).
+- `vercelGatewayRouting.only` / `vercelGatewayRouting.order` — provider routing on `ai-gateway.vercel.sh` (see <https://vercel.com/docs/ai-gateway/models-and-providers/provider-options>).
+
+Provider-level `compat` is the baseline; per-model `compat` is deep-merged on top, with `openRouterRouting`, `vercelGatewayRouting`, and `extraBody` merged as nested objects.
+
+### Anthropic compatibility (`anthropic-messages`)
+
+For `anthropic-messages` models the runtime uses a separate `AnthropicCompat` shape (`packages/ai/src/types.ts`). The `models.yml` schema currently exposes only the strict-tools opt-out as a top-level provider field (see below); the remaining Anthropic-side knobs (`disableAdaptiveThinking`, `supportsEagerToolInputStreaming`, `supportsLongCacheRetention`) are set by built-in catalog metadata and are not user-configurable from `models.yml`.
+
+### Strict tool schemas (`disableStrictTools`)
+
+Anthropic's API supports a `strict` field on tool definitions that forces the model to always follow the provided schema exactly. This is enabled by default for all `anthropic-messages` providers because it guarantees schema conformance in agentic systems.
+
+Third-party providers that front the Anthropic API (AWS Bedrock, Azure, self-hosted proxies) do not always implement this field and will reject requests that include it. Set `disableStrictTools: true` at the provider level to opt out:
+
+```yaml
+providers:
+  bedrock-anthropic:
+    baseUrl: https://bedrock-runtime.us-east-1.amazonaws.com/anthropic
+    apiKey: AWS_BEARER_TOKEN
+    api: anthropic-messages
+    disableStrictTools: true
+    models:
+      - id: claude-sonnet-4-20250514
+        name: Claude Sonnet 4 (Bedrock)
+        input: [text, image]
+        contextWindow: 200000
+        maxTokens: 16384
+        cost:
+          input: 3.00
+          output: 15.00
+          cacheRead: 0.30
+          cacheWrite: 3.75
+```
+
+`disableStrictTools` is a provider-level flag that applies to all models in the provider.
 ## Practical examples
 
 ### Local OpenAI-compatible endpoint (no auth)
@@ -474,6 +537,7 @@ providers:
     apiKey: ANTHROPIC_PROXY_API_KEY
     api: anthropic-messages
     authHeader: true
+    disableStrictTools: true  # if the proxy doesn't support strict tool schemas
     models:
       - id: claude-sonnet-4-20250514
         name: Claude Sonnet 4 (Proxy)
@@ -499,11 +563,7 @@ providers:
 
 ## Legacy consumer caveat
 
-Most model configuration now flows through `models.yml` via `ModelRegistry`.
-
-One notable legacy path remains: web-search Anthropic auth resolution still reads `~/.omp/agent/models.json` directly in `src/web/search/auth.ts`.
-
-If you rely on that specific path, keep JSON compatibility in mind until that module is migrated.
+Most model configuration now flows through `models.yml` via `ModelRegistry`. Explicit `.json` / `.jsonc` paths remain supported only when passed programmatically to `ModelRegistry`; the default user config is `~/.omp/agent/models.yml`.
 
 ## Failure mode
 

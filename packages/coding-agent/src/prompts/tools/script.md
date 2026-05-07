@@ -4,7 +4,7 @@ Use this tool when a task requires calling the same tool multiple times, chainin
 
 ## Available functions
 
-Most registered tools whose names are valid Python identifiers are available as named functions. The script tool itself and lifecycle/recursive/interactive tools (`ask`, `task`, `job`, `submit_result`, `report_finding`, `exit_plan_mode`) are intentionally excluded. Common ones:
+Most registered tools whose names are valid Python identifiers are available as named functions. The script tool itself and lifecycle/recursive/interactive tools (`ask`, `task`, `poll_jobs`, `cancel_job`, `submit_result`, `report_finding`, `exit_plan_mode`) are intentionally excluded. Common ones:
 
 ```python
 bash({"command": "git status", "timeout": 30})

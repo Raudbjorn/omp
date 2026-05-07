@@ -13,10 +13,7 @@ import {
 const DEFAULT_RRF_K = 60;
 const DEFAULT_SEMANTIC_OVERFETCH_FACTOR = 3;
 const DEFAULT_KEYWORD_OVERFETCH_FACTOR = 3;
-// Distance is a tiebreaker *within* rank-equivalent candidates, not a primary
-// signal — kept well below the weakest explicit boost so a near-identical
-// semantic vector can't outweigh a strong lexical/path match.
-const SEMANTIC_DISTANCE_WEIGHT = 0.001;
+const SEMANTIC_DISTANCE_WEIGHT = 0.01;
 const SAME_SESSION_BOOST = 0.003;
 const SAME_PROJECT_BOOST = 0.002;
 const EXACT_PATH_BOOST = 0.004;

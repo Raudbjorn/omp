@@ -2,8 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { resetPreludeDocsCache, warmPythonEnvironment } from "@oh-my-pi/pi-coding-agent/ipy/executor";
-import { getPythonToolDescription, PythonTool } from "@oh-my-pi/pi-coding-agent/tools/python";
+import { EvalTool } from "@oh-my-pi/pi-coding-agent/tools/eval";
 import { $which, getProjectDir } from "@oh-my-pi/pi-utils";
 
 const resolvePythonPath = (): string | null => {
@@ -39,8 +38,8 @@ const hasKernelDeps = (() => {
 const shouldRun = Boolean(pythonPath) && hasKernelDeps;
 
 describe.skipIf(!shouldRun)("PYTHON_PRELUDE integration", () => {
-	it("exposes prelude helpers via python tool", async () => {
-		const helpers = ["env", "read", "write", "append", "rm", "mv", "cp", "find", "grep"];
+	it("exposes prelude helpers via eval python backend", async () => {
+		const helpers = ["env", "read", "write", "append", "tree", "diff", "run", "output"];
 
 		const session = {
 			cwd: getProjectDir(),
@@ -49,48 +48,26 @@ describe.skipIf(!shouldRun)("PYTHON_PRELUDE integration", () => {
 			getSessionSpawns: () => null,
 			settings: Settings.isolated({
 				"lsp.diagnosticsOnWrite": false,
-				"python.toolMode": "ipy-only",
+				"eval.py": true,
 				"python.kernelMode": "per-call",
 				"python.sharedGateway": true,
 			}),
 		};
+		const tool = new EvalTool(session);
+		const code = [
+			`helpers = ${JSON.stringify(helpers)}`,
+			"missing = [name for name in helpers if name not in globals() or not callable(globals()[name])]",
+			'print("HELPERS_OK=" + ("1" if not missing else "0"))',
+			"if missing:",
+			'    print("MISSING=" + ",".join(missing))',
+		].join("\n");
 
-		resetPreludeDocsCache();
-		const tool = new PythonTool(session);
-		const code = `
-	helpers = ${JSON.stringify(helpers)}
-	missing = [name for name in helpers if name not in globals() or not callable(globals()[name])]
-	docs = __omp_prelude_docs__()
-	doc_names = [d.get("name") for d in docs]
-	doc_categories = [d.get("category") for d in docs]
-	print("HELPERS_OK=" + ("1" if not missing else "0"))
-	print("DOCS_OK=" + ("1" if "read" in doc_names and "File I/O" in doc_categories else "0"))
-	if missing:
-		print("MISSING=" + ",".join(missing))
-	`;
-
-		const result = await tool.execute("tool-call-1", { cells: [{ title: "prelude helpers", code }] });
+		const result = await tool.execute("tool-call-1", {
+			input: `===== py:"prelude helpers" =====\n${code}\n`,
+		});
 		const output = result.content.find(item => item.type === "text")?.text ?? "";
 		expect(output).toContain("HELPERS_OK=1");
-		expect(output).toContain("DOCS_OK=1");
 		expect(tool.description).toContain("read");
 		expect(tool.description).not.toContain("Documentation unavailable");
-	});
-
-	it("exposes prelude docs via warmup", async () => {
-		resetPreludeDocsCache();
-		const result = await warmPythonEnvironment(getProjectDir());
-		expect(result.ok).toBe(true);
-		const names = result.docs.map(doc => doc.name);
-		expect(names).toContain("read");
-	});
-
-	it("renders prelude docs in python tool description", async () => {
-		resetPreludeDocsCache();
-		const result = await warmPythonEnvironment(getProjectDir());
-		expect(result.ok).toBe(true);
-		const description = getPythonToolDescription();
-		expect(description).toContain("read");
-		expect(description).not.toContain("Documentation unavailable");
 	});
 });

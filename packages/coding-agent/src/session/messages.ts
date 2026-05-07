@@ -24,6 +24,7 @@ const COMPACTION_SUMMARY_TEMPLATE = compactionSummaryContextPrompt;
 const BRANCH_SUMMARY_TEMPLATE = branchSummaryContextPrompt;
 
 export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt";
+export const MULTI_BLOCK_TEXT_MESSAGE_TYPE = "multi-block-text";
 
 /** Custom message type for textual blocks emitted during multi-block submissions. */
 export const MULTI_BLOCK_TEXT_MESSAGE_TYPE = "multi-block-text";
@@ -65,7 +66,7 @@ export interface BashExecutionMessage {
 
 /**
  * Message type for user-initiated Python executions via the $ command.
- * Shares the same kernel session as the agent's Python tool.
+ * Shares the same kernel session as eval's Python backend.
  */
 export interface PythonExecutionMessage {
 	role: "pythonExecution";

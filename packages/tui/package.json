@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-tui",
-	"version": "14.5.2",
+	"version": "14.6.5",
 	"description": "Terminal User Interface library with differential rendering for efficient text-based applications",
 	"homepage": "https://github.com/can1357/oh-my-pi",
 	"author": "Can Boluk",
@@ -39,6 +39,7 @@
 	"dependencies": {
 		"@oh-my-pi/pi-natives": "catalog:",
 		"@oh-my-pi/pi-utils": "catalog:",
+		"lru-cache": "catalog:",
 		"marked": "catalog:"
 	},
 	"devDependencies": {

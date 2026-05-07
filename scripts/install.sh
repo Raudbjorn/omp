@@ -14,7 +14,8 @@ set -e
 #   PI_INSTALL_REPO   Override the source repo (default: Raudbjorn/omp)
 #   PI_INSTALL_DIR    Override install dir for --binary (default: ~/.local/bin)
 
-REPO="${PI_INSTALL_REPO:-Raudbjorn/omp}"
+REPO="Raudbjorn/omp"
+PACKAGE="@oh-my-pi/pi-coding-agent"  # unused for fork; source install always clones REPO
 INSTALL_DIR="${PI_INSTALL_DIR:-$HOME/.local/bin}"
 MIN_BUN_VERSION="1.3.7"
 

@@ -518,12 +518,15 @@ export class SessionObserverOverlayComponent extends Container {
 			case "write":
 			case "edit":
 				return args.path ? `path: ${args.path}` : "";
-			case "grep":
-				return [args.pattern ? `pattern: ${args.pattern}` : "", args.path ? `path: ${args.path}` : ""]
+			case "search":
+				return [
+					args.pattern ? `pattern: ${args.pattern}` : "",
+					Array.isArray(args.paths) ? `paths: ${args.paths.join(", ")}` : "",
+				]
 					.filter(Boolean)
 					.join(", ");
 			case "find":
-				return args.pattern ? `pattern: ${args.pattern}` : "";
+				return Array.isArray(args.paths) ? `paths: ${args.paths.join(", ")}` : "";
 			case "bash": {
 				const cmd = args.command;
 				return typeof cmd === "string" ? replaceTabs(cmd) : "";

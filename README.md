@@ -86,12 +86,10 @@ can1357/oh-my-pi          (canonical upstream; CLI: pi)
 ### Active branches (state may shift after merges)
 
 - `acp-integration` — turns `omp` into an **ACP client** that spawns and
-  drives another CLI over stdio JSON-RPC, in addition to its existing
-  role as an ACP server for IDEs. MVP targets Gemini CLI (native ACP);
-  Claude Code follows as a thin adapter over the Zed-authored
-  `claude-agent-acp` bridge. Planning artefacts are split per agent
-  under [`planning/`](./planning/) (`acp-gemini/`, `acp-claude/`,
-  `acp-copilot/`, `acp-kiro/`).
+  drives another CLI (`claude`, `gemini`, `kiro`, `copilot`) over stdio
+  JSON-RPC, in addition to its existing role as an ACP server for IDEs.
+  Planning artefacts live under [`planning/`](./planning/) (requirements,
+  design, tasks, research, prototypes).
 
 ### Documentation
 

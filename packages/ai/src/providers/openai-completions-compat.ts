@@ -51,9 +51,28 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 
 	const isCerebras = provider === "cerebras" || baseUrl.includes("cerebras.ai");
 	const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
+	const isKilo = provider === "kilo" || baseUrl.includes("api.kilo.ai");
 	const isKimiModel = model.id.includes("moonshotai/kimi") || /^kimi[-.]/i.test(model.id);
+	const isAnthropicModel =
+		provider === "anthropic" ||
+		baseUrl.includes("api.anthropic.com") ||
+		/(^|\/)claude[-.]/i.test(model.id) ||
+		/(^|\/)anthropic\//i.test(model.id);
 	const isAlibaba = provider === "alibaba-coding-plan" || baseUrl.includes("dashscope");
 	const isQwen = model.id.toLowerCase().includes("qwen");
+	// DeepSeek V4 (and other reasoning-capable DeepSeek models) reject follow-up requests in
+	// thinking mode unless prior assistant tool-call turns include `reasoning_content`. The
+	// upstream model is reachable through many OpenAI-compat hosts (api.deepseek.com, Deepinfra,
+	// Kilo, NVIDIA NIM, Zenmux, OpenRouter, …), so we match by model id/name as well as by
+	// provider/baseUrl. The flag is gated by `model.reasoning` because the invariant only
+	// applies when thinking mode is actually engaged.
+	const lowerId = model.id.toLowerCase();
+	const lowerName = (model.name ?? "").toLowerCase();
+	const isDeepseekFamily =
+		provider === "deepseek" ||
+		baseUrl.includes("deepseek.com") ||
+		lowerId.includes("deepseek") ||
+		lowerName.includes("deepseek");
 
 	const isNonStandard =
 		isCerebras ||
@@ -67,6 +86,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		baseUrl.includes("fireworks.ai") ||
 		isAlibaba ||
 		isZai ||
+		isKilo ||
 		isQwen ||
 		provider === "opencode-zen" ||
 		provider === "opencode-go" ||
@@ -89,7 +109,9 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 					high: "default",
 					xhigh: "default",
 				} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
-			: {};
+			: isDeepseekFamily && model.reasoning
+				? { xhigh: "max" }
+				: {};
 
 	return {
 		supportsStore: !isNonStandard,
@@ -97,6 +119,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		supportsReasoningEffort: !isGrok && !isZai,
 		reasoningEffortMap,
 		supportsUsageInStreaming: !isCerebras,
+		disableReasoningOnForcedToolChoice: isKimiModel || isAnthropicModel,
 		supportsToolChoice: true,
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: isMistral,
@@ -118,7 +141,12 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		//     redacted/encrypted reasoning into DeepSeek's plaintext form, so cross-provider continuations
 		//     rely on a placeholder — see `convertMessages` for the placeholder injection.
 		requiresReasoningContentForToolCalls:
-			isKimiModel || ((provider === "openrouter" || baseUrl.includes("openrouter.ai")) && Boolean(model.reasoning)),
+			isKimiModel ||
+			(isDeepseekFamily && Boolean(model.reasoning)) ||
+			((provider === "openrouter" || baseUrl.includes("openrouter.ai")) && Boolean(model.reasoning)),
+		// DeepSeek V4 rejects synthetic reasoning_content placeholders (".") on tool-call turns.
+		// Kimi and OpenRouter accept them when actual reasoning is unavailable.
+		allowsSyntheticReasoningContentForToolCalls: !isDeepseekFamily || !model.reasoning,
 		requiresAssistantContentForToolCalls: isKimiModel,
 		openRouterRouting: undefined,
 		vercelGatewayRouting: undefined,
@@ -161,8 +189,13 @@ export function resolveOpenAICompat(
 		reasoningContentField: model.compat.reasoningContentField ?? detected.reasoningContentField,
 		requiresReasoningContentForToolCalls:
 			model.compat.requiresReasoningContentForToolCalls ?? detected.requiresReasoningContentForToolCalls,
+		allowsSyntheticReasoningContentForToolCalls:
+			model.compat.allowsSyntheticReasoningContentForToolCalls ??
+			detected.allowsSyntheticReasoningContentForToolCalls,
 		requiresAssistantContentForToolCalls:
 			model.compat.requiresAssistantContentForToolCalls ?? detected.requiresAssistantContentForToolCalls,
+		disableReasoningOnForcedToolChoice:
+			model.compat.disableReasoningOnForcedToolChoice ?? detected.disableReasoningOnForcedToolChoice,
 		openRouterRouting: model.compat.openRouterRouting ?? detected.openRouterRouting,
 		vercelGatewayRouting: model.compat.vercelGatewayRouting ?? detected.vercelGatewayRouting,
 		supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,

@@ -15,12 +15,12 @@ import type {
 	Context,
 	ImageContent,
 	Model,
-	OAuthCredentials,
-	OAuthLoginCallbacks,
+	ProviderResponseMetadata,
 	SimpleStreamOptions,
 	TextContent,
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import type * as piCodingAgent from "@oh-my-pi/pi-coding-agent";
 import type { AutocompleteItem, Component, EditorComponent, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
 import type { Static, TSchema } from "@sinclair/typebox";
@@ -28,9 +28,9 @@ import type { Rule } from "../../capability/rule";
 import type { KeybindingsManager } from "../../config/keybindings";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { EditToolDetails } from "../../edit";
+import type { PythonResult } from "../../eval/py/executor";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
-import type { PythonResult } from "../../ipy/executor";
 import type { Theme } from "../../modes/theme/theme";
 import type { CompactionPreparation, CompactionResult } from "../../session/compaction";
 import type { CustomMessage } from "../../session/messages";
@@ -46,10 +46,10 @@ import type {
 	BashToolInput,
 	FindToolDetails,
 	FindToolInput,
-	GrepToolDetails,
-	GrepToolInput,
 	ReadToolDetails,
 	ReadToolInput,
+	SearchToolDetails,
+	SearchToolInput,
 	WriteToolInput,
 } from "../../tools";
 import type { TodoItem } from "../../tools/todo-write";
@@ -485,6 +485,11 @@ export interface BeforeProviderRequestEvent {
 	payload: unknown;
 }
 
+/** Fired after a provider response is received, before its stream body is consumed. */
+export interface AfterProviderResponseEvent extends ProviderResponseMetadata {
+	type: "after_provider_response";
+}
+
 /** Fired after user submits prompt but before agent loop. */
 export interface BeforeAgentStartEvent {
 	type: "before_agent_start";
@@ -686,9 +691,9 @@ export interface WriteToolCallEvent extends ToolCallEventBase {
 	input: WriteToolInput;
 }
 
-export interface GrepToolCallEvent extends ToolCallEventBase {
-	toolName: "grep";
-	input: GrepToolInput;
+export interface SearchToolCallEvent extends ToolCallEventBase {
+	toolName: "search";
+	input: SearchToolInput;
 }
 
 export interface FindToolCallEvent extends ToolCallEventBase {
@@ -707,7 +712,7 @@ export type ToolCallEvent =
 	| ReadToolCallEvent
 	| EditToolCallEvent
 	| WriteToolCallEvent
-	| GrepToolCallEvent
+	| SearchToolCallEvent
 	| FindToolCallEvent
 	| CustomToolCallEvent;
 
@@ -739,9 +744,9 @@ export interface WriteToolResultEvent extends ToolResultEventBase {
 	details: undefined;
 }
 
-export interface GrepToolResultEvent extends ToolResultEventBase {
-	toolName: "grep";
-	details: GrepToolDetails | undefined;
+export interface SearchToolResultEvent extends ToolResultEventBase {
+	toolName: "search";
+	details: SearchToolDetails | undefined;
 }
 
 export interface FindToolResultEvent extends ToolResultEventBase {
@@ -760,7 +765,7 @@ export type ToolResultEvent =
 	| ReadToolResultEvent
 	| EditToolResultEvent
 	| WriteToolResultEvent
-	| GrepToolResultEvent
+	| SearchToolResultEvent
 	| FindToolResultEvent
 	| CustomToolResultEvent;
 
@@ -788,7 +793,7 @@ export function isToolCallEventType(toolName: "bash", event: ToolCallEvent): eve
 export function isToolCallEventType(toolName: "read", event: ToolCallEvent): event is ReadToolCallEvent;
 export function isToolCallEventType(toolName: "edit", event: ToolCallEvent): event is EditToolCallEvent;
 export function isToolCallEventType(toolName: "write", event: ToolCallEvent): event is WriteToolCallEvent;
-export function isToolCallEventType(toolName: "grep", event: ToolCallEvent): event is GrepToolCallEvent;
+export function isToolCallEventType(toolName: "search", event: ToolCallEvent): event is SearchToolCallEvent;
 export function isToolCallEventType(toolName: "find", event: ToolCallEvent): event is FindToolCallEvent;
 export function isToolCallEventType<TName extends string, TInput extends Record<string, unknown>>(
 	toolName: TName,
@@ -804,6 +809,7 @@ export type ExtensionEvent =
 	| SessionEvent
 	| ContextEvent
 	| BeforeProviderRequestEvent
+	| AfterProviderResponseEvent
 	| BeforeAgentStartEvent
 	| AgentStartEvent
 	| AgentEndEvent
@@ -984,6 +990,7 @@ export interface ExtensionAPI {
 		event: "before_provider_request",
 		handler: ExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>,
 	): void;
+	on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): void;
 	on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
 	on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
 	on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
