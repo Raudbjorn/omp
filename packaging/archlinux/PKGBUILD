@@ -26,7 +26,7 @@
 # checksums when a new fork release is tagged on origin.
 
 pkgname=omp
-_release_tag='v14.5.2-acp.1'
+_release_tag='v14.6.5-acp.1'
 # Derive pkgver from _release_tag: strip leading 'v' and replace '-' with '.'
 # (Arch's pkgver doesn't allow hyphens — they're reserved for pkgrel).
 #   v14.1.4-acp.5 -> 14.1.4.acp.5
