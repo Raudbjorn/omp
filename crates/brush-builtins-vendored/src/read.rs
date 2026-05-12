@@ -658,7 +658,7 @@ impl ReadCommand {
 		context: &brush_core::ExecutionContext<'_, impl brush_core::ShellExtensions>,
 	) -> Result<Option<brush_core::ExecutionResult>, brush_core::Error> {
 		if let Some(timeout) = self.timeout_in_seconds {
-			if timeout < 0.0 {
+			if timeout < 0.0 || !timeout.is_finite() {
 				writeln!(
 					context.stderr(),
 					"{}: -t: invalid timeout specification",

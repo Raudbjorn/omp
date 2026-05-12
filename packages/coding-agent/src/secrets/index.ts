@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import type { SecretEntry } from "./obfuscator";
 import { compileSecretRegex } from "./regex";
@@ -11,7 +11,7 @@ export { deobfuscateSessionContext, obfuscateMessages, type SecretEntry, SecretO
  * Project-local entries override global entries with matching content.
  */
 export async function loadSecrets(cwd: string, agentDir: string): Promise<SecretEntry[]> {
-	const projectPath = path.join(cwd, ".omp", "secrets.yml");
+	const projectPath = path.join(cwd, CONFIG_DIR_NAME, "secrets.yml");
 	const globalPath = path.join(agentDir, "secrets.yml");
 
 	const globalEntries = await loadSecretsFile(globalPath);

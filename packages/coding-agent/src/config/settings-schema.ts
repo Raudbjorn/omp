@@ -28,7 +28,8 @@ export type SettingTab =
 	| "editing"
 	| "tools"
 	| "tasks"
-	| "providers";
+	| "providers"
+	| "webterm";
 
 /** Tab display metadata - icon is resolved via theme.symbol() */
 export type TabMetadata = { label: string; icon: `tab.${string}` };
@@ -44,6 +45,7 @@ export const SETTING_TABS: SettingTab[] = [
 	"tools",
 	"tasks",
 	"providers",
+	"webterm",
 ];
 
 /** Tab display metadata - icon is a symbol key from theme.ts (tab.*) */
@@ -57,6 +59,7 @@ export const TAB_METADATA: Record<SettingTab, { label: string; icon: `tab.${stri
 	tools: { label: "Tools", icon: "tab.tools" },
 	tasks: { label: "Tasks", icon: "tab.tasks" },
 	providers: { label: "Providers", icon: "tab.providers" },
+	webterm: { label: "Web Terminal", icon: "tab.webterm" },
 };
 
 /** Status line segment identifiers */
@@ -306,6 +309,10 @@ export const SETTINGS_SCHEMA = {
 	disabledProviders: { type: "array", default: EMPTY_STRING_ARRAY },
 
 	disabledExtensions: { type: "array", default: EMPTY_STRING_ARRAY },
+
+	projectDisabledExtensions: { type: "array", default: EMPTY_STRING_ARRAY },
+
+	restrictedExtensions: { type: "record", default: EMPTY_STRING_RECORD },
 
 	modelRoles: { type: "record", default: EMPTY_STRING_RECORD },
 
@@ -934,6 +941,18 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "interaction", label: "Speech-to-Text", description: "Enable speech-to-text input via microphone" },
 	},
 
+	"stt.backend": {
+		type: "enum",
+		values: ["openai-whisper", "faster-whisper"] as const,
+		default: "openai-whisper",
+		ui: {
+			tab: "interaction",
+			label: "STT Backend",
+			description: "Whisper implementation (faster-whisper uses CTranslate2, lighter on aarch64)",
+			submenu: true,
+		},
+	},
+
 	"stt.language": {
 		type: "string",
 		default: "en",
@@ -1402,6 +1421,216 @@ export const SETTINGS_SCHEMA = {
 				{ value: "20", label: "20 messages" },
 				{ value: "30", label: "30 messages" },
 			],
+		},
+	},
+	"assembler.safetyMarginPercent": {
+		type: "number",
+		default: 5,
+		ui: {
+			tab: "context",
+			label: "Safety margin %",
+			description: "Percentage of context window held as safety reserve (0-100)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.messageBudgetPercent": {
+		type: "number",
+		default: 50,
+		ui: {
+			tab: "context",
+			label: "Message budget %",
+			description: "Guaranteed minimum percentage of allocatable budget for messages (0-100)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.hydrationBudgetPercent": {
+		type: "number",
+		default: 50,
+		ui: {
+			tab: "context",
+			label: "Hydration budget %",
+			description: "Hard cap on hydration as percentage of allocatable budget (0-100)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.hotWindowTurns": {
+		type: "number",
+		default: 4,
+		ui: {
+			tab: "context",
+			label: "Hot window turns",
+			description: "Number of recent turns always kept in full (0-20)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.turnBufferPercent": {
+		type: "number",
+		default: 20,
+		ui: {
+			tab: "context",
+			label: "Turn buffer %",
+			description: "Percentage of context window reserved for current turn (tool calls, results, new messages)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.contextWindowCap": {
+		type: "number",
+		default: 200_000,
+		ui: {
+			tab: "context",
+			label: "Context window cap",
+			description: "Hard upper limit on assembled context tokens regardless of model window (0 = no cap)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+
+	// ────────────────────────────────────────────────────────────────────────
+	// Composer (dynamic system prompt)
+	// ────────────────────────────────────────────────────────────────────────
+	"composer.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			label: "Enable Composer",
+			description: "Compile the system prompt with an LLM at session start instead of using the static template",
+		},
+	},
+	"composer.model": {
+		type: "string",
+		default: "sonnet",
+		ui: {
+			tab: "context",
+			label: "Composer model",
+			description: "Model to use for system prompt compilation (e.g. sonnet, haiku, gpt-4o)",
+		},
+	},
+	"composer.tokenBudget": {
+		type: "number",
+		default: 24000,
+		ui: {
+			tab: "context",
+			label: "Composer token budget",
+			description: "Target size for the compiled system prompt in tokens",
+		},
+	},
+
+	// ────────────────────────────────────────────────────────────────────────
+	// Context manager (assembler pipeline)
+	// ────────────────────────────────────────────────────────────────────────
+	"contextManager.mode": {
+		type: "enum",
+		values: ["legacy", "shadow", "assembler"] as const,
+		default: "assembler",
+		ui: {
+			tab: "context",
+			label: "Context manager",
+			description:
+				"Active context management strategy (legacy = current, shadow = observe-only assembler, assembler = assembler-managed)",
+			submenu: true,
+		},
+	},
+	"assembler.safetyMarginPercent": {
+		type: "number",
+		default: 5,
+		ui: {
+			tab: "context",
+			label: "Safety margin %",
+			description: "Percentage of context window held as safety reserve (0-100)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.messageBudgetPercent": {
+		type: "number",
+		default: 50,
+		ui: {
+			tab: "context",
+			label: "Message budget %",
+			description: "Guaranteed minimum percentage of allocatable budget for messages (0-100)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.hydrationBudgetPercent": {
+		type: "number",
+		default: 50,
+		ui: {
+			tab: "context",
+			label: "Hydration budget %",
+			description: "Hard cap on hydration as percentage of allocatable budget (0-100)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.hotWindowTurns": {
+		type: "number",
+		default: 4,
+		ui: {
+			tab: "context",
+			label: "Hot window turns",
+			description: "Number of recent turns always kept in full (0-20)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.turnBufferPercent": {
+		type: "number",
+		default: 20,
+		ui: {
+			tab: "context",
+			label: "Turn buffer %",
+			description: "Percentage of context window reserved for current turn (tool calls, results, new messages)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+	"assembler.contextWindowCap": {
+		type: "number",
+		default: 200_000,
+		ui: {
+			tab: "context",
+			label: "Context window cap",
+			description: "Hard upper limit on assembled context tokens regardless of model window (0 = no cap)",
+			submenu: true,
+			condition: "isAssemblerMode",
+		},
+	},
+
+	// ────────────────────────────────────────────────────────────────────────
+	// Composer (dynamic system prompt)
+	// ────────────────────────────────────────────────────────────────────────
+	"composer.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			label: "Enable Composer",
+			description: "Compile the system prompt with an LLM at session start instead of using the static template",
+		},
+	},
+	"composer.model": {
+		type: "string",
+		default: "sonnet",
+		ui: {
+			tab: "context",
+			label: "Composer model",
+			description: "Model to use for system prompt compilation (e.g. sonnet, haiku, gpt-4o)",
+		},
+	},
+	"composer.tokenBudget": {
+		type: "number",
+		default: 24000,
+		ui: {
+			tab: "context",
+			label: "Composer token budget",
+			description: "Target size for the compiled system prompt in tokens",
 		},
 	},
 
@@ -1879,6 +2108,15 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: { tab: "tools", label: "Web Search", description: "Enable the web_search tool for web searching" },
 	},
+	"web_search.verbose": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			label: "Web Search Verbose",
+			description: "Show detailed search panels (sources, metadata, tokens). When disabled, uses compact output.",
+		},
+	},
 
 	"browser.enabled": {
 		type: "boolean",
@@ -1897,6 +2135,15 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "Headless Browser",
 			description: "Launch browser in headless mode (disable to show browser UI)",
+		},
+	},
+	"script.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			label: "Script tool",
+			description: "Allow the agent to use the script tool for programmatic multi-tool orchestration",
 		},
 	},
 	"browser.screenshotDir": {
@@ -1942,7 +2189,7 @@ export const SETTINGS_SCHEMA = {
 	// Async jobs
 	"async.enabled": {
 		type: "boolean",
-		default: false,
+		default: true,
 		ui: {
 			tab: "tools",
 			label: "Async Execution",
@@ -2427,6 +2674,55 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	// Embedding provider (used by recall)
+	"providers.embeddings": {
+		type: "enum",
+		values: ["disabled", "memex", "openai-compatible"] as const,
+		default: "disabled",
+		ui: {
+			tab: "providers",
+			label: "Embedding Provider",
+			description: "Provider for recall embeddings",
+			submenu: true,
+		},
+	},
+	"providers.embeddingUrl": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "providers",
+			label: "Embedding URL",
+			description: "OpenAI-compatible embedding endpoint URL",
+		},
+	},
+	"providers.embeddingModel": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "providers",
+			label: "Embedding Model",
+			description: "Model name for OpenAI-compatible embeddings",
+		},
+	},
+	"providers.embeddingDimension": {
+		type: "number",
+		default: 2560,
+		ui: {
+			tab: "providers",
+			label: "Embedding Dimension",
+			description: "Embedding vector dimension for recall storage",
+		},
+	},
+	"providers.embeddingApiKeyEnvVar": {
+		type: "string",
+		default: "EMBEDDINGS_API_KEY",
+		ui: {
+			tab: "providers",
+			label: "Embedding API Key Env Var",
+			description: "Environment variable containing the embedding API key",
+		},
+	},
+
 	// Exa
 	"exa.enabled": {
 		type: "boolean",
@@ -2595,6 +2891,9 @@ export type StatusLineSeparatorStyle = SettingValue<"statusLine.separator">;
 /** Tree selector filter mode - derived from schema */
 export type TreeFilterMode = SettingValue<"treeFilterMode">;
 
+/** Context manager mode - derived from schema */
+export type ContextManagerMode = SettingValue<"contextManager.mode">;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Typed Group Definitions
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2690,6 +2989,21 @@ export interface ExaSettings {
 	enableWebsets: boolean;
 }
 
+export interface WebTerminalBinding {
+	interface: string;
+	ip: string;
+}
+
+export type WebTerminalControlKey = "esc" | "enter" | "up" | "down" | "left" | "right" | "ctrl+c";
+
+export interface WebTerminalSettings {
+	enabled: boolean;
+	bindings: WebTerminalBinding[];
+	showExtraControls: boolean;
+	extraControlKeys: WebTerminalControlKey[];
+	extraControlsHeightPx: number;
+}
+
 export interface StatusLineSettings {
 	preset: StatusLinePreset;
 	separator: StatusLineSeparatorStyle;
@@ -2709,6 +3023,7 @@ export interface ThinkingBudgetsSettings {
 
 export interface SttSettings {
 	enabled: boolean;
+	backend: string;
 	language: string | undefined;
 	modelName: string;
 	whisperPath: string | undefined;
@@ -2742,6 +3057,7 @@ export interface GroupTypeMap {
 	commit: CommitSettings;
 	ttsr: TtsrSettings;
 	exa: ExaSettings;
+	webTerminal: WebTerminalSettings;
 	statusLine: StatusLineSettings;
 	thinkingBudgets: ThinkingBudgetsSettings;
 	stt: SttSettings;

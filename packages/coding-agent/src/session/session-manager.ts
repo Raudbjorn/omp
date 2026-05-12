@@ -411,11 +411,21 @@ function getDefaultSessionDirName(cwd: string): { encodedDirName: string; resolv
 	const canonicalCwd = resolveEquivalentPath(resolvedCwd);
 	const home = resolveEquivalentPath(os.homedir());
 	const tempRoot = resolveEquivalentPath(os.tmpdir());
-	const encodedDirName = pathIsWithin(home, canonicalCwd)
-		? encodeRelativeSessionDirName("-", home, canonicalCwd)
-		: pathIsWithin(tempRoot, canonicalCwd)
-			? encodeRelativeSessionDirName("-tmp", tempRoot, canonicalCwd)
-			: encodeLegacyAbsoluteSessionDirName(canonicalCwd);
+	const homeMatches = pathIsWithin(home, canonicalCwd);
+	const tempMatches = pathIsWithin(tempRoot, canonicalCwd);
+	// When tmpdir is nested in home (XDG setups: $TMPDIR=$HOME/.cache/tmp),
+	// a temp path matches both roots. Prefer the more-specific (longer) root
+	// so temp paths still get the "-tmp-" prefix instead of being treated
+	// as a home project.
+	const preferTempOverHome = homeMatches && tempMatches && tempRoot.length >= home.length;
+	let encodedDirName: string;
+	if (preferTempOverHome || (tempMatches && !homeMatches)) {
+		encodedDirName = encodeRelativeSessionDirName("-tmp", tempRoot, canonicalCwd);
+	} else if (homeMatches) {
+		encodedDirName = encodeRelativeSessionDirName("-", home, canonicalCwd);
+	} else {
+		encodedDirName = encodeLegacyAbsoluteSessionDirName(canonicalCwd);
+	}
 	return { encodedDirName, resolvedCwd };
 }
 
@@ -427,10 +437,19 @@ function migrateHomeSessionDirs(sessionsRoot: string): void {
 	if (migratedSessionRoots.has(sessionsRoot)) return;
 	migratedSessionRoots.add(sessionsRoot);
 
-	const home = os.homedir();
+	const home = resolveEquivalentPath(os.homedir());
+	const tempRoot = resolveEquivalentPath(os.tmpdir());
 	const homeEncoded = home.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
 	const oldPrefix = `--${homeEncoded}-`;
 	const oldExact = `--${homeEncoded}--`;
+	// When tmpdir is nested under home (XDG setups), the legacy absolute-encoded
+	// name for a temp cwd looked like `--home-user-<tempRoot-tail>-<...>--`.
+	// Migrate those to the `-tmp-<...>` form instead of the home-relative `-<...>`
+	// form so temp sessions aren't misfiled as home projects.
+	const tempSubPrefix =
+		pathIsWithin(home, tempRoot) && tempRoot !== home
+			? `${path.relative(home, tempRoot).replace(/[/\\:]/g, "-")}-`
+			: null;
 
 	let entries: string[];
 	try {
@@ -449,7 +468,13 @@ function migrateHomeSessionDirs(sessionsRoot: string): void {
 			continue;
 		}
 
-		const newName = remainder ? `-${remainder}` : "-";
+		let newName: string;
+		if (tempSubPrefix && remainder.startsWith(tempSubPrefix)) {
+			const tempRemainder = remainder.slice(tempSubPrefix.length);
+			newName = tempRemainder ? `-tmp-${tempRemainder}` : "-tmp";
+		} else {
+			newName = remainder ? `-${remainder}` : "-";
+		}
 		const oldPath = path.join(sessionsRoot, entry);
 		const newPath = path.join(sessionsRoot, newName);
 

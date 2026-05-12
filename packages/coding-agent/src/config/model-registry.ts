@@ -165,6 +165,7 @@ const OpenAICompatSchema = Type.Object({
 			Type.Literal("zai"),
 			Type.Literal("qwen"),
 			Type.Literal("qwen-chat-template"),
+			Type.Literal("litellm"),
 		]),
 	),
 	openRouterRouting: Type.Optional(OpenRouterRoutingSchema),
@@ -689,6 +690,22 @@ function mergeAuthHeader(
 	}
 	const resolvedKey = resolveApiKeyConfig(apiKeyConfig);
 	return resolvedKey ? { ...nextHeaders, Authorization: `Bearer ${resolvedKey}` } : nextHeaders;
+}
+
+/**
+ * Decide whether a custom-yaml model should force OAuth-style request shaping.
+ * - Explicit `auth: oauth` → force on.
+ * - Explicit `auth: apiKey` / `auth: none` → leave unset (auto-detect by key prefix).
+ * - No `auth` specified and `api: anthropic-messages` → default on. Custom Anthropic
+ *   endpoints are typically Claude-Code-style proxies (e.g. CLIProxyAPI) that expect
+ *   the cloaked request shape regardless of how the proxy itself is authenticated.
+ * - Otherwise → unset.
+ */
+function resolveCustomModelIsOAuth(api: Api, providerAuth: ProviderAuthMode | undefined): boolean | undefined {
+	if (providerAuth === "oauth") return true;
+	if (providerAuth !== undefined) return undefined;
+	if (api === "anthropic-messages") return true;
+	return undefined;
 }
 
 /**

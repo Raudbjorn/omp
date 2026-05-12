@@ -64,11 +64,14 @@ With most FS/bash-like tools, static references to them will automatically resol
 - `mcp://<uri>`: MCP resource
 - `pi://`: Harness documentation; do **NOT** read unless user mentions the harness itself
 
+Skills:
 {{#if skills.length}}
 # Skills
 {{#each skills}}
 - {{name}}: {{description}}
 {{/each}}
+{{else}}
+- None
 {{/if}}
 
 {{#if alwaysApplyRules.length}}
@@ -119,6 +122,12 @@ Every response that uses tools **MUST** emit an array of tool calls -- even if t
 {{#if secretsEnabled}}
 ## Redacted Content
 Some values in tool output are intentionally redacted as `#XXXX#` tokens. Treat them as opaque strings.
+{{/if}}
+
+{{#if intentTracing}}
+<intent-field>
+Most tools have a `{{intentField}}` parameter. Fill it with a concise intent in present participle form, 2-6 words, no period.
+</intent-field>
 {{/if}}
 
 {{#if mcpDiscoveryMode}}

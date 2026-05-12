@@ -66,6 +66,39 @@ pub trait ExternalCommandOutputMarker: Send + Sync {
 	) -> Option<ExternalCommandOutputMarkers>;
 }
 
+/// Information about an expanded external command launch.
+pub struct ExternalCommandInfo<'a> {
+	/// Shell command name before path resolution.
+	pub command_name:    &'a str,
+	/// Resolved executable path used for the process launch.
+	pub executable_path: &'a str,
+	/// Expanded process arguments, excluding `argv[0]`.
+	pub args:            Vec<&'a str>,
+}
+
+/// Marker strings written around a launched command's output.
+#[derive(Clone)]
+pub struct ExternalCommandOutputMarkers {
+	/// Marker written immediately before the process is spawned.
+	pub start_marker:      String,
+	/// Prefix for the completion marker; the numeric exit code is inserted
+	/// between this prefix and [`Self::end_marker_suffix`].
+	pub end_marker_prefix: String,
+	/// Suffix for the completion marker.
+	pub end_marker_suffix: String,
+}
+
+/// Optional hook used by embedders that need to identify output boundaries
+/// for individual external command launches.
+pub trait ExternalCommandOutputMarker: Send + Sync {
+	/// Returns markers for this external command, or `None` to leave its
+	/// output unmarked.
+	fn markers_for_external_command(
+		&self,
+		info: ExternalCommandInfo<'_>,
+	) -> Option<ExternalCommandOutputMarkers>;
+}
+
 /// Parameters for execution.
 #[derive(Clone, Default)]
 pub struct ExecutionParameters {
@@ -86,6 +119,25 @@ pub struct ExecutionParameters {
 }
 
 impl ExecutionParameters {
+	/// Assigns an external-command output marker hook for this execution.
+	pub fn set_command_output_marker(&mut self, marker: Arc<dyn ExternalCommandOutputMarker>) {
+		self.command_output_marker = Some(marker);
+		self.command_output_disabled = false;
+	}
+
+	/// Disables external-command output marking for this execution branch.
+	pub fn disable_command_output_marking(&mut self) {
+		self.command_output_disabled = true;
+	}
+
+	/// Returns the active output marker hook, if marking is still safe.
+	pub fn command_output_marker(&self) -> Option<&Arc<dyn ExternalCommandOutputMarker>> {
+		if self.command_output_disabled {
+			return None;
+		}
+		self.command_output_marker.as_ref()
+	}
+
 	/// Assigns a cancellation token for this execution.
 	pub fn set_cancel_token(&mut self, token: CancellationToken) {
 		self.cancel_token = Some(token);
@@ -1373,6 +1425,9 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::SimpleComma
 		mut params: ExecutionParameters,
 	) -> Result<ExecutionSpawnResult, error::Error> {
 		ensure_not_cancelled(&params)?;
+		if context.pipeline_len > 1 {
+			params.disable_command_output_marking();
+		}
 		let prefix_iter = self.prefix.as_ref().map(|s| s.0.iter()).unwrap_or_default();
 		let suffix_iter = self.suffix.as_ref().map(|s| s.0.iter()).unwrap_or_default();
 		let cmd_name_items = self

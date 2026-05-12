@@ -975,7 +975,7 @@
 		},
 		"global.anthropic.claude-opus-4-5-20251101-v1:0": {
 			"id": "global.anthropic.claude-opus-4-5-20251101-v1:0",
-			"name": "Claude Opus 4.5 (Global)",
+			"name": "Claude Opus 4.5",
 			"api": "bedrock-converse-stream",
 			"provider": "amazon-bedrock",
 			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -1100,7 +1100,7 @@
 		},
 		"global.anthropic.claude-sonnet-4-6": {
 			"id": "global.anthropic.claude-sonnet-4-6",
-			"name": "Claude Sonnet 4.6",
+			"name": "Claude Sonnet 4.6 (Global)",
 			"api": "bedrock-converse-stream",
 			"provider": "amazon-bedrock",
 			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -1978,7 +1978,7 @@
 		},
 		"us.anthropic.claude-opus-4-1-20250805-v1:0": {
 			"id": "us.anthropic.claude-opus-4-1-20250805-v1:0",
-			"name": "Claude Opus 4.1",
+			"name": "Claude Opus 4.1 (US)",
 			"api": "bedrock-converse-stream",
 			"provider": "amazon-bedrock",
 			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -7601,6 +7601,46 @@
 				"minLevel": "low",
 				"maxLevel": "high"
 			}
+		}
+	},
+	"gemini-cli-acp": {
+		"gemini-2.5-pro": {
+			"id": "gemini-2.5-pro",
+			"name": "Gemini 2.5 Pro (ACP)",
+			"api": "acp-agent",
+			"provider": "gemini-cli-acp",
+			"baseUrl": "",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65536
+		},
+		"gemini-2.5-flash": {
+			"id": "gemini-2.5-flash",
+			"name": "Gemini 2.5 Flash (ACP)",
+			"api": "acp-agent",
+			"provider": "gemini-cli-acp",
+			"baseUrl": "",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		}
 	},
 	"google-vertex": {
@@ -13798,6 +13838,94 @@
 				"maxLevel": "xhigh"
 			}
 		},
+		"openai/gpt-5.5": {
+			"id": "openai/gpt-5.5",
+			"name": "GPT-5.5",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1050000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "low",
+				"maxLevel": "xhigh"
+			}
+		},
+		"openai/gpt-5.5-pro": {
+			"id": "openai/gpt-5.5-pro",
+			"name": "GPT-5.5 Pro",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1050000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "low",
+				"maxLevel": "xhigh"
+			}
+		},
+		"openai/gpt-5.5": {
+			"id": "openai/gpt-5.5",
+			"name": "OpenAI: GPT-5.5 (new)",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888
+		},
+		"openai/gpt-5.5-pro": {
+			"id": "openai/gpt-5.5-pro",
+			"name": "OpenAI: GPT-5.5 Pro",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888
+		},
 		"openai/gpt-audio": {
 			"id": "openai/gpt-audio",
 			"name": "OpenAI: GPT Audio",
@@ -18295,6 +18423,182 @@
 			},
 			"contextWindow": 131072,
 			"maxTokens": 40000
+		}
+	},
+	"mimo-code": {
+		"mimo-v2-omni": {
+			"id": "mimo-v2-omni",
+			"name": "MiMo V2 Omni",
+			"api": "openai-completions",
+			"provider": "mimo-code",
+			"baseUrl": "https://token-plan-ams.xiaomimimo.com/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"mimo-v2-pro": {
+			"id": "mimo-v2-pro",
+			"name": "MiMo V2 Pro",
+			"api": "openai-completions",
+			"provider": "mimo-code",
+			"baseUrl": "https://token-plan-ams.xiaomimimo.com/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"mimo-v2-tts": {
+			"id": "mimo-v2-tts",
+			"name": "mimo-v2-tts",
+			"api": "openai-completions",
+			"provider": "mimo-code",
+			"baseUrl": "https://token-plan-ams.xiaomimimo.com/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072
+		},
+		"mimo-v2.5": {
+			"id": "mimo-v2.5",
+			"name": "MiMo-V2.5",
+			"api": "openai-completions",
+			"provider": "mimo-code",
+			"baseUrl": "https://token-plan-ams.xiaomimimo.com/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"mimo-v2.5-pro": {
+			"id": "mimo-v2.5-pro",
+			"name": "MiMo-V2.5-Pro",
+			"api": "openai-completions",
+			"provider": "mimo-code",
+			"baseUrl": "https://token-plan-ams.xiaomimimo.com/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"mimo-v2.5-tts": {
+			"id": "mimo-v2.5-tts",
+			"name": "mimo-v2.5-tts",
+			"api": "openai-completions",
+			"provider": "mimo-code",
+			"baseUrl": "https://token-plan-ams.xiaomimimo.com/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072
+		},
+		"mimo-v2.5-tts-voiceclone": {
+			"id": "mimo-v2.5-tts-voiceclone",
+			"name": "mimo-v2.5-tts-voiceclone",
+			"api": "openai-completions",
+			"provider": "mimo-code",
+			"baseUrl": "https://token-plan-ams.xiaomimimo.com/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072
+		},
+		"mimo-v2.5-tts-voicedesign": {
+			"id": "mimo-v2.5-tts-voicedesign",
+			"name": "mimo-v2.5-tts-voicedesign",
+			"api": "openai-completions",
+			"provider": "mimo-code",
+			"baseUrl": "https://token-plan-ams.xiaomimimo.com/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072
 		}
 	},
 	"minimax": {
@@ -23984,7 +24288,7 @@
 			],
 			"cost": {
 				"input": 0.13,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -26360,7 +26664,7 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 2,
 				"cacheRead": 0,
 				"cacheWrite": 0
@@ -26380,7 +26684,7 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 2,
 				"cacheRead": 0,
 				"cacheWrite": 0
@@ -27196,7 +27500,7 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 1.5999999999999999,
 				"cacheRead": 0.09999999999999999,
 				"cacheWrite": 0
@@ -27217,7 +27521,7 @@
 			],
 			"cost": {
 				"input": 0.09999999999999999,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0.024999999999999998,
 				"cacheWrite": 0
 			},
@@ -27449,7 +27753,7 @@
 			],
 			"cost": {
 				"input": 0.049999999999999996,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0.005,
 				"cacheWrite": 0
 			},
@@ -36190,9 +36494,9 @@
 		"qwen3.5-plus": {
 			"id": "qwen3.5-plus",
 			"name": "Qwen3.5 Plus",
-			"api": "openai-completions",
+			"api": "anthropic-messages",
 			"provider": "opencode-go",
-			"baseUrl": "https://opencode.ai/zen/go/v1",
+			"baseUrl": "https://opencode.ai/zen/go",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -36207,17 +36511,17 @@
 			"contextWindow": 262144,
 			"maxTokens": 65536,
 			"thinking": {
-				"mode": "effort",
+				"mode": "budget",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"qwen3.6-plus": {
 			"id": "qwen3.6-plus",
 			"name": "Qwen3.6 Plus",
-			"api": "openai-completions",
+			"api": "anthropic-messages",
 			"provider": "opencode-go",
-			"baseUrl": "https://opencode.ai/zen/go/v1",
+			"baseUrl": "https://opencode.ai/zen/go",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -36232,9 +36536,9 @@
 			"contextWindow": 262144,
 			"maxTokens": 65536,
 			"thinking": {
-				"mode": "effort",
+				"mode": "budget",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		}
 	},
@@ -38557,7 +38861,7 @@
 			],
 			"cost": {
 				"input": 0.09999999999999999,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -38898,11 +39202,11 @@
 			],
 			"cost": {
 				"input": 0.09999999999999999,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0.024999999999999998,
 				"cacheWrite": 0.08333333333333334
 			},
-			"contextWindow": 1048576,
+			"contextWindow": 1000000,
 			"maxTokens": 8192
 		},
 		"google/gemini-2.0-flash-lite-001": {
@@ -38963,7 +39267,7 @@
 			],
 			"cost": {
 				"input": 0.09999999999999999,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0.01,
 				"cacheWrite": 0.08333333333333334
 			},
@@ -38983,7 +39287,7 @@
 			],
 			"cost": {
 				"input": 0.09999999999999999,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0.01,
 				"cacheWrite": 0.08333333333333334
 			},
@@ -39623,8 +39927,8 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
-				"output": 0.39999999999999997,
+				"input": 0.4,
+				"output": 0.4,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -39739,7 +40043,7 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 2.2,
 				"cacheRead": 0,
 				"cacheWrite": 0
@@ -39905,7 +40209,7 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 2,
 				"cacheRead": 0.04,
 				"cacheWrite": 0
@@ -39924,7 +40228,7 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 2,
 				"cacheRead": 0.04,
 				"cacheWrite": 0
@@ -40100,7 +40404,7 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 2,
 				"cacheRead": 0.04,
 				"cacheWrite": 0
@@ -40145,7 +40449,7 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 2,
 				"cacheRead": 0.04,
 				"cacheWrite": 0
@@ -40421,7 +40725,7 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 2,
 				"cacheRead": 0.15,
 				"cacheWrite": 0
@@ -40620,7 +40924,7 @@
 			],
 			"cost": {
 				"input": 0.09999999999999999,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -41011,7 +41315,7 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 1.5999999999999999,
 				"cacheRead": 0.09999999999999999,
 				"cacheWrite": 0
@@ -41032,7 +41336,7 @@
 			],
 			"cost": {
 				"input": 0.09999999999999999,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0.024999999999999998,
 				"cacheWrite": 0
 			},
@@ -41336,7 +41640,7 @@
 			],
 			"cost": {
 				"input": 0.049999999999999996,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0.01,
 				"cacheWrite": 0
 			},
@@ -42740,7 +43044,7 @@
 			],
 			"cost": {
 				"input": 0.08,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0.08,
 				"cacheWrite": 0
 			},
@@ -42836,7 +43140,7 @@
 			],
 			"cost": {
 				"input": 0.049999999999999996,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0.049999999999999996,
 				"cacheWrite": 0
 			},
@@ -43842,8 +44146,8 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
-				"output": 0.39999999999999997,
+				"input": 0.4,
+				"output": 0.4,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -44242,7 +44546,7 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 2,
 				"cacheRead": 0.08,
 				"cacheWrite": 0
@@ -45289,6 +45593,1486 @@
 			"maxTokens": 8192
 		}
 	},
+	"upb": {
+		"bersetzungen": {
+			"id": "bersetzungen",
+			"name": "OpenAI: Übersetzen mit UPB-Glossar (De -> En)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"fundametal-integrated-circuit-design-companion": {
+			"id": "fundametal-integrated-circuit-design-companion",
+			"name": "Fundametal Integrated Circuit Design Companion",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg-basismodel": {
+			"id": "gwdg-basismodel",
+			"name": "GWDG: Basismodel",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg-bersetzen-mit-upb-glossar-de---en": {
+			"id": "gwdg-bersetzen-mit-upb-glossar-de---en",
+			"name": "GWDG: Übersetzen mit UPB-Glossar (De -> En)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg-didacticus--lehrplaner": {
+			"id": "gwdg-didacticus--lehrplaner",
+			"name": "GWDG: TeachTailor | Lehrplaner",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg-lernquiz": {
+			"id": "gwdg-lernquiz",
+			"name": "GWDG: Lernquiz",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg-qwen-3-32b-non-reasoning": {
+			"id": "gwdg-qwen-3-32b-non-reasoning",
+			"name": "GWDG: Qwen 3 32B (Non-Reasoning)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-gateway.uni-paderborn.de/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 128000,
+			"maxTokens": 16384,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg-tandem-sprachenlernen": {
+			"id": "gwdg-tandem-sprachenlernen",
+			"name": "GWDG: Sprachtandem",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.apertus-70b-instruct-2509": {
+			"id": "gwdg.apertus-70b-instruct-2509",
+			"name": "GWDG: Apertus",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.deepseek-r1-distill-llama-70b": {
+			"id": "gwdg.deepseek-r1-distill-llama-70b",
+			"name": "GWDG: DeepSeek R1 Distill Llama 70B",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			},
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.devstral-2-123b-instruct-2512": {
+			"id": "gwdg.devstral-2-123b-instruct-2512",
+			"name": "GWDG: Devstral 2",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.gemma-3-27b-it": {
+			"id": "gwdg.gemma-3-27b-it",
+			"name": "GWDG: Gemma 3",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.glm-4.7": {
+			"id": "gwdg.glm-4.7",
+			"name": "GWDG: GLM 4.7",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.internvl3.5-30b-a3b": {
+			"id": "gwdg.internvl3.5-30b-a3b",
+			"name": "GWDG: InternVL 3.5",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.llama-3.1-sauerkrautlm-70b-instruct": {
+			"id": "gwdg.llama-3.1-sauerkrautlm-70b-instruct",
+			"name": "GWDG: Llama 3.1 SauerkrautLM 70B Instruct",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.llama-3.3-70b-instruct": {
+			"id": "gwdg.llama-3.3-70b-instruct",
+			"name": "GWDG: Llama 3.3 70B Instruct",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.medgemma-27b-it": {
+			"id": "gwdg.medgemma-27b-it",
+			"name": "GWDG: MedGemma",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.meta-llama-3.1-8b-instruct": {
+			"id": "gwdg.meta-llama-3.1-8b-instruct",
+			"name": "GWDG: Llama 3.1 8B Instruct",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.mistral-large-3-675b-instruct-2512": {
+			"id": "gwdg.mistral-large-3-675b-instruct-2512",
+			"name": "GWDG: Mistral 3",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.openai-gpt-oss-120b": {
+			"id": "gwdg.openai-gpt-oss-120b",
+			"name": "GWDG: OpenAI GPT OSS 120B",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.qwen3-235b-a22b": {
+			"id": "gwdg.qwen3-235b-a22b",
+			"name": "GWDG: Qwen 3 Thinking (235B A22B)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			},
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.qwen3-30b-a3b-instruct-2507": {
+			"id": "gwdg.qwen3-30b-a3b-instruct-2507",
+			"name": "GWDG: Qwen 3 Instruct (30B A3B)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.qwen3-30b-a3b-thinking-2507": {
+			"id": "gwdg.qwen3-30b-a3b-thinking-2507",
+			"name": "GWDG: Qwen 3 Thinking (30B A3B)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			},
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.qwen3-32b": {
+			"id": "gwdg.qwen3-32b",
+			"name": "GWDG: Qwen 3 32B",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			},
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.qwen3-coder-30b-a3b-instruct": {
+			"id": "gwdg.qwen3-coder-30b-a3b-instruct",
+			"name": "GWDG: Qwen 3 Coder (30B A3B Instruct)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.qwen3-omni-30b-a3b-instruct": {
+			"id": "gwdg.qwen3-omni-30b-a3b-instruct",
+			"name": "GWDG: Qwen 3 Omni (30B A3B Instruct)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.qwen3-vl-30b-a3b-instruct": {
+			"id": "gwdg.qwen3-vl-30b-a3b-instruct",
+			"name": "GWDG: Qwen 3 VL (30B A3B Instruct)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.qwen3.5-122b-a10b": {
+			"id": "gwdg.qwen3.5-122b-a10b",
+			"name": "GWDG: Qwen 3.5 (Hohe Qualität)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.qwen3.5-27b": {
+			"id": "gwdg.qwen3.5-27b",
+			"name": "GWDG: Qwen 3.5 (Ausgewogen)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.qwen3.5-35b-a3b": {
+			"id": "gwdg.qwen3.5-35b-a3b",
+			"name": "GWDG: Qwen 3.5 (Schnell)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.qwen3.5-397b-a17b": {
+			"id": "gwdg.qwen3.5-397b-a17b",
+			"name": "GWDG: Qwen 3.5 (Beste Qualität)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"gwdg.teuken-7b-instruct-research": {
+			"id": "gwdg.teuken-7b-instruct-research",
+			"name": "GWDG: Teuken 7B Instruct Research",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai": {
+			"id": "openai",
+			"name": "OpenAI: Basismodel",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-4.1": {
+			"id": "openai.gpt-4.1",
+			"name": "OpenAI: GPT-4.1",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-4.1-mini": {
+			"id": "openai.gpt-4.1-mini",
+			"name": "OpenAI: GPT-4.1-Mini",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-4o": {
+			"id": "openai.gpt-4o",
+			"name": "OpenAI: GPT-4o",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-4o-mini": {
+			"id": "openai.gpt-4o-mini",
+			"name": "OpenAI: GPT-4o-Mini",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5": {
+			"id": "openai.gpt-5",
+			"name": "OpenAI: GPT-5-Thinking",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			},
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5-chat-latest": {
+			"id": "openai.gpt-5-chat-latest",
+			"name": "OpenAI: GPT-5",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5-mini": {
+			"id": "openai.gpt-5-mini",
+			"name": "OpenAI: GPT-5-Mini",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5-nano": {
+			"id": "openai.gpt-5-nano",
+			"name": "OpenAI: GPT-5-Nano",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5.1": {
+			"id": "openai.gpt-5.1",
+			"name": "OpenAI: GPT-5.1-Thinking",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			},
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5.1-chat-latest": {
+			"id": "openai.gpt-5.1-chat-latest",
+			"name": "OpenAI: GPT-5.1",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5.1-codex": {
+			"id": "openai.gpt-5.1-codex",
+			"name": "OpenAI: GPT-5.1-Codex",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 272000,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5.2": {
+			"id": "openai.gpt-5.2",
+			"name": "OpenAI: GPT-5.2-Thinking",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "low",
+				"maxLevel": "xhigh"
+			},
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5.2-chat-latest": {
+			"id": "openai.gpt-5.2-chat-latest",
+			"name": "OpenAI: GPT-5.2",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5.2-codex": {
+			"id": "openai.gpt-5.2-codex",
+			"name": "OpenAI: GPT-5.2-Codex",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 272000,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5.3-chat-latest": {
+			"id": "openai.gpt-5.3-chat-latest",
+			"name": "OpenAI: GPT-5.3",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5.3-codex": {
+			"id": "openai.gpt-5.3-codex",
+			"name": "OpenAI: GPT-5.3-Codex",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 272000,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5.4": {
+			"id": "openai.gpt-5.4",
+			"name": "OpenAI: GPT-5.4-Thinking",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "low",
+				"maxLevel": "xhigh"
+			},
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5.4-mini": {
+			"id": "openai.gpt-5.4-mini",
+			"name": "OpenAI: GPT-5.4-Mini",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5.4-nano": {
+			"id": "openai.gpt-5.4-nano",
+			"name": "OpenAI: GPT-5.4-Nano",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.gpt-5.5": {
+			"id": "openai.gpt-5.5",
+			"name": "OpenAI: GPT-5.5",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1050000,
+			"maxTokens": 128000,
+			"compat": {
+				"thinkingFormat": "litellm"
+			},
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "low",
+				"maxLevel": "xhigh"
+			}
+		},
+		"openai.o3-mini": {
+			"id": "openai.o3-mini",
+			"name": "OpenAI: o3-mini",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			},
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"openai.o4-mini": {
+			"id": "openai.o4-mini",
+			"name": "OpenAI: o4-mini",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			},
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"pc2.Qwen/Qwen3-32B": {
+			"id": "pc2.Qwen/Qwen3-32B",
+			"name": "UPB: Qwen 3 32B",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			},
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"prompting-hilfe": {
+			"id": "prompting-hilfe",
+			"name": "Prompting-Hilfe",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"thesispilot": {
+			"id": "thesispilot",
+			"name": "GWDG: ThesisPilot",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"upb": {
+			"id": "upb",
+			"name": "UPB: Basismodel",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"upb-diagramme-und-visualisierungen": {
+			"id": "upb-diagramme-und-visualisierungen",
+			"name": "UPB: Interaktive Visualisierungen",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"upb-mathplotter": {
+			"id": "upb-mathplotter",
+			"name": "UPB: Diagramme",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"upb-qwen-3-32b-non-reasoning": {
+			"id": "upb-qwen-3-32b-non-reasoning",
+			"name": "UPB: Qwen 3 32B (Non-Reasoning)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		},
+		"upb.it-support": {
+			"id": "upb.it-support",
+			"name": "UPB: IT-Support (OpenBeta)",
+			"api": "openai-completions",
+			"provider": "upb",
+			"baseUrl": "https://ai-chat.uni-paderborn.de/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
+			"compat": {
+				"thinkingFormat": "litellm"
+			}
+		}
+	},
 	"venice": {
 		"aion-labs-aion-2-0": {
 			"id": "aion-labs-aion-2-0",
@@ -45761,6 +47545,50 @@
 			},
 			"contextWindow": 200000,
 			"maxTokens": 8888,
+			"compat": {
+				"supportsUsageInStreaming": false
+			}
+		},
+		"e2ee-glm-5-1": {
+			"id": "e2ee-glm-5-1",
+			"name": "e2ee-glm-5-1",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 8888,
+			"compat": {
+				"supportsUsageInStreaming": false
+			}
+		},
+		"e2ee-glm-5-1": {
+			"id": "e2ee-glm-5-1",
+			"name": "e2ee-glm-5-1",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 32768,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -46911,6 +48739,94 @@
 				"supportsUsageInStreaming": false
 			}
 		},
+		"openai-gpt-55": {
+			"id": "openai-gpt-55",
+			"name": "openai-gpt-55",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 8888,
+			"compat": {
+				"supportsUsageInStreaming": false
+			}
+		},
+		"openai-gpt-55-pro": {
+			"id": "openai-gpt-55-pro",
+			"name": "openai-gpt-55-pro",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 8888,
+			"compat": {
+				"supportsUsageInStreaming": false
+			}
+		},
+		"openai-gpt-55": {
+			"id": "openai-gpt-55",
+			"name": "openai-gpt-55",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 32768,
+			"compat": {
+				"supportsUsageInStreaming": false
+			}
+		},
+		"openai-gpt-55-pro": {
+			"id": "openai-gpt-55-pro",
+			"name": "openai-gpt-55-pro",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 32768,
+			"compat": {
+				"supportsUsageInStreaming": false
+			}
+		},
 		"openai-gpt-oss-120b": {
 			"id": "openai-gpt-oss-120b",
 			"name": "OpenAI GPT OSS 120B",
@@ -47115,6 +49031,50 @@
 			},
 			"contextWindow": 256000,
 			"maxTokens": 8888,
+			"compat": {
+				"supportsUsageInStreaming": false
+			}
+		},
+		"qwen3-6-27b": {
+			"id": "qwen3-6-27b",
+			"name": "qwen3-6-27b",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 8888,
+			"compat": {
+				"supportsUsageInStreaming": false
+			}
+		},
+		"qwen3-6-27b": {
+			"id": "qwen3-6-27b",
+			"name": "qwen3-6-27b",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 32768,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -47796,7 +49756,7 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 2.4,
 				"cacheRead": 0.04,
 				"cacheWrite": 0.5
@@ -48535,7 +50495,7 @@
 			],
 			"cost": {
 				"input": 0.09999999999999999,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0.01,
 				"cacheWrite": 0
 			},
@@ -48555,7 +50515,7 @@
 			],
 			"cost": {
 				"input": 0.09999999999999999,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0.01,
 				"cacheWrite": 0
 			},
@@ -49298,7 +51258,7 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 2,
 				"cacheRead": 0,
 				"cacheWrite": 0
@@ -49647,7 +51607,7 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.39999999999999997,
+				"input": 0.4,
 				"output": 1.5999999999999999,
 				"cacheRead": 0.09999999999999999,
 				"cacheWrite": 0
@@ -51302,7 +53262,7 @@
 			],
 			"cost": {
 				"input": 0.06,
-				"output": 0.39999999999999997,
+				"output": 0.4,
 				"cacheRead": 0.01,
 				"cacheWrite": 0
 			},
@@ -51410,6 +53370,159 @@
 				"minLevel": "minimal",
 				"maxLevel": "xhigh"
 			}
+		},
+		"zai/glm-5-turbo": {
+			"id": "zai/glm-5-turbo",
+			"name": "GLM 5 Turbo",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 1.2,
+				"output": 4,
+				"cacheRead": 0.24,
+				"cacheWrite": 0
+			},
+			"contextWindow": 202800,
+			"maxTokens": 131100,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"zai/glm-5.1": {
+			"id": "zai/glm-5.1",
+			"name": "GLM 5.1",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 1.4,
+				"output": 4.4,
+				"cacheRead": 0.26,
+				"cacheWrite": 0
+			},
+			"contextWindow": 202800,
+			"maxTokens": 64000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"zai/glm-5v-turbo": {
+			"id": "zai/glm-5v-turbo",
+			"name": "GLM 5V Turbo",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1.2,
+				"output": 4,
+				"cacheRead": 0.24,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		}
+	},
+	"warp": {
+		"claude-4.5-sonnet": {
+			"id": "claude-4.5-sonnet",
+			"name": "Claude Sonnet 4.5 (Warp)",
+			"api": "warp-agent",
+			"provider": "warp",
+			"baseUrl": "https://app.warp.dev/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 64000
+		},
+		"auto": {
+			"id": "auto",
+			"name": "Warp Auto",
+			"api": "warp-agent",
+			"provider": "warp",
+			"baseUrl": "https://app.warp.dev/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 64000
+		}
+	},
+	"warp": {
+		"claude-4.5-sonnet": {
+			"id": "claude-4.5-sonnet",
+			"name": "Claude Sonnet 4.5 (Warp)",
+			"api": "warp-agent",
+			"provider": "warp",
+			"baseUrl": "https://app.warp.dev/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 64000
+		},
+		"auto": {
+			"id": "auto",
+			"name": "Warp Auto",
+			"api": "warp-agent",
+			"provider": "warp",
+			"baseUrl": "https://app.warp.dev/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 64000
 		}
 	},
 	"xai": {
@@ -56023,5 +58136,6 @@
 				"maxLevel": "xhigh"
 			}
 		}
+
 	}
 }

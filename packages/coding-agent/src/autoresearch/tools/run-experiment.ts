@@ -11,6 +11,7 @@ import { replaceTabs, shortenPath } from "../../tools/render-utils";
 import * as git from "../../utils/git";
 import { parseWorkDirDirtyPaths } from "../git";
 import {
+	collectLoggedRunNumbers,
 	EXPERIMENT_MAX_BYTES,
 	EXPERIMENT_MAX_LINES,
 	formatElapsed,

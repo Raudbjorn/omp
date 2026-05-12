@@ -1,66 +1,21 @@
 <p align="center">
-  <img src="https://github.com/can1357/oh-my-pi/blob/main/assets/hero.png?raw=true" alt="Pi Monorepo">
+  <strong>omp</strong> — a Raudbjorn fork of <a href="https://github.com/can1357/oh-my-pi">can1357/oh-my-pi</a>
 </p>
 
 <p align="center">
-  <strong>AI coding agent for the terminal</strong>
-</p>
-
-<p align="center">
-  <a href="https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent"><img src="https://img.shields.io/npm/v/@oh-my-pi/pi-coding-agent?style=flat&colorA=222222&colorB=CB3837" alt="npm version"></a>
-  <a href="https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-keep-E05735?style=flat&colorA=222222" alt="Changelog"></a>
-  <a href="https://github.com/can1357/oh-my-pi/actions"><img src="https://img.shields.io/github/actions/workflow/status/can1357/oh-my-pi/ci.yml?style=flat&colorA=222222&colorB=3FB950" alt="CI"></a>
-  <a href="https://github.com/can1357/oh-my-pi/blob/main/LICENSE"><img src="https://img.shields.io/github/license/can1357/oh-my-pi?style=flat&colorA=222222&colorB=58A6FF" alt="License"></a>
-  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat&colorA=222222&logo=typescript&logoColor=white" alt="TypeScript"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-DEA584?style=flat&colorA=222222&logo=rust&logoColor=white" alt="Rust"></a>
+  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat&colorA=222222&logo=typescript&logoColor=white" alt="TypeScript"></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-Bun-f472b6?style=flat&colorA=222222" alt="Bun"></a>
-  <a href="https://discord.gg/4NMW9cdXZa"><img src="https://img.shields.io/badge/Discord-5865F2?style=flat&colorA=222222&logo=discord&logoColor=white" alt="Discord"></a>
 </p>
 
-<p align="center">
-  Fork of <a href="https://github.com/badlogic/pi-mono">badlogic/pi-mono</a> by <a href="https://github.com/mariozechner">@mariozechner</a>
-</p>
+This repository is a downstream of `can1357/oh-my-pi` — the entire upstream
+feature set (commit tool, LSP, Python kernel, TTSR, task subagents, MCP,
+browser tool, hashline edits, native Rust engine, 40+ providers, …) is
+unchanged and still authoritative. This README is a changelog against the
+family tree, not a reimplementation of the upstream docs.
 
-## Table of Contents
-
-- [Highlights](#highlights)
-- [Installation](#installation)
-- [Getting Started](#getting-started)
-  - [Terminal Setup](#terminal-setup)
-  - [API Keys & OAuth](#api-keys--oauth)
-  - [First 15 Minutes (Recommended)](#first-15-minutes-recommended)
-- [Usage](#usage)
-  - [Slash Commands](#slash-commands)
-  - [Editor Features](#editor-features)
-  - [Keyboard Shortcuts](#keyboard-shortcuts)
-  - [Bash Mode](#bash-mode)
-  - [Image Support](#image-support)
-- [Sessions](#sessions)
-  - [Session Management](#session-management)
-  - [Context Compaction](#context-compaction)
-  - [Branching](#branching)
-  - [Autonomous Memory](#autonomous-memory)
-- [Configuration](#configuration)
-  - [Project Context Files](#project-context-files)
-  - [Custom System Prompt](#custom-system-prompt)
-  - [Custom Models and Providers](#custom-models-and-providers)
-  - [Settings File](#settings-file)
-- [Extensions](#extensions)
-  - [Themes](#themes)
-  - [Custom Slash Commands](#custom-slash-commands)
-  - [Skills](#skills)
-  - [Hooks](#hooks)
-  - [Custom Tools](#custom-tools)
-- [CLI Reference](#cli-reference)
-- [Tools](#tools)
-- [Programmatic Usage](#programmatic-usage)
-  - [SDK](#sdk)
-  - [RPC Mode](#rpc-mode)
-  - [HTML Export](#html-export)
-- [Philosophy](#philosophy)
-- [Development](#development)
-- [Monorepo Packages](#monorepo-packages)
-- [License](#license)
+For full feature documentation, CLI reference, configuration schemas, and
+philosophy, read [the upstream README](https://github.com/can1357/oh-my-pi/blob/main/README.md).
 
 ---
 
@@ -724,26 +679,110 @@ Output streams in real-time. Press Escape to cancel.
 **Attach images by reference:**
 
 ```text
-What's in @/path/to/image.png?
+badlogic/pi-mono          (Mario Zechner — original)
+        │
+        ▼
+can1357/oh-my-pi          (canonical upstream; CLI: pi)
+        ├───► elikoga/oh-my-pi    (narrow bugfix fork, see below)
+        └───► Raudbjorn/omp       (this repo; CLI renamed: omp)
 ```
 
-Or paste/drop images directly (`Ctrl+V` or drag-and-drop).
+## How `Raudbjorn/omp` differs from `can1357/oh-my-pi`
 
-Supported formats: `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`
+### Branding and CLI surface
 
-Toggle inline images via `/settings` or set `terminal.showImages: false`.
+- CLI binary renamed from `pi` to `omp` (`packages/coding-agent/package.json#bin`).
+- `bearminal` bear artwork replaces the pi icon on the welcome screen
+  (`feat(welcome): replace pi icon with bearminal bear branding`).
+- Welcome styling kept sticky across Codex selection transitions.
 
----
+### Additional providers
 
-## Sessions
+- **Devin** and **Warp** agent providers (`feat(ai): add Devin and Warp agent providers`).
+- **UPB AI Gateway** (also present in elikoga — see contrast section).
 
-Sessions are stored as JSONL with a tree structure for branching and replay.
+### Additional slash commands and workflows
 
-See [docs/session.md](docs/session.md) for the file format and API.
+- `/screenshot` — desktop capture with backend auto-detection: macOS
+  `screencapture`, Wayland `grim` (`slurp` for region select) and X11
+  `scrot` (`feat(coding-agent): add /screenshot desktop capture command`).
+- `/plans` — list, load, show, and delete saved plan files. The plans
+  directory resolves through XDG: `$XDG_DATA_HOME/omp/plans` when
+  `XDG_DATA_HOME` is set, else `~/.omp/plans`. `load` reads the plan
+  markdown into the editor; `show` prints it to the status area;
+  `delete` is idempotent on `ENOENT`.
+- Bundled session-title slash commands.
 
-### Session Management
+### Runtime and developer ergonomics
 
-Sessions auto-save to `~/.omp/agent/sessions/` (grouped by working directory).
+- Live-reload for native commands and skills — no restart to pick up new
+  or edited skills/commands while the TUI is running.
+- Runtime skill refresh restored.
+- `/usage` account ordering stabilized; assistant usage metadata
+  preserved in serialized sessions.
+- `generate_image` size options corrected.
+- TypeScript stubs for the Shyndman port; imports sorted.
+
+### Packaging, CI, and upstream tracking
+
+- **Homebrew tap pipeline** — `.github/workflows/release-brew.yml` plus
+  `packaging/homebrew/omp.rb.tmpl` render a formula on tagged releases.
+  Guarded `if: false` until the tap repo (`Raudbjorn/homebrew-omp`) and
+  `HOMEBREW_TAP_TOKEN` secret are provisioned.
+- **Weekly upstream sync** — `.github/workflows/sync-upstream.yml` opens
+  a PR with new commits from `can1357/oh-my-pi@main`, labelling
+  conflicts for manual review (cron: Mondays 06:00 UTC; also
+  `workflow_dispatch`).
+- **TUI theme registry** in `packages/tui/src/theme/` — minimal
+  semantic-color registry (`accent`/`success`/`warning`/`error`/`info`/
+  `muted`/`border`) plus an `omp-default` preset, so primitives in
+  `@oh-my-pi/pi-tui` can be themed standalone.
+- Status-line truncation extracted into a reusable helper with UTF-16-code-unit
+  semantics explicitly documented.
+
+### Active branches (state may shift after merges)
+
+- `acp-integration` — turns `omp` into an **ACP client** that spawns and
+  drives another CLI (`claude`, `gemini`, `kiro`, `copilot`) over stdio
+  JSON-RPC, in addition to its existing role as an ACP server for IDEs.
+  Planning artefacts live under [`planning/`](./planning/) (requirements,
+  design, tasks, research, prototypes).
+
+### Documentation
+
+- Imported the OAuth providers guide from
+  `choskeli/oh-my-pi` (`docs: import OAuth providers guide from choskeli/oh-my-pi`).
+
+## How `Raudbjorn/omp` differs from `elikoga/oh-my-pi`
+
+`elikoga/oh-my-pi` is a **narrow, focused** downstream of
+`can1357/oh-my-pi` (currently 8 ahead / 13 behind). Its contributions are
+entirely targeted fixes:
+
+| elikoga patch                                               | Status in omp |
+| ----------------------------------------------------------- | ------------- |
+| Timeout expiry wall-clock time for long-running commands     | ✅ included   |
+| Kitty protocol: `isKeyRelease` guard on all selectors        | ✅ included   |
+| UPB AI Gateway provider                                      | ✅ included   |
+| OpenRouter upstream proxy error retry                        | ✅ included   |
+| Native build: `-gnu`/`-musl` libc suffix handling            | ✅ included   |
+| GitHub Copilot: strip `thinking`/`output_config`             | ✅ included   |
+| GitHub Copilot: skip prompt caching                          | ✅ included   |
+| Treat `model_not_supported` as retryable transient           | ✅ included   |
+
+Everything in elikoga is already in omp. The reverse is not true: omp
+adds a rebrand, extra providers (Devin, Warp), `/screenshot`, `/plans`,
+live-reload, the Homebrew pipeline, the sync workflow, and the ACP
+client work, none of which are goals of elikoga.
+
+Summary: if you want a tight set of bugfixes on top of upstream, use
+elikoga. If you want a broader divergence with additional providers,
+tooling, and platform glue — plus the ACP client track — use omp.
+
+## Installation (quick)
+
+Install from source with Bun (recommended while the Homebrew tap and
+release binaries are still being provisioned):
 
 ```bash
 omp --continue             # Continue most recent session
@@ -1197,31 +1236,13 @@ Text files are wrapped in `<file ...>` blocks. Images are attached.
 ```bash
 # Interactive mode
 omp
-# Non-interactive
-omp -p "List all .ts files in src/"
-omp -c "What did we discuss?"
-# Resume by ID prefix
-omp -r abc123
-
-# Model cycling with patterns
-omp --models "sonnet:high,haiku:low"
-
-# Restrict toolset for read-only review
-omp --tools read,grep,find -p "Review the architecture"
-# Export session
-omp --export session.jsonl output.html
 ```
 
-### Environment Variables
+Full installer script and `mise` instructions are in the upstream README.
+Once the Homebrew pipeline is active, `brew install Raudbjorn/omp/omp`
+will become available.
 
-| Variable                                          | Description                                             |
-| ------------------------------------------------- | ------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.       | Provider credentials                                    |
-| `PI_CODING_AGENT_DIR`                             | Override agent data directory (default: `~/.omp/agent`) |
-| `PI_PACKAGE_DIR`                                  | Override package directory resolution                   |
-| `PI_SMOL_MODEL`, `PI_SLOW_MODEL`, `PI_PLAN_MODEL` | Role-model overrides                                    |
-| `PI_NO_PTY`                                       | Disable PTY-based bash execution                        |
-| `VISUAL`, `EDITOR`                                | External editor for Ctrl+G                              |
+## Configuration paths
 
 See [Environment Variables](docs/environment-variables.md) for the complete reference.
 
@@ -1386,5 +1407,17 @@ For architecture and contribution guidelines, see [packages/coding-agent/DEVELOP
 
 MIT. See [LICENSE](LICENSE).
 
-Copyright (c) 2025 Mario Zechner  
+Copyright (c) 2025 Mario Zechner
 Copyright (c) 2025-2026 Can Bölük
+Copyright (c) 2026 Raudbjorn contributors
+
+---
+
+## Reference: upstream README
+
+For everything not explicitly described above — installation variants,
+slash commands, keyboard shortcuts, sessions, configuration schema, SDK,
+RPC mode, HTML export, built-in tools, the philosophy note, and the
+monorepo package table — consult the canonical upstream README:
+
+**https://github.com/can1357/oh-my-pi/blob/main/README.md**

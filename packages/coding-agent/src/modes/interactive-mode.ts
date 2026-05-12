@@ -59,6 +59,8 @@ import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../utils/session-color";
 import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle } from "../utils/title-generator";
+import { setWebTerminalServerCallbacks } from "../web-terminal/server";
+import { createWebTerminalBridge, MirroredTerminal, setActiveWebTerminalBridge } from "../web-terminal/terminal-bridge";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import { CustomEditor } from "./components/custom-editor";
@@ -278,7 +280,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 		}
 
-		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
+		const terminal = new MirroredTerminal();
+		this.ui = new TUI(terminal, settings.get("showHardwareCursor"));
+		setActiveWebTerminalBridge(createWebTerminalBridge(this.ui, terminal));
 		this.ui.setClearOnShrink(settings.get("clearOnShrink"));
 		this.chatContainer = new Container();
 		this.pendingMessagesContainer = new Container();
@@ -472,6 +476,32 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncEditorMaxHeight();
 		this.isInitialized = true;
 		this.ui.requestRender(true);
+
+		setWebTerminalServerCallbacks({
+			onClientConnected: info => {
+				const remote =
+					info.remoteAddress && info.remotePort !== undefined
+						? `${info.remoteAddress}:${info.remotePort}`
+						: "unknown";
+				const local = `${info.localAddress}:${info.localPort}`;
+				this.showStatus(`Web terminal client connected from ${remote} to ${local}`);
+			},
+			onClientDisconnected: info => {
+				const remote =
+					info.remoteAddress && info.remotePort !== undefined
+						? `${info.remoteAddress}:${info.remotePort}`
+						: "unknown";
+				const local = `${info.localAddress}:${info.localPort}`;
+				this.showStatus(`Web terminal client disconnected from ${remote} to ${local}`);
+			},
+			onListenerStopped: info => {
+				const local = `${info.localAddress}:${info.localPort}`;
+				this.showStatus(`Web terminal listener stopped on ${local} (${info.reason})`);
+			},
+			onServerStopped: info => {
+				this.showStatus(`Web terminal stopped (${info.reason}).`);
+			},
+		});
 
 		// Initialize hooks with TUI-based UI context
 		await this.initHooksAndCustomTools();
@@ -1394,6 +1424,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#themeChangeUnsubscribe = undefined;
 		}
 		if (this.isInitialized) {
+			if (this.ui.terminal instanceof MirroredTerminal) {
+				setActiveWebTerminalBridge(null);
+			}
 			this.ui.stop();
 			this.isInitialized = false;
 		}
@@ -1442,6 +1475,44 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		await postmortem.quit(0);
+	}
+
+	async restart(): Promise<void> {
+		if (this.#isShuttingDown) return;
+		this.#isShuttingDown = true;
+
+		// Flush pending session writes before restart
+		await this.sessionManager.flush();
+		const sessionId = this.sessionManager.getSessionId();
+
+		// Emit shutdown event to hooks
+		await this.session.dispose();
+
+		if (this.isInitialized) {
+			this.ui.requestRender(true);
+		}
+
+		// Wait for any pending renders to complete
+		await new Promise(resolve => process.nextTick(resolve));
+
+		// Drain any in-flight Kitty key release events before stopping.
+		await this.ui.terminal.drainInput(1000);
+		this.stop();
+
+		// Re-exec the process, resuming the same session so history is preserved.
+		// We intentionally omit all other CLI flags (model, system prompt, etc.)
+		// because the resumed session already has that state persisted to disk.
+		const execPath = process.execPath;
+		const scriptPath = process.argv[1];
+		const resumeArgs = sessionId ? ["--resume", sessionId] : [];
+
+		process.stderr.write(`\n${chalk.dim("Reloading...")}\n`);
+
+		const proc = Bun.spawn([execPath, scriptPath, ...resumeArgs], {
+			stdio: ["inherit", "inherit", "inherit"],
+		});
+		const exitCode = await proc.exited;
+		process.exit(exitCode ?? 0);
 	}
 
 	async checkShutdownRequested(): Promise<void> {
@@ -1855,6 +1926,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void> {
 		return this.#commandController.handlePythonCommand(code, excludeFromContext);
+	}
+
+	handleWebTerminalCommand(): Promise<void> {
+		return this.#commandController.handleWebTerminalCommand();
 	}
 
 	async handleMCPCommand(text: string): Promise<void> {

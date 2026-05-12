@@ -10,6 +10,7 @@ import type { KeyId } from "@oh-my-pi/pi-tui";
 import { hasFsCode, isEacces, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import * as TypeBox from "@sinclair/typebox";
+import { isExtensionDisabled } from "../../capability";
 import { type ExtensionModule, extensionModuleCapability } from "../../capability/extension-module";
 import { loadCapability } from "../../discovery";
 import { getExtensionNameFromPath } from "../../discovery/helpers";
@@ -21,7 +22,6 @@ import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "../plugins/leg
 import { getAllPluginExtensionPaths } from "../plugins/loader";
 
 import { resolvePath } from "../utils";
-import reliabilityExtension from "./reliability";
 import type {
 	Extension,
 	ExtensionAPI,
@@ -33,8 +33,6 @@ import type {
 	RegisteredCommand,
 	ToolDefinition,
 } from "./types";
-import verificationExtension from "./verification";
-import workingMemoryExtension from "./working-memory";
 
 installLegacyPiSpecifierShim();
 
@@ -484,14 +482,11 @@ export async function discoverAndLoadExtensions(
 	configuredPaths: string[],
 	cwd: string,
 	eventBus?: EventBus,
-	disabledExtensionIds: string[] = [],
+	_disabledExtensionIds: string[] = [],
 ): Promise<LoadExtensionsResult> {
 	const allPaths: string[] = [];
 	const seen = new Set<string>();
-	const disabled = new Set(disabledExtensionIds);
-
-	const isDisabledName = (name: string): boolean => disabled.has(`extension-module:${name}`);
-	const resolvedEventBus = eventBus ?? new EventBus();
+	const isDisabledName = (name: string): boolean => isExtensionDisabled(`extension-module:${name}`);
 
 	const addPath = (extPath: string): void => {
 		const resolved = path.resolve(extPath);
@@ -519,37 +514,7 @@ export async function discoverAndLoadExtensions(
 	// 2. Discover extension entry points from installed plugins
 	addPaths(await getAllPluginExtensionPaths(cwd));
 
-	const { extensions, errors, runtime } = await loadExtensions(allPaths, cwd, resolvedEventBus);
-
-	// 3. Inject core reliability extension
-	const reliability = await loadExtensionFromFactory(
-		reliabilityExtension,
-		cwd,
-		resolvedEventBus,
-		runtime,
-		"core-reliability",
-	);
-	extensions.unshift(reliability);
-
-	// 4. Inject core working memory extension
-	const workingMemory = await loadExtensionFromFactory(
-		workingMemoryExtension,
-		cwd,
-		resolvedEventBus,
-		runtime,
-		"core-working-memory",
-	);
-	extensions.unshift(workingMemory);
-	// 5. Inject verification extension
-	const verification = await loadExtensionFromFactory(
-		verificationExtension,
-		cwd,
-		resolvedEventBus,
-		runtime,
-		"core-verification",
-	);
-	extensions.unshift(verification);
-	// 6. Explicitly configured paths
+	// 3. Explicitly configured paths
 	for (const configuredPath of configuredPaths) {
 		const resolved = resolvePath(configuredPath, cwd);
 
@@ -577,9 +542,5 @@ export async function discoverAndLoadExtensions(
 		addPath(resolved);
 	}
 
-	return {
-		extensions,
-		errors,
-		runtime,
-	};
+	return loadExtensions(allPaths, cwd, eventBus);
 }

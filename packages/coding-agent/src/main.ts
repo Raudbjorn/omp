@@ -26,6 +26,7 @@ import { buildInitialMessage } from "./cli/initial-message";
 import { runListModelsCommand } from "./cli/list-models";
 import { runListRecentCommand } from "./cli/list-recent";
 import { selectSession } from "./cli/session-picker";
+import { readSourceHome } from "./cli/update-cli";
 import { findConfigFile } from "./config";
 import { ModelRegistry, ModelsConfigFile } from "./config/model-registry";
 import { resolveCliModel, resolveModelRoleValue, resolveModelScope, type ScopedModel } from "./config/model-resolver";
@@ -57,23 +58,35 @@ import { resolvePromptInput } from "./system-prompt";
 import type { LspStartupServerInfo } from "./tools";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
 import type { EventBus } from "./utils/event-bus";
+import { getOrStartWebTerminalServer } from "./web-terminal/server";
 
-async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
+async function checkForNewVersion(_currentVersion: string): Promise<string | undefined> {
 	if (!settings.get("startup.checkUpdate")) {
 		return;
 	}
+	// Only runs for source installs — for bun-global / binary installs, the
+	// `omp update` command performs its own semver-based check when invoked.
+	const installDir = readSourceHome();
+	if (!installDir) return undefined;
 	try {
-		const response = await fetch("https://registry.npmjs.org/@oh-my-pi/pi-coding-agent/latest");
-		if (!response.ok) return undefined;
-
-		const data = (await response.json()) as { version?: string };
-		const latestVersion = data.version;
-
-		if (latestVersion && Bun.semver.order(latestVersion, currentVersion) > 0) {
-			return latestVersion;
+		// Resolve current commit SHA from the local .git directory
+		const headContent = (await fs.readFile(path.join(installDir, ".git", "HEAD"), "utf8").catch(() => "")).trim();
+		let currentSha = "";
+		if (headContent.startsWith("ref: ")) {
+			currentSha = (await fs.readFile(path.join(installDir, ".git", headContent.slice(5)), "utf8").catch(() => "")).trim();
+		} else if (headContent.length >= 40) {
+			currentSha = headContent;
 		}
+		if (!currentSha) return undefined;
 
-		return undefined;
+		const resp = await fetch(
+			"https://api.github.com/repos/Raudbjorn/omp/commits/main",
+			{ headers: { Accept: "application/vnd.github.sha" }, signal: AbortSignal.timeout(5000) },
+		);
+		if (!resp.ok) return undefined;
+		const latestSha = (await resp.text()).trim();
+		if (!latestSha || latestSha.startsWith(currentSha.slice(0, 7))) return undefined;
+		return latestSha.slice(0, 7);
 	} catch {
 		return undefined;
 	}
@@ -694,6 +707,23 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 	const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
 	const mode = parsedArgs.mode || "text";
+	if (parsedArgs.webTerminal) {
+		if (isInteractive) {
+			if (!settings.get("webTerminal.enabled")) {
+				notifs.push({ kind: "warn", message: "Web terminal is disabled in settings." });
+			} else {
+				const webTerminal = await getOrStartWebTerminalServer({ cwd });
+				const urls = webTerminal.urls;
+				const message =
+					urls.length > 1
+						? `Web terminal running at:\n${urls.map(url => `  ${url}`).join("\n")}`
+						: `Web terminal running at ${webTerminal.url}`;
+				notifs.push({ kind: "info", message });
+			}
+		} else {
+			process.stderr.write(`${chalk.yellow("--web-terminal is only available in interactive mode.")}\n`);
+		}
+	}
 
 	// Initialize discovery system with settings for provider persistence
 	logger.time("initializeWithSettings", initializeWithSettings, settings);

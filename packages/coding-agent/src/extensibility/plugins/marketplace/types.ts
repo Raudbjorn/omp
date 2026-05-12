@@ -160,6 +160,19 @@ export interface InstalledPluginsRegistry {
 	plugins: Record<string, InstalledPluginEntry[]>;
 }
 
+export type InstalledPluginAuditSourceType = "relative" | "github" | "url" | "git-subdir" | "npm" | "unknown";
+
+export type InstalledPluginPinKind = "git-sha" | "npm-version" | "marketplace-head-sha" | "local-path";
+
+export interface InstalledPluginSourceAudit {
+	sourceType: InstalledPluginAuditSourceType;
+	locator: string;
+	pinned: boolean;
+	pinKind?: InstalledPluginPinKind;
+	pinValue?: string;
+	marketplaceSourceType?: MarketplaceSourceType;
+}
+
 export interface InstalledPluginEntry {
 	scope: "user" | "project";
 	/** Absolute path to cached plugin directory. */
@@ -171,6 +184,8 @@ export interface InstalledPluginEntry {
 	lastUpdated: string;
 	/** For git-sourced plugins. */
 	gitCommitSha?: string;
+	/** Auditable source pinning metadata captured at install time. */
+	sourceAudit?: InstalledPluginSourceAudit;
 	/** OMP extension — not in Claude Code's type. CLI/UI concern only in v1. */
 	enabled?: boolean;
 }

@@ -20,13 +20,16 @@ import type {
 	WriteArgs,
 	WriteResult,
 } from "./providers/cursor/gen/agent_pb";
+import type { DevinOptions } from "./providers/devin";
 import type { GoogleOptions } from "./providers/google";
+import type { AcpAgentOptions } from "./providers/acp";
 import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
 import type { GoogleVertexOptions } from "./providers/google-vertex";
 import type { OllamaChatOptions } from "./providers/ollama";
 import type { OpenAICodexResponsesOptions } from "./providers/openai-codex-responses";
 import type { OpenAICompletionsOptions } from "./providers/openai-completions";
 import type { OpenAIResponsesOptions } from "./providers/openai-responses";
+import type { WarpOptions } from "./providers/warp";
 import type { AssistantMessageEventStream } from "./utils/event-stream";
 
 export type { AssistantMessageEventStream } from "./utils/event-stream";
@@ -56,6 +59,8 @@ export interface ApiOptionsMap {
 	"google-vertex": GoogleVertexOptions;
 	"ollama-chat": OllamaChatOptions;
 	"cursor-agent": CursorOptions;
+	"devin-agent": DevinOptions;
+	"warp-agent": WarpOptions;
 }
 // Compile-time exhaustiveness check - this will fail if ApiOptionsMap doesn't have all KnownApi keys
 type _CheckExhaustive =
@@ -108,6 +113,7 @@ export type KnownProvider =
 	| "kimi-code"
 	| "minimax-code"
 	| "minimax-code-cn"
+	| "mimo-code"
 	| "github-copilot"
 	| "fireworks"
 	| "gitlab-duo"
@@ -140,7 +146,11 @@ export type KnownProvider =
 	| "vllm"
 	| "xiaomi"
 	| "zenmux"
-	| "lm-studio";
+	| "upb"
+	| "lm-studio"
+	| "devin"
+	| "warp"
+	| "deepseek";
 export type Provider = KnownProvider | string;
 
 import type { Effort } from "./model-thinking";
@@ -601,8 +611,8 @@ export interface OpenAICompat {
 	requiresThinkingAsText?: boolean;
 	/** Whether tool call IDs must be normalized to Mistral format (exactly 9 alphanumeric chars). Default: auto-detected from URL. */
 	requiresMistralToolIds?: boolean;
-	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "zai" uses thinking: { type: "enabled" }, "qwen" uses top-level enable_thinking, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking. Default: "openai". */
-	thinkingFormat?: "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template";
+	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "zai" uses thinking: { type: "enabled" }, "qwen" uses top-level enable_thinking, "qwen-chat-template" uses chat_template_kwargs.enable_thinking, and "litellm" uses reasoning: { summary: "detailed" } for reasoning token passthrough via LiteLLM proxied endpoints. Default: "openai". */
+	thinkingFormat?: "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template" | "litellm";
 	/** Which reasoning content field to emit on assistant messages. Default: auto-detected. */
 	reasoningContentField?: "reasoning_content" | "reasoning" | "reasoning_text";
 	/** Whether assistant tool-call messages must include reasoning content. Default: false. */

@@ -9,7 +9,7 @@ export interface STTDependencyStatus {
 	whisper: { available: boolean; installHint: string };
 }
 
-export async function checkDependencies(): Promise<STTDependencyStatus> {
+export async function checkDependencies(backend?: string): Promise<STTDependencyStatus> {
 	const recorderTools = detectRecordingTools();
 	const recorderHint = isWindows
 		? "PowerShell fallback available. For better quality: install SoX or FFmpeg."
@@ -19,14 +19,17 @@ export async function checkDependencies(): Promise<STTDependencyStatus> {
 	const pythonHint = "Install Python 3.8+ from https://python.org";
 
 	let whisperAvailable = false;
+	const isFaster = backend === "faster-whisper";
 	if (pythonCmd) {
-		const check = Bun.spawnSync([pythonCmd, "-c", "import whisper"], {
+		const importCheck = isFaster ? "from faster_whisper import WhisperModel" : "import whisper";
+		const check = Bun.spawnSync([pythonCmd, "-c", importCheck], {
 			stdout: "pipe",
 			stderr: "pipe",
 		});
 		whisperAvailable = check.exitCode === 0;
 	}
-	const whisperHint = "Run 'omp setup stt' to auto-install, or: pip install openai-whisper";
+	const pkgName = isFaster ? "faster-whisper" : "openai-whisper";
+	const whisperHint = `Run 'omp setup stt' to auto-install, or: pip install ${pkgName}`;
 
 	return {
 		recorder: { available: recorderTools.length > 0, tool: recorderTools[0] ?? null, installHint: recorderHint },

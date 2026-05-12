@@ -7,71 +7,135 @@ import * as os from "node:os";
 import { type Component, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { theme } from "../../../modes/theme/theme";
 import { shortenPath } from "../../../tools/render-utils";
-import type { Extension, ExtensionState } from "./types";
+import type { Extension } from "./types";
 
 export class InspectorPanel implements Component {
 	#extension: Extension | null = null;
+	#previewScrollOffset = 0;
+	#maxHeight = 20;
+	#previewBudget = 0;
+	#fullPreviewLength = 0;
+	#projectPath: string | null = null;
 
 	setExtension(extension: Extension | null): void {
 		this.#extension = extension;
+		this.#previewScrollOffset = 0;
+	}
+
+	setMaxHeight(h: number): void {
+		this.#maxHeight = h;
+	}
+
+	setProjectPath(path: string): void {
+		this.#projectPath = path;
+	}
+
+	scrollPreview(delta: number): void {
+		const hasOverflow = this.#fullPreviewLength > this.#previewBudget;
+		const visibleCount = hasOverflow ? Math.max(0, this.#previewBudget - 1) : this.#previewBudget;
+		const maxOff = Math.max(0, this.#fullPreviewLength - visibleCount);
+		this.#previewScrollOffset = Math.max(0, Math.min(maxOff, this.#previewScrollOffset + delta));
 	}
 
 	invalidate(): void {}
 
-	render(width: number): string[] {
+	/** Header: name, status, action hints, description, origin. */
+	renderHeader(width: number): string[] {
 		if (!this.#extension) {
 			return [theme.fg("muted", "Select an extension"), theme.fg("dim", "to view details")];
 		}
 
 		const ext = this.#extension;
-		const lines: string[] = [];
+		const headerLines: string[] = [];
 
-		// Name header
-		lines.push(theme.bold(theme.fg("accent", ext.displayName)));
-		lines.push("");
+		// Name
+		headerLines.push(theme.bold(theme.fg("accent", ext.displayName)));
 
-		// Kind badge
-		lines.push(theme.fg("muted", "Type: ") + this.#getKindBadge(ext.kind));
-		lines.push("");
+		// Inline kind + status (no labels)
+		const kindBadge = this.#getKindBadge(ext.kind);
+		const statusParts = this.#getStatusLines(ext);
+		headerLines.push(`${kindBadge}  ${statusParts[0]}`);
+		for (let i = 1; i < statusParts.length; i++) {
+			headerLines.push(`  ${statusParts[i]}`);
+		}
 
-		// Description (wrapped)
+		// Action hints — always show descriptions, wrap to two lines if needed
+		if (ext.source.level === "native") {
+			headerLines.push(theme.fg("dim", "  (native \u2014 read-only)"));
+		} else if (ext.kind === "context-file") {
+			headerLines.push(theme.fg("dim", "  D: delete  M: move  E: edit"));
+		} else if (width < 44) {
+			headerLines.push(theme.fg("dim", "  D: delete  M: move"));
+			headerLines.push(theme.fg("dim", "  N: rename  E: edit"));
+		} else {
+			headerLines.push(theme.fg("dim", "  D: delete  M: move  N: rename  E: edit"));
+		}
+		headerLines.push("");
+
+		// Description
 		const desc = ext.description;
 		const isValidDescription = typeof desc === "string" && desc.length > 0;
 		if (isValidDescription && width > 2) {
 			const wrapped = wrapTextWithAnsi(desc, width - 2);
 			for (const line of wrapped) {
-				lines.push(truncateToWidth(line, width));
+				headerLines.push(truncateToWidth(line, width));
 			}
-			lines.push("");
+			headerLines.push("");
 		} else if (isValidDescription) {
-			// Width too small for wrapping, show truncated single line
-			lines.push(truncateToWidth(desc, width));
-			lines.push("");
+			headerLines.push(truncateToWidth(desc, width));
+			headerLines.push("");
 		}
 
 		// Origin
-		lines.push(theme.fg("muted", "Origin:"));
+		headerLines.push(theme.fg("muted", "Origin:"));
 		const levelLabel = ext.source.level === "user" ? "User" : ext.source.level === "project" ? "Project" : "Native";
-		lines.push(`  ${theme.italic(`via ${ext.source.providerName} (${levelLabel})`)}`);
+		headerLines.push(`  ${theme.italic(`via ${ext.source.providerName} (${levelLabel})`)}`);
 		const shortened = shortenPath(ext.path, os.homedir());
-		// If path is very long, show just the last parts
 		const displayPath =
 			shortened.length > 40 && shortened.split("/").length > 3
 				? `.../${shortened.split("/").slice(-3).join("/")}`
 				: shortened;
-		lines.push(`  ${theme.fg("dim", displayPath)}`);
-		lines.push("");
+		headerLines.push(`  ${theme.fg("dim", displayPath)}`);
+		headerLines.push("");
 
-		// Status badge
-		lines.push(theme.fg("muted", "Status:"));
-		lines.push(`  ${this.#getStatusBadge(ext.state, ext.disabledReason, ext.shadowedBy)}`);
-		lines.push("");
+		return headerLines;
+	}
 
-		// Preview section (routed based on kind)
+	/** Scrollable preview/instruction content. */
+	renderContent(width: number, maxLines: number): string[] {
+		if (!this.#extension) return [];
+		const ext = this.#extension;
+
 		const previewLines = this.#renderPreview(ext, width);
-		lines.push(...previewLines);
+		this.#fullPreviewLength = previewLines.length;
+		this.#previewBudget = maxLines;
+
+		const hasOverflow = previewLines.length > maxLines;
+		const visibleCount = hasOverflow ? Math.max(0, maxLines - 1) : maxLines;
+
+		// Clamp scroll offset
+		const maxOff = Math.max(0, previewLines.length - visibleCount);
+		this.#previewScrollOffset = Math.min(this.#previewScrollOffset, maxOff);
+
+		const visiblePreview = previewLines.slice(this.#previewScrollOffset, this.#previewScrollOffset + visibleCount);
+
+		const lines = [...visiblePreview];
+
+		// Scroll hint
+		if (hasOverflow && maxLines > 0) {
+			lines.push(
+				theme.fg("dim", `(PgUp/PgDn to scroll \u2014 ${this.#previewScrollOffset + 1}/${previewLines.length})`),
+			);
+		}
 
 		return lines;
+	}
+
+	render(width: number): string[] {
+		const header = this.renderHeader(width);
+		const contentBudget = Math.max(0, this.#maxHeight - header.length);
+		const content = this.renderContent(width, contentBudget);
+		return [...header, ...content];
 	}
 
 	#renderPreview(ext: Extension, width: number): string[] {
@@ -90,6 +154,10 @@ export class InspectorPanel implements Component {
 				break;
 			case "mcp":
 				content = this.#renderMcpDetails(ext.raw, width);
+				break;
+			case "slash-command":
+			case "prompt":
+				content = this.#renderCommandContent(ext.raw, width);
 				break;
 			default:
 				content = this.#renderDefaultPreview(ext, width);
@@ -116,13 +184,9 @@ export class InspectorPanel implements Component {
 		}
 
 		const fileLines = content.split("\n");
-		for (const line of fileLines.slice(0, 20)) {
+		for (const line of fileLines) {
 			const highlighted = this.#highlightMarkdown(line);
 			lines.push(truncateToWidth(highlighted, width - 2));
-		}
-
-		if (fileLines.length > 20) {
-			lines.push(theme.fg("dim", "(truncated at line 20)"));
 		}
 
 		lines.push("");
@@ -212,17 +276,37 @@ export class InspectorPanel implements Component {
 			if (!instruction) {
 				lines.push(theme.fg("dim", "  (no instruction text)"));
 			} else {
-				const instructionLines = instruction.split("\n").slice(0, 15);
+				const instructionLines = instruction.split("\n");
 				for (const line of instructionLines) {
 					lines.push(truncateToWidth(line, width - 2));
-				}
-
-				if (instruction.split("\n").length > 15) {
-					lines.push(theme.fg("dim", "(truncated at line 15)"));
 				}
 			}
 		} catch {
 			lines.push(theme.fg("dim", "  (unable to parse skill content)"));
+		}
+
+		lines.push("");
+		return lines;
+	}
+
+	#renderCommandContent(raw: unknown, width: number): string[] {
+		const lines: string[] = [];
+		lines.push(theme.fg("muted", "Content:"));
+		lines.push(theme.fg("dim", theme.boxSharp.horizontal.repeat(Math.min(width - 2, 40))));
+
+		const content =
+			raw && typeof raw === "object" && "content" in raw ? (raw as { content?: string }).content : undefined;
+
+		if (!content) {
+			lines.push(theme.fg("dim", "  (no content)"));
+			lines.push("");
+			return lines;
+		}
+
+		const contentLines = content.split("\n");
+		for (const line of contentLines) {
+			const highlighted = this.#highlightMarkdown(line);
+			lines.push(truncateToWidth(highlighted, width - 2));
 		}
 
 		lines.push("");
@@ -250,11 +334,40 @@ export class InspectorPanel implements Component {
 				lines.push(`  ${theme.fg("muted", "Args:")}       ${theme.fg("dim", args.join(" "))}`);
 			}
 
+			if (mcp?.url) {
+				lines.push(`  ${theme.fg("muted", "URL:")}        ${theme.fg("accent", mcp.url)}`);
+			}
+
+			if (mcp?.timeout != null) {
+				const seconds = Math.round(mcp.timeout / 1000);
+				lines.push(`  ${theme.fg("muted", "Timeout:")}    ${theme.fg("dim", `${seconds}s`)}`);
+			}
+
+			if (mcp?.auth?.type) {
+				const authLabel = mcp.auth.type === "oauth" ? "OAuth" : "API Key";
+				lines.push(`  ${theme.fg("muted", "Auth:")}       ${theme.fg("dim", authLabel)}`);
+			}
+
 			// Environment variables if present
 			if (mcp?.env && typeof mcp.env === "object") {
 				const envCount = Object.keys(mcp.env).length;
 				if (envCount > 0) {
 					lines.push(`  ${theme.fg("muted", "Env vars:")}   ${theme.fg("dim", `${envCount} defined`)}`);
+				}
+			}
+
+			if (typeof mcp?._toolCount === "number") {
+				lines.push(`  ${theme.fg("muted", "Tools:")}      ${theme.fg("dim", `${mcp._toolCount} registered`)}`);
+			}
+
+			// Server instructions (from MCP initialize response)
+			if (typeof mcp?._instructions === "string" && mcp._instructions.trim()) {
+				lines.push("");
+				lines.push(theme.fg("muted", "Instructions:"));
+				lines.push(theme.fg("dim", theme.boxSharp.horizontal.repeat(Math.min(width - 2, 40))));
+				for (const line of mcp._instructions.split("\n")) {
+					const highlighted = this.#highlightMarkdown(line);
+					lines.push(truncateToWidth(highlighted, width - 2));
 				}
 			}
 		} catch {
@@ -297,21 +410,42 @@ export class InspectorPanel implements Component {
 		return theme.fg(color as any, kind);
 	}
 
-	#getStatusBadge(state: ExtensionState, reason?: string, shadowedBy?: string): string {
-		switch (state) {
-			case "active":
-				return theme.fg("success", `${theme.status.enabled} Active`);
-			case "disabled": {
-				const reasonText =
-					reason === "provider-disabled"
-						? "provider disabled"
-						: reason === "item-disabled"
-							? "manually disabled"
-							: "unknown";
-				return theme.fg("dim", `${theme.status.disabled} Disabled (${reasonText})`);
-			}
-			case "shadowed":
-				return theme.fg("warning", `${theme.status.shadowed} Shadowed${shadowedBy ? ` by ${shadowedBy}` : ""}`);
+	#getStatusLines(ext: Extension): string[] {
+		if (ext.state === "shadowed") {
+			return [
+				theme.fg("warning", `${theme.status.shadowed} Shadowed${ext.shadowedBy ? ` by ${ext.shadowedBy}` : ""}`),
+			];
 		}
+
+		const parts: string[] = [];
+
+		if (ext.state === "active" && !ext.isGlobalDisabled && !ext.isProjectDisabled) {
+			parts.push(theme.fg("success", `${theme.status.enabled} Active`));
+		}
+		if (ext.isGlobalDisabled) {
+			parts.push(theme.fg("error", `${theme.status.disabled} Disabled globally`));
+		}
+		if (ext.isProjectDisabled) {
+			parts.push(theme.fg("warning", `${theme.status.disabled} Disabled for this project`));
+		}
+
+		// Restriction status - always check regardless of disabled state
+		if (ext.isRestricted && ext.restrictedToProject) {
+			if (ext.restrictedToProject === this.#projectPath) {
+				parts.push(theme.fg("warning", `${theme.status.restricted} Restricted to this project`));
+			} else {
+				const shortened = shortenPath(ext.restrictedToProject, os.homedir());
+				parts.push(theme.fg("warning", `${theme.status.restricted} Restricted to: ${shortened}`));
+			}
+		}
+
+		if (parts.length > 0) return parts;
+
+		// Provider disabled or other
+		if (ext.disabledReason === "provider-disabled") {
+			return [theme.fg("dim", `${theme.status.disabled} Disabled (provider disabled)`)];
+		}
+
+		return [theme.fg("dim", `${theme.status.disabled} Disabled`)];
 	}
 }

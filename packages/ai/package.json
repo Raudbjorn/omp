@@ -41,6 +41,7 @@
 		"generate-models": "bun scripts/generate-models.ts"
 	},
 	"dependencies": {
+		"@agentclientprotocol/sdk": "catalog:",
 		"@anthropic-ai/sdk": "catalog:",
 		"@aws-sdk/client-bedrock-runtime": "catalog:",
 		"@aws-sdk/credential-provider-node": "catalog:",

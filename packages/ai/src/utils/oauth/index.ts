@@ -66,6 +66,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "gemini-cli-acp",
+		name: "Gemini CLI (ACP)",
+		available: true,
+	},
+	{
 		id: "google-antigravity",
 		name: "Antigravity (Gemini 3, Claude, GPT-OSS)",
 		available: true,
@@ -76,8 +81,23 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "devin",
+		name: "Devin",
+		available: true,
+	},
+	{
+		id: "warp",
+		name: "Warp Agent Platform",
+		available: true,
+	},
+	{
 		id: "litellm",
 		name: "LiteLLM",
+		available: true,
+	},
+	{
+		id: "upb",
+		name: "UPB AI-Chat (Universit\u00e4t Paderborn)",
 		available: true,
 	},
 	{
@@ -118,6 +138,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "xiaomi",
 		name: "Xiaomi MiMo",
+		available: true,
+	},
+	{
+		id: "mimo-code",
+		name: "Xiaomi MiMo Coding Plan",
 		available: true,
 	},
 	{
@@ -193,6 +218,16 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "vllm",
 		name: "vLLM (Local OpenAI-compatible)",
+		available: true,
+	},
+	{
+		id: "ipex-llm",
+		name: "IPEX-LLM (Intel XPU Local OpenAI-compatible)",
+		available: true,
+	},
+	{
+		id: "openvino",
+		name: "OpenVINO (OVMS / openvino-genai Local OpenAI-compatible)",
 		available: true,
 	},
 	{
@@ -307,6 +342,8 @@ export async function refreshOAuthToken(
 		case "together":
 		case "litellm":
 		case "lm-studio":
+		case "ipex-llm":
+		case "openvino":
 		case "ollama":
 		case "ollama-cloud":
 		case "xiaomi":
@@ -322,6 +359,8 @@ export async function refreshOAuthToken(
 		case "qwen-portal":
 		case "zenmux":
 		case "vllm":
+		case "devin":
+		case "warp":
 			// API keys / static bearer tokens don't expire, return as-is
 			newCredentials = credentials;
 			break;
