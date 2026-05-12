@@ -24,19 +24,6 @@ const COMPACTION_SUMMARY_TEMPLATE = compactionSummaryContextPrompt;
 const BRANCH_SUMMARY_TEMPLATE = branchSummaryContextPrompt;
 
 export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt";
-export const MULTI_BLOCK_TEXT_MESSAGE_TYPE = "multi-block-text";
-
-/** Custom message type for textual blocks emitted during multi-block submissions. */
-export const MULTI_BLOCK_TEXT_MESSAGE_TYPE = "multi-block-text";
-
-/** Custom message type for builtin slash commands emitted within multi-block submissions. */
-export const MULTI_BLOCK_COMMAND_MESSAGE_TYPE = "multi-block-command";
-
-/** Custom message type for textual blocks emitted during multi-block submissions. */
-export const MULTI_BLOCK_TEXT_MESSAGE_TYPE = "multi-block-text";
-
-/** Custom message type for builtin slash commands emitted within multi-block submissions. */
-export const MULTI_BLOCK_COMMAND_MESSAGE_TYPE = "multi-block-command";
 
 /** Custom message type for textual blocks emitted during multi-block submissions. */
 export const MULTI_BLOCK_TEXT_MESSAGE_TYPE = "multi-block-text";
@@ -313,9 +300,6 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 					};
 				case "custom":
 				case "hookMessage": {
-					if (m.role === "custom" && m.customType === MULTI_BLOCK_COMMAND_MESSAGE_TYPE) {
-						return undefined;
-					}
 					const content = typeof m.content === "string" ? [{ type: "text" as const, text: m.content }] : m.content;
 					const role = "user";
 					const attribution = m.attribution;

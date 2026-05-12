@@ -2215,21 +2215,6 @@ export class AgentSession {
 		);
 	}
 
-	#rekeyHindsightMemoryForCurrentSessionId(): void {
-		if (resolveMemoryBackend(this.settings).id !== "hindsight") return;
-		const sid = this.agent.sessionId;
-		if (!sid) return;
-		this.getHindsightSessionState()?.setSessionId(sid);
-	}
-
-	/** New session file: reset auto-recall / retain-threshold counters for the new transcript. */
-	#resetHindsightConversationTrackingIfHindsight(): void {
-		if (resolveMemoryBackend(this.settings).id !== "hindsight") return;
-		const state = this.getHindsightSessionState();
-		if (!state || state.aliasOf) return;
-		state.resetConversationTracking();
-	}
-
 	/**
 	 * Remove all listeners, flush pending writes, and disconnect from agent.
 	 * Call this when completely done with the session.
@@ -2915,20 +2900,6 @@ export class AgentSession {
 	/** All messages including custom types like BashExecutionMessage */
 	get messages(): AgentMessage[] {
 		return this.agent.state.messages;
-	}
-
-	/** Fork-specific: assembler bridge for tool result interception */
-	get assemblerBridge(): ToolResultBridge | undefined {
-		return this.#assemblerBridge;
-	}
-
-	set assemblerBridge(value: ToolResultBridge | undefined) {
-		this.#assemblerBridge = value;
-	}
-
-	/** Fork-specific: returns the last effective prompt snapshot from the assembler */
-	getLastPromptSnapshot(): EffectivePromptSnapshot | null | undefined {
-		return this.#getLastPromptSnapshot?.();
 	}
 
 	buildDisplaySessionContext(): SessionContext {

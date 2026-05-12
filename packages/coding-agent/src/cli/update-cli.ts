@@ -85,7 +85,23 @@ function isPathInDirectory(filePath: string, directoryPath: string): boolean {
 	return isPathInDirectoryLexical(resolvedFile, dirReal);
 }
 
-type UpdateTarget = { method: "bun" } | { method: "binary"; path: string };
+type UpdateTarget = { method: "bun" } | { method: "binary"; path: string } | { method: "source"; home: string };
+
+/**
+ * Reads OMP_HOME from the wrapper script to determine the source install directory.
+ * Returns undefined if the binary is not a source-install wrapper.
+ */
+export function readSourceHome(): string | undefined {
+	const wrapperPath = resolveOmpPath();
+	if (!wrapperPath) return undefined;
+	try {
+		const content = fs.readFileSync(wrapperPath, "utf-8");
+		const match = content.match(/OMP_HOME="([^"]+)"/);
+		return match?.[1];
+	} catch {
+		return undefined;
+	}
+}
 
 function resolveUpdateMethod(ompPath: string, bunBinDir: string | undefined): "bun" | "binary" {
 	if (!bunBinDir) return "binary";
