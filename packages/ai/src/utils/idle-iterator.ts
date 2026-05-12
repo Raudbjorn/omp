@@ -209,6 +209,8 @@ export async function* iterateWithIdleTimeout<T>(
 			if (outcome.kind === "error") {
 				throw outcome.error;
 			}
+			watchdog && clearTimeout(watchdog);
+			watchdog = undefined;
 			if (outcome.result.done) {
 				markFirstItemReceived();
 				return;
