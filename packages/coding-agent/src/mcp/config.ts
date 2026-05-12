@@ -5,6 +5,7 @@
  */
 
 import { getMCPConfigPath } from "@oh-my-pi/pi-utils";
+import { isExtensionDisabled } from "../capability";
 import { mcpCapability } from "../capability/mcp";
 import type { SourceMeta } from "../capability/types";
 import type { MCPServer } from "../discovery";
@@ -112,7 +113,7 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 	let sources: Record<string, SourceMeta> = {};
 	for (const server of servers) {
 		const config = convertToLegacyConfig(server);
-		if (config.enabled === false || disabledServers.has(server.name)) {
+		if (config.enabled === false || disabledServers.has(server.name) || isExtensionDisabled(`mcp:${server.name}`)) {
 			continue;
 		}
 		configs[server.name] = config;

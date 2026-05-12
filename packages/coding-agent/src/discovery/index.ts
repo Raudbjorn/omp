@@ -38,10 +38,12 @@ export {
 	getCapability,
 	getCapabilityInfo,
 	getDisabledProviders,
+	getExtensionRestriction,
 	getProviderInfo,
 	// Initialization
 	initializeWithSettings,
 	invalidate,
+	isExtensionRestricted,
 	isProviderEnabled,
 	listCapabilities,
 	// Loading API
@@ -49,6 +51,7 @@ export {
 	// Cache management
 	reset,
 	setDisabledProviders,
+	setRestrictedExtensions,
 } from "../capability";
 export type { ContextFile } from "../capability/context-file";
 export type { Extension, ExtensionManifest } from "../capability/extension";

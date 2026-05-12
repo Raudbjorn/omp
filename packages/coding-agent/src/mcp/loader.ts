@@ -3,12 +3,14 @@
  *
  * Integrates MCP tool discovery with the custom tools system.
  */
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, postmortem } from "@oh-my-pi/pi-utils";
 import type { LoadedCustomTool } from "../extensibility/custom-tools/types";
 import { AgentStorage } from "../session/agent-storage";
 import type { AuthStorage } from "../session/auth-storage";
 import { type MCPLoadResult, MCPManager } from "./manager";
 import { MCPToolCache } from "./tool-cache";
+
+let mcpManagerCleanupSeq = 0;
 
 /** Result from loading MCP tools */
 export interface MCPToolsLoadResult {
@@ -61,6 +63,10 @@ async function resolveToolCache(storage: AgentStorage | null | undefined): Promi
 export async function discoverAndLoadMCPTools(cwd: string, options?: MCPToolsLoadOptions): Promise<MCPToolsLoadResult> {
 	const toolCache = await resolveToolCache(options?.cacheStorage);
 	const manager = new MCPManager(cwd, toolCache);
+	// Without this, stdio MCP child processes (sequential-thinking, mcp-remote, uvx
+	// servers, etc.) outlive the parent on Ctrl-C / TUI exit and the bun event
+	// loop blocks on their pidfds — observed as "process hangs after main returns".
+	postmortem.register(`mcp-manager-disconnect-${++mcpManagerCleanupSeq}`, () => manager.disconnectAll());
 	if (options?.authStorage) {
 		manager.setAuthStorage(options.authStorage);
 	}

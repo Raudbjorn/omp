@@ -57,6 +57,7 @@
 		"@sinclair/typebox": "catalog:",
 		"@types/turndown": "catalog:",
 		"@xterm/headless": "catalog:",
+		"@xterm/xterm": "catalog:",
 		"ajv": "catalog:",
 		"chalk": "catalog:",
 		"diff": "catalog:",
@@ -192,6 +193,38 @@
 		"./config/*": {
 			"types": "./src/config/*.ts",
 			"import": "./src/config/*.ts"
+		},
+		"./context/*": {
+			"types": "./src/context/*.ts",
+			"import": "./src/context/*.ts"
+		},
+		"./context/assembler": {
+			"types": "./src/context/assembler/index.ts",
+			"import": "./src/context/assembler/index.ts"
+		},
+		"./context/assembler/*": {
+			"types": "./src/context/assembler/*.ts",
+			"import": "./src/context/assembler/*.ts"
+		},
+		"./context/bridge": {
+			"types": "./src/context/bridge/index.ts",
+			"import": "./src/context/bridge/index.ts"
+		},
+		"./context/bridge/*": {
+			"types": "./src/context/bridge/*.ts",
+			"import": "./src/context/bridge/*.ts"
+		},
+		"./context/recall": {
+			"types": "./src/context/recall/index.ts",
+			"import": "./src/context/recall/index.ts"
+		},
+		"./context/recall/*": {
+			"types": "./src/context/recall/*.ts",
+			"import": "./src/context/recall/*.ts"
+		},
+		"./context-manager": {
+			"types": "./src/context-manager/index.ts",
+			"import": "./src/context-manager/index.ts"
 		},
 		"./dap": {
 			"types": "./src/dap/index.ts",

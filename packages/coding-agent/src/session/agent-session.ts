@@ -2181,6 +2181,22 @@ export class AgentSession {
 		this.#unsubscribeAgent = this.agent.subscribe(this.#handleAgentEvent);
 	}
 
+	/** Keep Hindsight metadata aligned when the underlying agent session id changes. */
+	#rekeyHindsightMemoryForCurrentSessionId(): void {
+		if (resolveMemoryBackend(this.settings).id !== "hindsight") return;
+		const sid = this.agent.sessionId;
+		if (!sid) return;
+		this.getHindsightSessionState()?.setSessionId(sid);
+	}
+
+	/** New session file: reset auto-recall / retain-threshold counters for the new transcript. */
+	#resetHindsightConversationTrackingIfHindsight(): void {
+		if (resolveMemoryBackend(this.settings).id !== "hindsight") return;
+		const state = this.getHindsightSessionState();
+		if (!state || state.aliasOf) return;
+		state.resetConversationTracking();
+	}
+
 	/**
 	 * Set agent.sessionId from the session manager and install a dynamic
 	 * metadata resolver so every API request carries `metadata.user_id` shaped
@@ -2899,6 +2915,20 @@ export class AgentSession {
 	/** All messages including custom types like BashExecutionMessage */
 	get messages(): AgentMessage[] {
 		return this.agent.state.messages;
+	}
+
+	/** Fork-specific: assembler bridge for tool result interception */
+	get assemblerBridge(): ToolResultBridge | undefined {
+		return this.#assemblerBridge;
+	}
+
+	set assemblerBridge(value: ToolResultBridge | undefined) {
+		this.#assemblerBridge = value;
+	}
+
+	/** Fork-specific: returns the last effective prompt snapshot from the assembler */
+	getLastPromptSnapshot(): EffectivePromptSnapshot | null | undefined {
+		return this.#getLastPromptSnapshot?.();
 	}
 
 	buildDisplaySessionContext(): SessionContext {

@@ -284,6 +284,9 @@ export class OAuthSelectorComponent extends Container {
 	}
 
 	handleInput(keyData: string): void {
+		// Ignore Kitty key-release events: the Enter release from the /login
+		// submission can arrive after focus shifts here, causing immediate selection.
+		if (isKeyRelease(keyData)) return;
 		// Up arrow
 		if (matchesKey(keyData, "up")) {
 			if (this.#filteredProviders.length > 0) {

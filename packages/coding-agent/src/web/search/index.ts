@@ -157,6 +157,7 @@ async function executeSearch(
 	for (const provider of providers) {
 		lastProvider = provider;
 		try {
+			const searchStart = Date.now();
 			const response = await provider.search({
 				query: params.query.replace(/202\d/g, String(new Date().getFullYear())), // LUL
 				limit: params.limit,
@@ -166,6 +167,7 @@ async function executeSearch(
 				numSearchResults: params.num_search_results,
 				temperature: params.temperature,
 			});
+			response.durationMs = Date.now() - searchStart;
 
 			const text = formatForLLM(response);
 
@@ -235,6 +237,7 @@ export const webSearchCustomTool: CustomTool<typeof webSearchSchema, SearchRende
 	label: "Web Search",
 	description: prompt.render(webSearchDescription),
 	parameters: webSearchSchema,
+	mergeCallAndResult: true,
 
 	async execute(
 		toolCallId: string,
@@ -250,8 +253,8 @@ export const webSearchCustomTool: CustomTool<typeof webSearchSchema, SearchRende
 		return renderSearchCall(args, options, theme);
 	},
 
-	renderResult(result, options: RenderResultOptions, theme: Theme) {
-		return renderSearchResult(result, options, theme);
+	renderResult(result, options: RenderResultOptions, theme: Theme, args?: SearchToolParams) {
+		return renderSearchResult(result, options, theme, args);
 	},
 };
 

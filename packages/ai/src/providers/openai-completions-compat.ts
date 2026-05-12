@@ -81,6 +81,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		provider === "mistral" ||
 		baseUrl.includes("mistral.ai") ||
 		baseUrl.includes("chutes.ai") ||
+		provider === "deepseek" ||
 		baseUrl.includes("deepseek.com") ||
 		baseUrl.includes("fireworks.ai") ||
 		isAlibaba ||

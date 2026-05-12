@@ -10,6 +10,7 @@ import type { KeyId } from "@oh-my-pi/pi-tui";
 import { hasFsCode, isEacces, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import * as TypeBox from "@sinclair/typebox";
+import { isExtensionDisabled } from "../../capability";
 import { type ExtensionModule, extensionModuleCapability } from "../../capability/extension-module";
 import { loadCapability } from "../../discovery";
 import { getExtensionNameFromPath } from "../../discovery/helpers";
@@ -481,13 +482,11 @@ export async function discoverAndLoadExtensions(
 	configuredPaths: string[],
 	cwd: string,
 	eventBus?: EventBus,
-	disabledExtensionIds: string[] = [],
+	_disabledExtensionIds: string[] = [],
 ): Promise<LoadExtensionsResult> {
 	const allPaths: string[] = [];
 	const seen = new Set<string>();
-	const disabled = new Set(disabledExtensionIds);
-
-	const isDisabledName = (name: string): boolean => disabled.has(`extension-module:${name}`);
+	const isDisabledName = (name: string): boolean => isExtensionDisabled(`extension-module:${name}`);
 
 	const addPath = (extPath: string): void => {
 		const resolved = path.resolve(extPath);

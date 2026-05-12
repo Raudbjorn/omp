@@ -4,6 +4,7 @@ import {
 	Container,
 	extractPrintableText,
 	Input,
+	isKeyRelease,
 	matchesKey,
 	Spacer,
 	Text,
@@ -678,6 +679,8 @@ class TreeList implements Component {
 	}
 
 	handleInput(keyData: string): void {
+		// Ignore key-release events to prevent focus-shift ghost input.
+		if (isKeyRelease(keyData)) return;
 		if (matchesKey(keyData, "up")) {
 			this.#selectedIndex = this.#selectedIndex === 0 ? this.#filteredNodes.length - 1 : this.#selectedIndex - 1;
 		} else if (matchesKey(keyData, "down")) {
@@ -795,6 +798,8 @@ class LabelInput implements Component {
 	}
 
 	handleInput(keyData: string): void {
+		// Ignore key-release events to prevent focus-shift ghost input.
+		if (isKeyRelease(keyData)) return;
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			const value = this.#input.getValue().trim();
 			this.onSubmit?.(this.entryId, value || undefined);
@@ -885,6 +890,8 @@ export class TreeSelectorComponent extends Container {
 	}
 
 	handleInput(keyData: string): void {
+		// Ignore key-release events to prevent focus-shift ghost input.
+		if (isKeyRelease(keyData)) return;
 		if (this.#labelInput) {
 			this.#labelInput.handleInput(keyData);
 		} else {

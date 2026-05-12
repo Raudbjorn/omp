@@ -17,6 +17,7 @@ import {
 } from "../extensibility/plugins/marketplace";
 import type { InteractiveModeContext } from "../modes/types";
 import { parseMarketplaceInstallArgs, parsePluginScopeArgs } from "./marketplace-install-parser";
+import { deletePlanFile, formatPlansList, loadPlans, readPlanContents, resolvePlanArg } from "./plans";
 
 function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
@@ -207,6 +208,14 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		},
 	},
 	{
+		name: "web_terminal",
+		description: "Start or show the local web terminal",
+		handle: async (_command, runtime) => {
+			await runtime.ctx.handleWebTerminalCommand();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "browser",
 		description: "Toggle browser headless vs visible mode",
 		subcommands: [
@@ -253,12 +262,13 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 	},
 	{
 		name: "copy",
-		description: "Copy last agent message to clipboard",
+		description: "Copy exact text from the session to clipboard",
 		subcommands: [
 			{ name: "last", description: "Copy full last agent message" },
 			{ name: "code", description: "Copy last code block" },
 			{ name: "all", description: "Copy all code blocks from last message" },
 			{ name: "cmd", description: "Copy last bash/python command" },
+			{ name: "tool", description: "Copy last text tool result" },
 		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
@@ -728,6 +738,14 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		},
 	},
 	{
+		name: "restart",
+		description: "Fully restart the session (process re-exec with --resume)",
+		handle: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.restart();
+		},
+	},
+	{
 		name: "exit",
 		description: "Exit the application",
 		handle: shutdownHandler,
@@ -1121,6 +1139,10 @@ for (const command of BUILTIN_SLASH_COMMAND_REGISTRY) {
 	for (const alias of command.aliases ?? []) {
 		BUILTIN_SLASH_COMMAND_LOOKUP.set(alias, command);
 	}
+}
+
+export function isBuiltinSlashCommandName(name: string): boolean {
+	return BUILTIN_SLASH_COMMAND_LOOKUP.has(name);
 }
 
 /** Builtin command metadata used for slash-command autocomplete and help text. */

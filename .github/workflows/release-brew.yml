@@ -1,0 +1,140 @@
+name: Release Homebrew Formula
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v14.1.2)"
+        type: string
+        required: true
+      dry_run:
+        description: "Dry run — render formula without opening PR"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish-formula:
+    # Disabled until the Homebrew tap repo (Raudbjorn/homebrew-omp) and
+    # HOMEBREW_TAP_TOKEN secret are provisioned. Flip to remove the guard.
+    if: false
+    runs-on: ubuntu-22.04
+    env:
+      FORMULA_TEMPLATE: packaging/homebrew/omp.rb.tmpl
+      TAP_REPO: Raudbjorn/homebrew-omp
+      TAP_FORMULA_PATH: Formula/omp.rb
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            tag="$RELEASE_TAG"
+          else
+            tag="$INPUT_TAG"
+          fi
+          version="${tag#v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release_url_base=https://github.com/${REPO}/releases/download/$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Download release binaries for hashing
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          mkdir -p dist
+          base="https://github.com/${REPO}/releases/download/${TAG}"
+          for asset in omp-darwin-arm64 omp-darwin-x64 omp-linux-arm64 omp-linux-x64; do
+            echo "Fetching $asset"
+            curl -fL --retry 3 -o "dist/$asset" "$base/$asset"
+          done
+
+      - name: Compute SHA256 sums
+        id: sums
+        run: |
+          cd dist
+          {
+            for asset in omp-darwin-arm64 omp-darwin-x64 omp-linux-arm64 omp-linux-x64; do
+              sha=$(sha256sum "$asset" | cut -d' ' -f1)
+              key=$(echo "$asset" | tr '[:lower:]-' '[:upper:]_')
+              echo "${key}=${sha}" >> "$GITHUB_OUTPUT"
+            done
+          }
+
+      - name: Render formula
+        id: render
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          RELEASE_URL_BASE: ${{ steps.tag.outputs.release_url_base }}
+          SHA_DARWIN_ARM64: ${{ steps.sums.outputs.OMP_DARWIN_ARM64 }}
+          SHA_DARWIN_X64: ${{ steps.sums.outputs.OMP_DARWIN_X64 }}
+          SHA_LINUX_ARM64: ${{ steps.sums.outputs.OMP_LINUX_ARM64 }}
+          SHA_LINUX_X64: ${{ steps.sums.outputs.OMP_LINUX_X64 }}
+        run: |
+          mkdir -p rendered
+          sed \
+            -e "s|{{VERSION}}|${VERSION}|g" \
+            -e "s|{{RELEASE_URL_BASE}}|${RELEASE_URL_BASE}|g" \
+            -e "s|{{SHA_DARWIN_ARM64}}|${SHA_DARWIN_ARM64}|g" \
+            -e "s|{{SHA_DARWIN_X64}}|${SHA_DARWIN_X64}|g" \
+            -e "s|{{SHA_LINUX_ARM64}}|${SHA_LINUX_ARM64}|g" \
+            -e "s|{{SHA_LINUX_X64}}|${SHA_LINUX_X64}|g" \
+            "$FORMULA_TEMPLATE" > rendered/omp.rb
+          cat rendered/omp.rb
+
+      - name: Upload rendered formula artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: omp-formula-${{ steps.tag.outputs.tag }}
+          path: rendered/omp.rb
+
+      - name: Open PR against tap repo
+        # `inputs.*` is null on `release` events and truthy-null equals true,
+        # so require an explicit workflow_dispatch + dry_run=false opt-in.
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          tmp=$(mktemp -d)
+          cd "$tmp"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git" tap
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="omp/${TAG}"
+          git checkout -B "$branch"
+          mkdir -p "$(dirname "$TAP_FORMULA_PATH")"
+          cp "$GITHUB_WORKSPACE/rendered/omp.rb" "$TAP_FORMULA_PATH"
+          git add "$TAP_FORMULA_PATH"
+          if git diff --staged --quiet; then
+            echo "Rendered formula matches tap — nothing to commit or push."
+            exit 0
+          fi
+          git commit -m "omp ${VERSION}"
+          git push -u origin "$branch" --force-with-lease
+          title="omp ${VERSION}"
+          body="Automated formula bump for \`${REPO}\` release ${TAG}."
+          existing=$(gh pr list --repo "$TAP_REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --repo "$TAP_REPO" --title "$title" --body "$body"
+          else
+            gh pr create \
+              --repo "$TAP_REPO" \
+              --title "$title" \
+              --body "$body" \
+              --head "$branch" \
+              --base main
+          fi

@@ -548,6 +548,30 @@ interface EvalRenderContext {
 	expanded?: boolean;
 	previewLines?: number;
 	timeout?: number;
+	executionStartMs?: number;
+}
+
+function decodePartialJsonStringFragment(fragment: string): string {
+	let text = fragment.replace(/\\u[0-9a-fA-F]{0,3}$/, "");
+	const trailingBackslashes = text.match(/\\+$/)?.[0].length ?? 0;
+	if (trailingBackslashes % 2 === 1) text = text.slice(0, -1);
+	try {
+		return JSON.parse(`"${text}"`) as string;
+	} catch {
+		return text;
+	}
+}
+
+function extractPartialJsonString(partialJson: string | undefined, key: string): string | undefined {
+	if (!partialJson) return undefined;
+	const pattern = new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)`, "u");
+	const match = pattern.exec(partialJson);
+	if (!match) return undefined;
+	return decodePartialJsonStringFragment(match[1]);
+}
+
+function getRenderInput(args: EvalRenderArgs | undefined): string | undefined {
+	return args?.input ?? extractPartialJsonString(args?.__partialJson, "input");
 }
 
 function decodePartialJsonStringFragment(fragment: string): string {
@@ -892,11 +916,12 @@ export const evalToolRenderer = {
 			return [header, ...treeLines];
 		});
 
-		const timeoutSeconds = options.renderContext?.timeout;
-		const timeoutLine =
-			typeof timeoutSeconds === "number"
-				? uiTheme.fg("dim", wrapBrackets(`Timeout: ${timeoutSeconds}s`, uiTheme))
-				: undefined;
+		const timeoutLine = formatTimeoutLine(
+			options.renderContext?.timeout,
+			options.renderContext?.executionStartMs,
+			options.isPartial,
+			uiTheme,
+		);
 		let warningLine: string | undefined;
 		if (details?.meta?.truncation) {
 			warningLine = formatStyledTruncationWarning(details.meta, uiTheme) ?? undefined;

@@ -190,6 +190,9 @@ export interface CustomTool<TParams extends TSchema = TSchema, TDetails = any> {
 	mcpServerName?: string;
 	/** Original MCP tool name for discovery/search metadata. */
 	mcpToolName?: string;
+	/** If true, the result component replaces the call component in the TUI rather than
+	 *  rendering below it. Use when renderResult already includes the call header. */
+	mergeCallAndResult?: boolean;
 	/**
 	 * Execute the tool.
 	 * @param toolCallId - Unique ID for this tool call

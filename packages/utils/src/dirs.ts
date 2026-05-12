@@ -16,7 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { engines, version } from "../package.json" with { type: "json" };
 
-/** App name (e.g. "omp") */
+/** App name */
 export const APP_NAME: string = "omp";
 
 /** Config directory name (e.g. ".omp") */
@@ -230,6 +230,11 @@ export function getProjectAgentDir(cwd: string = getProjectDir()): string {
 /** Get the reports directory (~/.omp/reports). */
 export function getReportsDir(): string {
 	return dirs.rootSubdir("reports", "state");
+}
+
+/** Get the saved plans directory (~/.omp/plans). */
+export function getPlansDir(): string {
+	return dirs.rootSubdir("plans", "data");
 }
 
 /** Get the logs directory (~/.omp/logs). */

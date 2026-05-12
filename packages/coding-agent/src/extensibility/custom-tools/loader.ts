@@ -8,6 +8,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
 import * as typebox from "@sinclair/typebox";
+import { isExtensionDisabled } from "../../capability";
 import { toolCapability } from "../../capability/tool";
 import { type CustomTool, loadCapability } from "../../discovery";
 import type { ExecOptions } from "../../exec/exec";
@@ -222,6 +223,7 @@ export async function discoverAndLoadCustomTools(
 	// 1. Discover tools via capability system (user + project from all providers)
 	const discoveredTools = await loadCapability<CustomTool>(toolCapability.id, { cwd });
 	for (const tool of discoveredTools.items) {
+		if (isExtensionDisabled(`tool:${tool.name}`)) continue;
 		addPath(tool.path, {
 			provider: tool._source.provider,
 			providerName: tool._source.providerName,
