@@ -53,10 +53,10 @@ export default function (pi: ExtensionAPI) {
 		const loopDetection = detectToolLoop(loopHistory);
 		if (loopDetection.isLoop && _loopCount < _MAX_INTERVENTIONS) {
 			_loopCount++;
-			if (/ESCALANDO/i.test(assistantText)) return;
+			if (/\b(ESCALATING|ESCALANDO)\b/i.test(assistantText)) return;
 			const strategies = [
-				"[SISTEMA: Estas repitiendo la misma herramienta. Cambia de estrategia IMMEDIATAMENTE. Prueba otro enfoque completamente diferente.]",
-				"[SISTEMA: Sigue en loop. Es tu ULTIMA oportunidad de auto-correccion. Si no puedes resolverlo, di ESCALANDO y explica el problema.]",
+				"[SYSTEM: You are repeating the same tool. Change your strategy IMMEDIATELY. Try a completely different approach.]",
+				"[SYSTEM: You are still in a loop. This is your LAST chance for self-correction. If you cannot resolve it, say ESCALATING and explain the problem.]",
 			];
 			pi.sendMessage(
 				{
@@ -79,10 +79,10 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const isVerified = /\bVERIFICADO\b/.test(assistantText);
-		const isNoVerified = /\bNO_VERIFICADO\b/.test(assistantText);
+		const isVerified = /\b(VERIFIED|VERIFICADO)\b/.test(assistantText);
+		const isNoVerified = /\b(NOT_VERIFIED|NO_VERIFICADO)\b/.test(assistantText);
 
-		// Explicit VERIFICADO — but where's the evidence?
+		// Explicit VERIFIED — but where's the evidence?
 		if (isVerified) {
 			pi.sendMessage(
 				{
@@ -90,7 +90,7 @@ export default function (pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: "[SISTEMA: Declaraste VERIFICADO pero no hay evidencia de verificacion (output de test/diff/build). Ejecuta el comando correspondiente y muestra el output REAL.]",
+							text: "[SYSTEM: You declared VERIFIED but there is no verification evidence (test/diff/build output). Run the corresponding command and show the REAL output.]",
 						},
 					],
 					display: "none",
@@ -100,9 +100,9 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		// Honest NO_VERIFICADO — let it pass but keep flag active
+		// Honest NOT_VERIFIED — let it pass but keep flag active
 		if (isNoVerified) {
-			pi.logger.debug("Verification Gate: NO_VERIFICADO declared. Flag remains active.");
+			pi.logger.debug("Verification Gate: NOT_VERIFIED declared. Flag remains active.");
 			return;
 		}
 
@@ -118,7 +118,7 @@ export default function (pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: "[SISTEMA: Modificaste archivos y declaraste completado sin verificacion real. Ejecuta bun test / bun check / git diff y muestra el output REAL, o declara NO_VERIFICADO si no verificaste.]",
+							text: "[SYSTEM: You modified files and declared completion without real verification. Run bun test / bun check / git diff and show the REAL output, or declare NOT_VERIFIED if you did not verify.]",
 						},
 					],
 					display: "none",

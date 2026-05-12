@@ -48,12 +48,12 @@ export function getSessionStats(
 		if (message.role === "assistant") {
 			const assistantMsg = message as AssistantMessage;
 			toolCalls += assistantMsg.content.filter(c => c.type === "toolCall").length;
-			totalInput += assistantMsg.usage.input;
-			totalOutput += assistantMsg.usage.output;
-			totalCacheRead += assistantMsg.usage.cacheRead;
-			totalCacheWrite += assistantMsg.usage.cacheWrite;
-			totalPremiumRequests += assistantMsg.usage.premiumRequests ?? 0;
-			totalCost += assistantMsg.usage.cost.total;
+			totalInput += assistantMsg.usage?.input ?? 0;
+			totalOutput += assistantMsg.usage?.output ?? 0;
+			totalCacheRead += assistantMsg.usage?.cacheRead ?? 0;
+			totalCacheWrite += assistantMsg.usage?.cacheWrite ?? 0;
+			totalPremiumRequests += assistantMsg.usage?.premiumRequests ?? 0;
+			totalCost += assistantMsg.usage?.cost?.total ?? 0;
 		}
 
 		if (message.role === "toolResult" && message.toolName === "task") {

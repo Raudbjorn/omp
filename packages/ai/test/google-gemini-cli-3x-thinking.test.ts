@@ -3,7 +3,6 @@ import { Effort } from "@oh-my-pi/pi-ai";
 import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
 import { hookFetch } from "@oh-my-pi/pi-utils";
 import { getBundledModel } from "../src/models";
-import { enrichModelThinking } from "../src/model-thinking";
 import { streamSimple } from "../src/stream";
 import type { Context, Model } from "../src/types";
 

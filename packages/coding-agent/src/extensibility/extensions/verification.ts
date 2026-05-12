@@ -32,8 +32,6 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// Anti-Loop & Verification Gate (Post-turn check)
-	// Anti-Loop & Verification Gate (Post-turn check)
-
 	pi.on("turn_end", async (event, _ctx: ExtensionContext) => {
 		const { message } = event;
 
@@ -41,16 +39,9 @@ export default function (pi: ExtensionAPI) {
 
 		const assistantText =
 			message.content
-
 				?.filter(c => c.type === "text")
-
 				.map(c => (c as { text: string }).text)
-
 				.join("") ?? "";
-		message.content
-			?.filter(c => c.type === "text")
-			.map(c => (c as { text: string }).text)
-			.join("") ?? "";
 
 		// Skip if no files were mutated this turn
 		if (mutatedFiles.size === 0) {
@@ -62,8 +53,8 @@ export default function (pi: ExtensionAPI) {
 		const hasEvidence = hasVerificationEvidence(assistantText);
 
 		// Check for explicit verification declarations
-		const isVerified = /\bVERIFICADO\b/.test(assistantText);
-		const isNoVerified = /\bNO_VERIFICADO\b/.test(assistantText);
+		const isVerified = /\b(VERIFIED|VERIFICADO)\b/.test(assistantText);
+		const isNoVerified = /\b(NOT_VERIFIED|NO_VERIFICADO)\b/.test(assistantText);
 
 		// Handle explicit declarations
 		if (isVerified) {
@@ -74,7 +65,7 @@ export default function (pi: ExtensionAPI) {
 						content: [
 							{
 								type: "text",
-								text: "[SISTEMA: Declaraste VERIFICADO pero no hay evidencia de verificacion. Ejecuta bun test o bun check y muestra el output REAL.]",
+								text: "[SYSTEM: You declared VERIFIED but there is no verification evidence. Run bun test or bun check and show the REAL output.]",
 							},
 						],
 						display: "none",
@@ -85,9 +76,9 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
-		// Honest NO_VERIFICADO — let it pass but reset tracking
+		// Honest NOT_VERIFIED — let it pass but reset tracking
 		if (isNoVerified) {
-			pi.logger.debug("Verification: NO_VERIFICADO declared. Resetting mutation tracking.");
+			pi.logger.debug("Verification: NOT_VERIFIED declared. Resetting mutation tracking.");
 			mutatedFiles.clear();
 			_verificationPending = false;
 			return;
@@ -107,7 +98,7 @@ export default function (pi: ExtensionAPI) {
 						content: [
 							{
 								type: "text",
-								text: `[SISTEMA: Modificaste ${mutatedFiles.size} archivo(s) y declaraste completado sin verificacion real. Ejecuta uno de estos comandos y muestra el output: ${getVerificationSuggestion()}, o declara NO_VERIFICADO si no verificaste.]`,
+								text: `[SYSTEM: You modified ${mutatedFiles.size} file(s) and declared completion without real verification. Run one of these commands and show the output: ${getVerificationSuggestion()}, or declare NOT_VERIFIED if you did not verify.]`,
 							},
 						],
 						display: "none",
