@@ -15,7 +15,6 @@ import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi
 import { formatDuration, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { reset as resetCapabilities } from "../../capability";
-import { settings } from "../../config/settings";
 import { buildUsageAccountOrder, resolveUsageAccountKey } from "../../danger-pi/usage-account-order";
 import { clearClaudePluginRootsCache } from "../../discovery/helpers";
 import { getGatewayStatus } from "../../eval/py/gateway-coordinator";
@@ -344,16 +343,6 @@ export class CommandController {
 		return codeBlocks.length > 0 ? codeBlocks.join("\n\n") : undefined;
 	}
 
-	#copyLastToolResult() {
-		const result = findLastTextToolResultForCopy(this.ctx.session.messages);
-		if (!result) {
-			this.ctx.showWarning("No text tool result found in the conversation.");
-			return;
-		}
-
-		this.#doCopy(result.text, `Copied last ${result.toolName} result to clipboard`);
-	}
-
 	#copyLastCommand() {
 		const messages = this.ctx.session.messages;
 		// Walk backwards to find the last bash/eval tool call
@@ -377,16 +366,6 @@ export class CommandController {
 			}
 		}
 		this.ctx.showWarning("No bash or eval command found in the conversation.");
-	}
-
-	#getLastAssistantText(): string | undefined {
-		const message = this.ctx.findLastAssistantMessage();
-		const text = message ? this.ctx.extractAssistantText(message) : undefined;
-		if (!text) {
-			this.ctx.showError("No agent messages to copy yet.");
-			return undefined;
-		}
-		return text;
 	}
 
 	#doCopy(content: string, label: string) {

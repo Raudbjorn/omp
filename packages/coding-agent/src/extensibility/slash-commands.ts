@@ -1,10 +1,13 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
-import { parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
-import { isExtensionDisabled } from "../capability";
-import { slashCommandCapability } from "../capability/slash-command";
-import { appendInlineArgsFallback, templateUsesInlineArgPlaceholders } from "../config/prompt-templates";
-import type { SlashCommand } from "../discovery";
+import { parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { isPromptChainSlashCommand, type SlashCommand, slashCommandCapability } from "../capability/slash-command";
+import {
+	appendInlineArgsFallback,
+	renderPromptTemplate,
+	templateUsesInlineArgPlaceholders,
+} from "../config/prompt-templates";
+import type { PromptChainExecutor, PromptChainStreamingBehavior } from "../danger-pi/command-chain-files/runtime";
 import { loadCapability } from "../discovery";
 import {
 	BUILTIN_SLASH_COMMAND_DEFS,
@@ -191,30 +194,10 @@ function materializeCapabilityCommand(command: SlashCommand): FileSlashCommand {
 export async function loadSlashCommandSet(options: LoadSlashCommandsOptions = {}): Promise<LoadSlashCommandSetResult> {
 	const result = await loadCapability<SlashCommand>(slashCommandCapability.id, { cwd: options.cwd });
 
-	const fileCommands: FileSlashCommand[] = result.items
-		.filter(cmd => !isExtensionDisabled(`slash-command:${cmd.name}`))
-		.map(cmd => {
-			const { description, body } = parseCommandTemplate(cmd.content, {
-				source: cmd.path ?? `slash-command:${cmd.name}`,
-				level: cmd.level === "native" ? "fatal" : "warn",
-			});
-
-			// Format source label: "via ProviderName Level"
-			const capitalizedLevel = cmd.level.charAt(0).toUpperCase() + cmd.level.slice(1);
-			const sourceStr = `via ${cmd._source.providerName} ${capitalizedLevel}`;
-
-			return {
-				name: cmd.name,
-				description,
-				content: body,
-				source: sourceStr,
-				_source: { providerName: cmd._source.providerName, level: cmd.level },
-			};
-		});
-
-	const seenNames = new Set(fileCommands.map(cmd => cmd.name));
-	for (const cmd of EMBEDDED_SLASH_COMMANDS) {
-		const name = cmd.name.replace(/\.md$/, "");
+	const commands: FileSlashCommand[] = result.items.map(materializeCapabilityCommand);
+	const seenNames = new Set(commands.map(command => command.name));
+	for (const command of EMBEDDED_SLASH_COMMANDS) {
+		const name = command.name.replace(/\.md$/, "");
 		if (seenNames.has(name)) continue;
 
 		const { description, body } = parseCommandTemplate(command.content, {

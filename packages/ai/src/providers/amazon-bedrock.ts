@@ -259,7 +259,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			}
 
 			if (output.stopReason === "error" || output.stopReason === "aborted") {
-				throw new Error("An unknown error occurred");
+				throw new Error(output.errorMessage ?? "An unknown error occurred");
 			}
 
 			output.duration = Date.now() - startTime;
@@ -464,13 +464,14 @@ function supportsThinkingSignature(model: Model<"bedrock-converse-stream">): boo
 }
 
 function buildSystemPrompt(
-	systemPrompt: string | undefined,
+	systemPrompt: readonly string[] | undefined,
 	model: Model<"bedrock-converse-stream">,
 	cacheRetention: CacheRetention,
 ): SystemContentBlock[] | undefined {
-	if (!systemPrompt) return undefined;
+	const prompts = systemPrompt?.map(prompt => prompt.toWellFormed()).filter(prompt => prompt.length > 0) ?? [];
+	if (prompts.length === 0) return undefined;
 
-	const blocks: SystemContentBlock[] = [{ text: systemPrompt.toWellFormed() }];
+	const blocks: SystemContentBlock[] = prompts.map(prompt => ({ text: prompt }));
 
 	// Add cache point for supported Claude models
 	if (cacheRetention !== "none" && supportsPromptCaching(model)) {

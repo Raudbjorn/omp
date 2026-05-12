@@ -4,16 +4,11 @@ import * as native from "@oh-my-pi/pi-natives";
 
 const hasDisplay = process.platform !== "linux" || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 
-const CLIPBOARD_READ_TIMEOUT_MS = 5_000;
-const CLIPBOARD_READ_MAX_BYTES = 1_048_576;
-
 async function readClipboardCommand(command: string[]): Promise<string | null> {
 	try {
 		const child = Bun.spawn(command, {
 			stdout: "pipe",
-			stderr: "ignore",
-			timeout: CLIPBOARD_READ_TIMEOUT_MS,
-			maxBuffer: CLIPBOARD_READ_MAX_BYTES,
+			stderr: "pipe",
 		});
 		const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
 		if (exitCode !== 0) {

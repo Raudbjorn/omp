@@ -12,18 +12,22 @@ export interface TimedMessageLike {
 
 export function formatAssistantUsageMetadata(usage: Usage, elapsedMs?: number): string {
 	const totalInput = usage.input + usage.cacheWrite;
+	const zeroCacheRead = usage.cacheRead === 0;
 	const parts = [
 		theme.fg("dim", `${theme.icon.input} ${formatNumber(totalInput)}`),
 		theme.fg("dim", `${theme.icon.output} ${formatNumber(usage.output)}`),
-	];
-	if (typeof elapsedMs === "number" && elapsedMs >= 0) {
-		parts.push(theme.fg("dim", `${theme.icon.time} ${formatDuration(elapsedMs)}`));
-	}
-	parts.push(
-		usage.cacheRead === 0
+		zeroCacheRead
 			? `${theme.fg("dim", CACHE_USAGE_ICON)} ${theme.bold(theme.fg("error", "0"))}`
 			: theme.fg("dim", `${CACHE_USAGE_ICON} ${formatNumber(usage.cacheRead)}`),
-	);
+	];
+	if (typeof elapsedMs === "number" && elapsedMs >= 0) {
+		const duration = formatDuration(elapsedMs);
+		parts.push(
+			zeroCacheRead
+				? `${theme.fg("dim", theme.icon.time)} ${theme.fg("error", duration)}`
+				: theme.fg("dim", `${theme.icon.time} ${duration}`),
+		);
+	}
 	return parts.join("  ");
 }
 

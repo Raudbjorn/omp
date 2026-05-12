@@ -1,5 +1,11 @@
 #!/usr/bin/env bun
-import { APP_NAME, MIN_BUN_VERSION, VERSION } from "@oh-my-pi/pi-utils";
+import { APP_NAME, MIN_BUN_VERSION, procmgr, VERSION } from "@oh-my-pi/pi-utils";
+
+// Strip macOS malloc-stack-logging env vars before any subprocess is spawned.
+// Otherwise every child bun process (subagents, plugin installs, ptree spawns,
+// etc.) prints a `MallocStackLogging: can't turn off …` warning to stderr.
+procmgr.scrubProcessEnv();
+
 /**
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
@@ -53,6 +59,7 @@ const commands: CommandEntry[] = [
 	{ name: "plugin", load: () => import("./commands/plugin").then(m => m.default) },
 	{ name: "setup", load: () => import("./commands/setup").then(m => m.default) },
 	{ name: "shell", load: () => import("./commands/shell").then(m => m.default) },
+	{ name: "read", load: () => import("./commands/read").then(m => m.default) },
 	{ name: "ssh", load: () => import("./commands/ssh").then(m => m.default) },
 	{ name: "stats", load: () => import("./commands/stats").then(m => m.default) },
 	{ name: "update", load: () => import("./commands/update").then(m => m.default) },

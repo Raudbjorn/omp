@@ -148,6 +148,8 @@ export interface EditRenderContext {
 	editDiffPreview?: DiffResult | DiffError;
 	/** Multi-file streaming diff preview (edits spanning several files) */
 	perFileDiffPreview?: PerFileDiffPreview[];
+	/** Raw in-flight edit text shown while a computed diff preview is unavailable */
+	editStreamingFallback?: string;
 	/** Function to render diff text with syntax highlighting */
 	renderDiff?: (diffText: string, options?: { filePath?: string }) => string;
 }
@@ -251,11 +253,12 @@ function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, labe
 	const displayLines = lines.slice(-EDIT_STREAMING_PREVIEW_LINES);
 	const hidden = total - displayLines.length;
 	let text = "\n\n";
-	if (hidden > 0) {
-		text += uiTheme.fg("dim", `… (${hidden} earlier lines)\n`);
-	}
 	text += renderDiffColored(displayLines.join("\n"), { filePath: rawPath });
-	text += uiTheme.fg("dim", `\n… (${label})`);
+	if (hidden > 0) {
+		text += uiTheme.fg("dim", `\n… (${label} +${hidden} lines)`);
+	} else {
+		text += uiTheme.fg("dim", `\n(${label})`);
+	}
 	return text;
 }
 
@@ -304,6 +307,9 @@ function getCallPreview(
 	}
 	if (args.newText || args.patch) {
 		return renderPlainTextPreview(args.newText ?? args.patch ?? "", uiTheme, rawPath);
+	}
+	if (renderContext?.editStreamingFallback) {
+		return renderContext.editStreamingFallback;
 	}
 	return "";
 }

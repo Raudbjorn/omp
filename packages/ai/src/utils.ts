@@ -5,6 +5,11 @@ import type { CacheRetention, OpenAIResponsesHistoryPayload, ProviderPayload } f
 type OpenAIResponsesReplayItem = ResponseInput[number];
 
 export { isRecord } from "@oh-my-pi/pi-utils";
+export function normalizeSystemPrompts(systemPrompt: readonly string[] | string | undefined | null): string[] {
+	if (systemPrompt === undefined || systemPrompt === null) return [];
+	const prompts = Array.isArray(systemPrompt) ? systemPrompt : typeof systemPrompt === "string" ? [systemPrompt] : [];
+	return prompts.map(prompt => prompt.toWellFormed()).filter(prompt => prompt.length > 0);
+}
 
 export function toNumber(value: unknown): number | undefined {
 	if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -31,16 +36,21 @@ export function normalizeToolCallId(id: string): string {
 	return sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
 }
 
-export function normalizeResponsesToolCallId(id: string): { callId: string; itemId: string } {
+type ResponsesToolItemIdPrefix = "fc" | "ctc";
+
+export function normalizeResponsesToolCallId(
+	id: string,
+	itemPrefix: ResponsesToolItemIdPrefix = "fc",
+): { callId: string; itemId: string } {
 	const [callId, itemId] = id.split("|");
 	if (callId && itemId) {
 		const normalizedCallId = truncateResponseItemId(callId, getIdPrefix(callId, "call"));
-		const normalizedItemId = normalizeResponsesItemId(itemId);
+		const normalizedItemId = normalizeResponsesItemId(itemId, itemPrefix);
 		return { callId: normalizedCallId, itemId: normalizedItemId };
 	}
 	const hash = Bun.hash(id).toString(36);
 	const normalizedCallId = id.startsWith("call_") ? truncateResponseItemId(id, "call") : `call_${hash}`;
-	return { callId: normalizedCallId, itemId: `fc_${hash}` };
+	return { callId: normalizedCallId, itemId: `${itemPrefix}_${hash}` };
 }
 
 function getIdPrefix(id: string, fallback: string): string {
@@ -48,10 +58,19 @@ function getIdPrefix(id: string, fallback: string): string {
 	return prefix || fallback;
 }
 
-function normalizeResponsesItemId(itemId: string): string {
-	const prefix = getIdPrefix(itemId, "fc");
-	if (prefix !== "fc" && prefix !== "fcr") {
-		return `fc_${Bun.hash(itemId).toString(36)}`;
+function getExplicitIdPrefix(id: string): string | undefined {
+	return id.match(/^([a-zA-Z][a-zA-Z0-9]*)_/)?.[1];
+}
+
+function normalizeResponsesItemId(itemId: string, fallbackPrefix: ResponsesToolItemIdPrefix): string {
+	const prefix = getExplicitIdPrefix(itemId);
+	const isAllowedPrefix = prefix
+		? fallbackPrefix === "ctc"
+			? prefix === "ctc"
+			: prefix === "fc" || prefix === "fcr"
+		: false;
+	if (!prefix || !isAllowedPrefix) {
+		return `${fallbackPrefix}_${Bun.hash(itemId).toString(36)}`;
 	}
 	return truncateResponseItemId(itemId, prefix);
 }

@@ -8,7 +8,7 @@ import type {
 	MessageParam,
 	RawMessageStreamEvent,
 } from "@anthropic-ai/sdk/resources/messages";
-import { $env, abortableSleep, isEnoent } from "@oh-my-pi/pi-utils";
+import { $env, abortableSleep, isEnoent, readSseEvents } from "@oh-my-pi/pi-utils";
 import { hasOpus47ApiRestrictions, mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
@@ -33,28 +33,36 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "../types";
-import { isAnthropicOAuthToken, isRecord, normalizeToolCallId, resolveCacheRetention } from "../utils";
+import {
+	isAnthropicOAuthToken,
+	isRecord,
+	normalizeSystemPrompts,
+	normalizeToolCallId,
+	resolveCacheRetention,
+} from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
-import {
-	createWatchdog,
-	getAnthropicStreamIdleTimeoutMs,
-	getStreamFirstEventTimeoutMs,
-	iterateWithIdleTimeout,
-} from "../utils/idle-iterator";
+import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
-import { extractHttpStatusFromError, isCopilotRetryableError, isUnexpectedSocketCloseMessage } from "../utils/retry";
+import {
+	extractHttpStatusFromError,
+	isCopilotRetryableError,
+	isRetryableError,
+	isUnexpectedSocketCloseMessage,
+} from "../utils/retry";
 import { COMBINATOR_KEYS, NO_STRICT } from "../utils/schema";
+import { notifyRawSseEvent, wrapFetchForSseDebug } from "../utils/sse-debug";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
 	resolveGitHubCopilotBaseUrl,
 } from "./github-copilot-headers";
 import { transformMessages } from "./transform-messages";
+import { NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
 
 export type AnthropicHeaderOptions = {
 	apiKey: string;
@@ -360,6 +368,26 @@ export function isClaudeCloakingUserId(userId: string): boolean {
 	return CLAUDE_CLOAKING_USER_ID_REGEX.test(userId);
 }
 
+/**
+ * Real Claude Code sends `metadata.user_id` as a JSON-stringified object of the
+ * shape `{ device_id, account_uuid, session_id, ...extra }` (see
+ * services/api/claude.ts → getAPIMetadata). Accept that shape so callers that
+ * supply a stable `session_id` aren't silently overwritten with fresh entropy
+ * on every request, which would inflate the backend session count.
+ */
+function isClaudeJsonUserId(userId: string): boolean {
+	if (userId.length === 0 || userId[0] !== "{") return false;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(userId);
+	} catch {
+		return false;
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+	const obj = parsed as Record<string, unknown>;
+	return typeof obj.session_id === "string" && obj.session_id.length > 0;
+}
+
 export function generateClaudeCloakingUserId(): string {
 	const userHash = nodeCrypto.randomBytes(32).toString("hex");
 	const accountId = nodeCrypto.randomUUID().toLowerCase();
@@ -369,7 +397,7 @@ export function generateClaudeCloakingUserId(): string {
 
 function resolveAnthropicMetadataUserId(userId: unknown, isOAuthToken: boolean): string | undefined {
 	if (typeof userId === "string") {
-		if (!isOAuthToken || isClaudeCloakingUserId(userId)) {
+		if (!isOAuthToken || isClaudeCloakingUserId(userId) || isClaudeJsonUserId(userId)) {
 			return userId;
 		}
 	}
@@ -396,7 +424,10 @@ export const stripClaudeToolPrefix = (name: string, prefixOverride: string = cla
 /**
  * Convert content blocks to Anthropic API format
  */
-function convertContentBlocks(content: (TextContent | ImageContent)[]):
+function convertContentBlocks(
+	content: (TextContent | ImageContent)[],
+	supportsImages = true,
+):
 	| string
 	| Array<
 			| { type: "text"; text: string }
@@ -409,36 +440,35 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 					};
 			  }
 	  > {
-	// If only text blocks, return as concatenated string for simplicity
-	const hasImages = content.some(c => c.type === "image");
-	if (!hasImages) {
-		return content
-			.map(c => (c as TextContent).text)
-			.join("\n")
-			.toWellFormed();
+	const textBlocks = content
+		.filter((block): block is TextContent => block.type === "text")
+		.map(block => block.text.toWellFormed())
+		.filter(text => text.trim().length > 0);
+	const imageBlocks = content.filter((block): block is ImageContent => block.type === "image");
+	const omittedImages = !supportsImages && imageBlocks.length > 0;
+	if (imageBlocks.length === 0 || !supportsImages) {
+		if (omittedImages) {
+			textBlocks.push(NON_VISION_IMAGE_PLACEHOLDER);
+		}
+		return textBlocks.join("\n").toWellFormed();
 	}
 
-	// If we have images, convert to content block array
-	const blocks = content.map(block => {
-		if (block.type === "text") {
-			return {
-				type: "text" as const,
-				text: block.text.toWellFormed(),
-			};
-		}
-		return {
+	const blocks = [
+		...textBlocks.map(text => ({
+			type: "text" as const,
+			text,
+		})),
+		...imageBlocks.map(block => ({
 			type: "image" as const,
 			source: {
 				type: "base64" as const,
 				media_type: block.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
 				data: block.data,
 			},
-		};
-	});
+		})),
+	];
 
-	// If only images (no text), add placeholder text block
-	const hasText = blocks.some(b => b.type === "text");
-	if (!hasText) {
+	if (!textBlocks.length) {
 		blocks.unshift({
 			type: "text" as const,
 			text: "(see attached image)",
@@ -507,6 +537,7 @@ export type AnthropicClientOptionsArgs = {
 	dynamicHeaders?: Record<string, string>;
 	isOAuth?: boolean;
 	hasTools?: boolean;
+	onSseEvent?: AnthropicOptions["onSseEvent"];
 };
 
 export type AnthropicClientOptionsResult = {
@@ -518,6 +549,7 @@ export type AnthropicClientOptionsResult = {
 	dangerouslyAllowBrowser: boolean;
 	defaultHeaders: Record<string, string>;
 	logLevel: AnthropicSdkClientOptions["logLevel"];
+	fetch?: AnthropicSdkClientOptions["fetch"];
 	fetchOptions?: AnthropicSdkClientOptions["fetchOptions"];
 };
 
@@ -657,18 +689,6 @@ function mergeHeaders(...headerSources: (Record<string, string> | undefined)[]):
 // We surface the resulting provider error ourselves, so keep the SDK quiet.
 const ANTHROPIC_SDK_LOG_LEVEL = "off" as const;
 
-interface ServerSentEvent {
-	event: string | null;
-	data: string;
-	raw: string[];
-}
-
-interface SseDecoderState {
-	event: string | null;
-	data: string[];
-	raw: string[];
-}
-
 const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
 	"message_start",
 	"message_delta",
@@ -678,139 +698,10 @@ const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
 	"content_block_stop",
 ]);
 
-function flushSseEvent(state: SseDecoderState): ServerSentEvent | null {
-	if (!state.event && state.data.length === 0) {
-		return null;
-	}
-
-	const event: ServerSentEvent = {
-		event: state.event,
-		data: state.data.join("\n"),
-		raw: [...state.raw],
-	};
-	state.event = null;
-	state.data = [];
-	state.raw = [];
-	return event;
-}
-
-function decodeSseLine(line: string, state: SseDecoderState): ServerSentEvent | null {
-	if (line === "") {
-		return flushSseEvent(state);
-	}
-
-	state.raw.push(line);
-	if (line.startsWith(":")) {
-		return null;
-	}
-
-	const delimiterIndex = line.indexOf(":");
-	const fieldName = delimiterIndex === -1 ? line : line.slice(0, delimiterIndex);
-	let value = delimiterIndex === -1 ? "" : line.slice(delimiterIndex + 1);
-	if (value.startsWith(" ")) {
-		value = value.slice(1);
-	}
-
-	if (fieldName === "event") {
-		state.event = value;
-	} else if (fieldName === "data") {
-		state.data.push(value);
-	}
-
-	return null;
-}
-
-function nextLineBreakIndex(text: string): number {
-	const carriageReturnIndex = text.indexOf("\r");
-	const newlineIndex = text.indexOf("\n");
-	if (carriageReturnIndex === -1) {
-		return newlineIndex;
-	}
-	if (newlineIndex === -1) {
-		return carriageReturnIndex;
-	}
-	return Math.min(carriageReturnIndex, newlineIndex);
-}
-
-function consumeLine(text: string): { line: string; rest: string } | null {
-	const lineBreakIndex = nextLineBreakIndex(text);
-	if (lineBreakIndex === -1) {
-		return null;
-	}
-
-	let nextIndex = lineBreakIndex + 1;
-	if (text[lineBreakIndex] === "\r" && text[nextIndex] === "\n") {
-		nextIndex += 1;
-	}
-
-	return {
-		line: text.slice(0, lineBreakIndex),
-		rest: text.slice(nextIndex),
-	};
-}
-
-async function* iterateSseMessages(
-	body: ReadableStream<Uint8Array>,
-	signal?: AbortSignal,
-): AsyncGenerator<ServerSentEvent> {
-	const reader = body.getReader();
-	const decoder = new TextDecoder();
-	const state: SseDecoderState = { event: null, data: [], raw: [] };
-	let buffer = "";
-
-	try {
-		while (true) {
-			if (signal?.aborted) {
-				throw new Error("Request was aborted");
-			}
-
-			const { value, done } = await reader.read();
-			if (done) {
-				break;
-			}
-
-			buffer += decoder.decode(value, { stream: true });
-			let consumed = consumeLine(buffer);
-			while (consumed) {
-				buffer = consumed.rest;
-				const event = decodeSseLine(consumed.line, state);
-				if (event) {
-					yield event;
-				}
-				consumed = consumeLine(buffer);
-			}
-		}
-
-		buffer += decoder.decode();
-		let consumed = consumeLine(buffer);
-		while (consumed) {
-			buffer = consumed.rest;
-			const event = decodeSseLine(consumed.line, state);
-			if (event) {
-				yield event;
-			}
-			consumed = consumeLine(buffer);
-		}
-
-		if (buffer.length > 0) {
-			const event = decodeSseLine(buffer, state);
-			if (event) {
-				yield event;
-			}
-		}
-
-		const trailingEvent = flushSseEvent(state);
-		if (trailingEvent) {
-			yield trailingEvent;
-		}
-	} finally {
-		reader.releaseLock();
-	}
-}
-
 async function* iterateAnthropicEvents(
 	response: Response,
 	signal?: AbortSignal,
+	onSseEvent?: AnthropicOptions["onSseEvent"],
 ): AsyncGenerator<RawMessageStreamEvent> {
 	if (!response.body) {
 		throw new Error("Attempted to iterate over an Anthropic response with no body");
@@ -819,7 +710,8 @@ async function* iterateAnthropicEvents(
 	let sawMessageStart = false;
 	let sawMessageEnd = false;
 
-	for await (const sse of iterateSseMessages(response.body, signal)) {
+	for await (const sse of readSseEvents(response.body, signal)) {
+		notifyRawSseEvent(onSseEvent, sse);
 		if (sse.event === "error") {
 			throw new Error(sse.data);
 		}
@@ -872,11 +764,12 @@ function hasAnthropicStreamWithResponseRequest(request: unknown): request is Ant
 async function getAnthropicStreamResponse(
 	request: unknown,
 	signal?: AbortSignal,
+	onSseEvent?: AnthropicOptions["onSseEvent"],
 ): Promise<{ events: AsyncIterable<RawMessageStreamEvent>; response: Response; requestId: string | null }> {
 	if (hasAnthropicRawResponseRequest(request)) {
 		const response = await request.asResponse();
 		return {
-			events: iterateAnthropicEvents(response, signal),
+			events: iterateAnthropicEvents(response, signal, onSseEvent),
 			response,
 			requestId: response.headers.get("request-id"),
 		};
@@ -953,14 +846,17 @@ export function isProviderRetryableError(error: unknown, provider?: string): boo
 	if (!(error instanceof Error)) return false;
 	if (provider === "github-copilot" && isCopilotRetryableError(error)) return true;
 	const msg = error.message.toLowerCase();
-	return (
+	if (
 		isUnexpectedSocketCloseMessage(msg) ||
 		/rate.?limit|too many requests|overloaded|service.?unavailable|internal_error|stream error.*received from peer|1302|timed?\s*out while waiting for the first event|timeout waiting for first/i.test(
 			msg,
 		) ||
 		isTransientStreamParseError(error) ||
 		isProviderRetryableStreamEnvelopeError(error)
-	);
+	) {
+		return true;
+	}
+	return isRetryableError(error);
 }
 
 function createEmptyUsage(premiumRequests?: number): Usage {
@@ -1065,6 +961,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					dynamicHeaders: copilotDynamicHeaders?.headers,
 					isOAuth: options?.isOAuth,
 					hasTools: !!context.tools?.length,
+					onSseEvent: options?.onSseEvent,
 				});
 				client = created.client;
 				isOAuthToken = created.isOAuthToken;
@@ -1104,7 +1001,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				| (ToolCall & { partialJson: string })
 			) & { index: number };
 			const blocks = output.content as Block[];
-			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs();
+			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getStreamIdleTimeoutMs();
+			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
 			stream.push({ type: "start", partial: output });
 			// Retry loop for transient errors from the stream.
 			// Provider-level transport/rate-limit failures: only before any streamed content starts.
@@ -1115,6 +1013,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				const firstEventTimeoutAbortError = new Error(
 					"Anthropic stream timed out while waiting for the first event",
 				);
+				const idleTimeoutAbortError = new Error("Anthropic stream stalled while waiting for the next event");
 				const { requestSignal } = activeAbortTracker;
 				const anthropicRequest = client.messages.create({ ...params, stream: true }, { signal: requestSignal });
 				let streamedReplayUnsafeContent = false;
@@ -1124,22 +1023,24 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						events: anthropicStream,
 						response,
 						requestId,
-					} = await getAnthropicStreamResponse(anthropicRequest, requestSignal);
-					await notifyProviderResponse(options, response, model, requestId);
-					const firstEventWatchdog = createWatchdog(firstEventTimeoutMs, () =>
-						activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
+					} = await getAnthropicStreamResponse(
+						anthropicRequest,
+						requestSignal,
+						options?.client ? event => options?.onSseEvent?.(event, model) : undefined,
 					);
-					const idleTimeoutAbortError = new Error("Anthropic stream idle timeout");
+					await notifyProviderResponse(options, response, model, requestId);
 					let sawEvent = false;
 					let sawMessageStart = false;
 					let sawTerminalEnvelope = false;
 
 					for await (const event of iterateWithIdleTimeout(anthropicStream, {
-						watchdog: firstEventWatchdog,
-						firstItemTimeoutMs: 0,
-						idleTimeoutMs: getAnthropicStreamIdleTimeoutMs(),
-						errorMessage: "Anthropic stream idle timeout — no SSE event received between events",
+						idleTimeoutMs,
+						firstItemTimeoutMs: firstEventTimeoutMs,
+						errorMessage: idleTimeoutAbortError.message,
+						firstItemErrorMessage: firstEventTimeoutAbortError.message,
 						onIdle: () => activeAbortTracker.abortLocally(idleTimeoutAbortError),
+						onFirstItemTimeout: () => activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
+						abortSignal: options?.signal,
 					})) {
 						sawEvent = true;
 
@@ -1302,6 +1203,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								output.stopReason = mapStopReason(event.delta.stop_reason);
 								sawTerminalEnvelope = true;
 							}
+							const stopDetails = event.delta.stop_details;
+							if (stopDetails && stopDetails.type === "refusal") {
+								const explanation = stopDetails.explanation?.trim();
+								const category = stopDetails.category;
+								const label = category ? `Refusal (${category})` : "Refusal";
+								output.errorMessage = explanation ? `${label}: ${explanation}` : label;
+							}
 							if (event.usage.input_tokens != null) {
 								output.usage.input = event.usage.input_tokens;
 							}
@@ -1338,7 +1246,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					}
 
 					if (output.stopReason === "aborted" || output.stopReason === "error") {
-						throw new Error("An unknown error occurred");
+						throw new Error(output.errorMessage ?? "An unknown error occurred");
 					}
 					break;
 				} catch (streamError) {
@@ -1426,18 +1334,18 @@ type SystemBlockOptions = {
 };
 
 export function buildAnthropicSystemBlocks(
-	systemPrompt: string | undefined,
+	systemPrompt: readonly string[] | undefined,
 	options: SystemBlockOptions = {},
 ): AnthropicSystemBlock[] | undefined {
 	const { includeClaudeCodeInstruction = false, extraInstructions = [], billingPayload, cacheControl } = options;
 	const blocks: AnthropicSystemBlock[] = [];
-	const sanitizedPrompt = systemPrompt ? systemPrompt.toWellFormed() : "";
+	const sanitizedPrompts = normalizeSystemPrompts(systemPrompt);
 	const trimmedInstructions = extraInstructions.map(instruction => instruction.trim()).filter(Boolean);
-	const hasBillingHeader = sanitizedPrompt.includes(CLAUDE_BILLING_HEADER_PREFIX);
+	const hasBillingHeader = sanitizedPrompts.some(prompt => prompt.includes(CLAUDE_BILLING_HEADER_PREFIX));
 
 	if (includeClaudeCodeInstruction && !hasBillingHeader) {
 		const payloadSeed = billingPayload ?? {
-			system: sanitizedPrompt,
+			system: sanitizedPrompts,
 			extraInstructions: trimmedInstructions,
 		};
 		blocks.push(
@@ -1450,19 +1358,19 @@ export function buildAnthropicSystemBlocks(
 	}
 
 	for (const instruction of trimmedInstructions) {
-		blocks.push({
-			type: "text",
-			text: instruction,
-			...(cacheControl ? { cache_control: cacheControl } : {}),
-		});
+		blocks.push({ type: "text", text: instruction });
 	}
 
-	if (systemPrompt) {
-		blocks.push({
-			type: "text",
-			text: sanitizedPrompt,
-			...(cacheControl ? { cache_control: cacheControl } : {}),
-		});
+	for (const systemPrompt of sanitizedPrompts) {
+		blocks.push({ type: "text", text: systemPrompt });
+	}
+
+	// Attach cache_control to the LAST emitted block only. Anthropic breakpoints are cumulative
+	// prefix cuts, so a single trailing breakpoint covers every preceding block; spreading
+	// cache_control across N blocks wastes slots against the 4-breakpoint cap.
+	const lastIndex = blocks.length - 1;
+	if (cacheControl && lastIndex >= 0) {
+		blocks[lastIndex] = { ...blocks[lastIndex], cache_control: cacheControl };
 	}
 
 	return blocks.length > 0 ? blocks : undefined;
@@ -1485,6 +1393,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		dynamicHeaders,
 		hasTools = false,
 		isOAuth,
+		onSseEvent,
 	} = args;
 	const compat = getAnthropicCompat(model);
 	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinkingDisplay(model.id);
@@ -1493,6 +1402,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
 	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
 	const tlsFetchOptions = buildClaudeCodeTlsFetchOptions(model, baseUrl);
+	const debugFetch = onSseEvent ? wrapFetchForSseDebug(fetch, event => onSseEvent(event, model)) : undefined;
 	if (model.provider === "github-copilot") {
 		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
 		const betaFeatures = [...extraBetas];
@@ -1520,6 +1430,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			dangerouslyAllowBrowser: true,
 			defaultHeaders,
 			logLevel: ANTHROPIC_SDK_LOG_LEVEL,
+			...(debugFetch ? { fetch: debugFetch } : {}),
 			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 		};
 	}
@@ -1552,6 +1463,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			dangerouslyAllowBrowser: true,
 			defaultHeaders,
 			logLevel: ANTHROPIC_SDK_LOG_LEVEL,
+			...(debugFetch ? { fetch: debugFetch } : {}),
 		};
 	}
 
@@ -1564,6 +1476,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		dangerouslyAllowBrowser: true,
 		defaultHeaders,
 		logLevel: ANTHROPIC_SDK_LOG_LEVEL,
+		...(debugFetch ? { fetch: debugFetch } : {}),
 		...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 	};
 }
@@ -1930,10 +1843,11 @@ function buildParams(
 	}
 
 	const shouldInjectClaudeCodeInstruction = isOAuthToken && !model.id.startsWith("claude-3-5-haiku");
+	const billingSystemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	const billingPayload = shouldInjectClaudeCodeInstruction
 		? {
 				...params,
-				...(context.systemPrompt ? { system: context.systemPrompt.toWellFormed() } : {}),
+				...(billingSystemPrompts.length > 0 ? { system: billingSystemPrompts } : {}),
 			}
 		: undefined;
 	const systemBlocks = buildAnthropicSystemBlocks(context.systemPrompt, {
@@ -2001,7 +1915,7 @@ function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResul
 	const block: ContentBlockParam = {
 		type: "tool_result",
 		tool_use_id: msg.toolCallId,
-		content: convertContentBlocks(msg.content),
+		content: convertContentBlocks(msg.content, model.input.includes("image")),
 		is_error: msg.isError,
 	};
 	if (isZaiAnthropicEndpoint(model)) {
@@ -2034,33 +1948,19 @@ export function convertAnthropicMessages(
 					});
 				}
 			} else {
-				const blocks: ContentBlockParam[] = msg.content.map(item => {
-					if (item.type === "text") {
-						return {
-							type: "text",
-							text: item.text.toWellFormed(),
-						};
-					}
-					return {
-						type: "image",
-						source: {
-							type: "base64",
-							media_type: item.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-							data: item.data,
-						},
-					};
-				});
-				let filteredBlocks = !model?.input.includes("image") ? blocks.filter(b => b.type !== "image") : blocks;
-				filteredBlocks = filteredBlocks.filter(b => {
-					if (b.type === "text") {
-						return b.text.trim().length > 0;
-					}
-					return true;
-				});
-				if (filteredBlocks.length === 0) continue;
+				const contentBlocks = convertContentBlocks(msg.content, model.input.includes("image"));
+				if (typeof contentBlocks === "string") {
+					if (contentBlocks.trim().length === 0) continue;
+					params.push({
+						role: "user",
+						content: contentBlocks,
+					});
+					continue;
+				}
+				if (contentBlocks.length === 0) continue;
 				params.push({
 					role: "user",
-					content: filteredBlocks,
+					content: contentBlocks,
 				});
 			}
 		} else if (msg.role === "assistant") {

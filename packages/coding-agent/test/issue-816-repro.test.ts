@@ -34,7 +34,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 			agent: new Agent({
 				initialState: {
 					model: defaultModel,
-					systemPrompt: "Test",
+					systemPrompt: ["Test"],
 					tools: [],
 					messages: [],
 				},
@@ -90,5 +90,28 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		// Otherwise the next user turn lands on the plan-role model even though
 		// the user is no longer in plan mode.
 		expect(setModelSpy).not.toHaveBeenCalled();
+	});
+
+	it("does not enter plan mode when plan.enabled is false", async () => {
+		session.settings.set("plan.enabled", false);
+		const warning = vi.spyOn(mode, "showWarning").mockImplementation(() => {});
+
+		await mode.handlePlanModeCommand();
+
+		expect(mode.planModeEnabled).toBe(false);
+		expect(warning).toHaveBeenCalledWith("Plan mode is disabled. Enable it in settings (plan.enabled).");
+	});
+
+	it("allows /plan to pause an active plan mode after plan.enabled is disabled", async () => {
+		await mode.handlePlanModeCommand();
+		expect(mode.planModeEnabled).toBe(true);
+
+		session.settings.set("plan.enabled", false);
+		vi.spyOn(mode, "showHookConfirm").mockResolvedValue(true);
+
+		await mode.handlePlanModeCommand();
+
+		expect(mode.planModeEnabled).toBe(false);
+		expect(mode.planModePaused).toBe(true);
 	});
 });

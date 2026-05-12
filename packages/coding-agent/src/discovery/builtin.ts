@@ -5,6 +5,7 @@
  */
 import * as path from "node:path";
 import { logger, parseFrontmatter, tryParseJson } from "@oh-my-pi/pi-utils";
+import { YAML } from "bun";
 import { registerProvider } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
 import { type Extension, type ExtensionManifest, extensionCapability } from "../capability/extension";
@@ -21,8 +22,10 @@ import { type SlashCommand, slashCommandCapability } from "../capability/slash-c
 import { type SystemPrompt, systemPromptCapability } from "../capability/system-prompt";
 import { type CustomTool, toolCapability } from "../capability/tool";
 import type { LoadContext, LoadResult } from "../capability/types";
+import { getPackageDir } from "../config";
 import { loadCommandChainFilesFromDir } from "../danger-pi/command-chain-files/load";
 import { expandTilde } from "../tools/path-utils";
+import { loadEmbeddedSkills } from "./embedded-skills";
 import {
 	buildRuleFromMarkdown,
 	createSourceMeta,
@@ -282,10 +285,18 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 		requireDescription: true,
 	});
 
-	const results = await Promise.all([...projectScans, userScan]);
+	const packageSkillsScan = scanSkillsFromDir(ctx, {
+		dir: path.join(getPackageDir(), "skills"),
+		providerId: PROVIDER_ID,
+		level: "user",
+		requireDescription: true,
+	});
+
+	const results = await Promise.all([...projectScans, userScan, packageSkillsScan]);
+	const embeddedSkills = loadEmbeddedSkills();
 
 	return {
-		items: results.flatMap(r => r.items),
+		items: [...results.flatMap(r => r.items), ...embeddedSkills],
 		warnings: results.flatMap(r => r.warnings ?? []),
 	};
 }
@@ -775,22 +786,46 @@ async function loadSettings(ctx: LoadContext): Promise<LoadResult<Settings>> {
 	const items: Settings[] = [];
 	const warnings: string[] = [];
 
+	const parseYamlSettings = (content: string, filePath: string): Record<string, unknown> | null => {
+		try {
+			const data = YAML.parse(content);
+			if (!data || typeof data !== "object" || Array.isArray(data)) return {};
+			return data as Record<string, unknown>;
+		} catch {
+			warnings.push(`Failed to parse ${filePath}`);
+			return null;
+		}
+	};
+
 	for (const { dir, level } of await getConfigDirs(ctx)) {
 		const settingsPath = path.join(dir, "settings.json");
-		const content = await readFile(settingsPath);
-		if (!content) continue;
-
-		const data = tryParseJson<Record<string, unknown>>(content);
-		if (!data) {
-			warnings.push(`Failed to parse ${settingsPath}`);
-			continue;
+		const settingsContent = await readFile(settingsPath);
+		if (settingsContent) {
+			const data = tryParseJson<Record<string, unknown>>(settingsContent);
+			if (data) {
+				items.push({
+					path: settingsPath,
+					data,
+					level,
+					_source: createSourceMeta(PROVIDER_ID, settingsPath, level),
+				});
+			} else {
+				warnings.push(`Failed to parse ${settingsPath}`);
+			}
 		}
 
+		const configPath = path.join(dir, "config.yml");
+		const configContent = await readFile(configPath);
+		if (!configContent) continue;
+
+		const data = parseYamlSettings(configContent, configPath);
+		if (!data) continue;
+
 		items.push({
-			path: settingsPath,
+			path: configPath,
 			data,
 			level,
-			_source: createSourceMeta(PROVIDER_ID, settingsPath, level),
+			_source: createSourceMeta(PROVIDER_ID, configPath, level),
 		});
 	}
 

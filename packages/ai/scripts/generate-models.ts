@@ -375,14 +375,6 @@ async function generateModels() {
 	applyGeneratedModelPolicies(allModels);
 	linkOpenAIPromotionTargets(allModels);
 
-	// UPB AI-Chat portal (LiteLLM proxy) requires reasoning.summary to surface reasoning tokens.
-	// Apply thinkingFormat compat to all UPB models since the proxy handles the parameter.
-	for (const model of allModels) {
-		if (model.provider === "upb" && model.api === "openai-completions") {
-			model.compat = { ...model.compat, thinkingFormat: "litellm" };
-		}
-	}
-
 	// Group by provider and sort each provider's models
 	const providers: Record<string, Record<string, Model>> = {};
 	for (const model of allModels) {

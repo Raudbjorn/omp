@@ -166,6 +166,29 @@ describe("system Handlebars prompt templates", () => {
 		expect(neither).not.toContain("## Version Control");
 	});
 
+	test("subagent system owns shared context while user prompt only owns assignment", async () => {
+		const systemTemplate = await Bun.file(path.join(systemPromptsDir, "subagent-system-prompt.md")).text();
+		const userTemplate = await Bun.file(path.join(systemPromptsDir, "subagent-user-prompt.md")).text();
+
+		const subagentSystem = prompt.render(systemTemplate, {
+			...baseRenderContext,
+			context: "Shared task background",
+			agent: "You are a task agent.",
+		});
+		const subagentUser = prompt.render(userTemplate, {
+			...baseRenderContext,
+			context: "Shared task background",
+			assignment: "Do the task.",
+		});
+
+		expect(subagentSystem).toContain("[CONTEXT]\nShared task background\n[/CONTEXT]");
+		expect(subagentSystem).toContain("[ROLE]");
+		expect(subagentUser).toContain("Complete the assignment below, thoroughly:");
+		expect(subagentUser).toContain("Do the task.");
+		expect(subagentUser).not.toContain("[CONTEXT]");
+		expect(subagentUser).not.toContain("Shared task background");
+	});
+
 	test("system-prompt conditionally renders inspect_image guidance", async () => {
 		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
 		const template = await Bun.file(templatePath).text();
@@ -175,15 +198,15 @@ describe("system Handlebars prompt templates", () => {
 			...baseRenderContext,
 			tools: [...baseTools, "inspect_image"],
 		});
-		expect(withInspectImage).toContain("### Image inspection");
+		expect(withInspectImage).toContain("## Images");
 		expect(withInspectImage).toContain("**MUST** use `inspect_image` over `read`");
-		expect(withInspectImage).toContain("Write a specific `question` for `inspect_image`");
+		expect(withInspectImage).toContain("write a specific `question` for `inspect_image`");
 
 		const withoutInspectImage = prompt.render(template, {
 			...baseRenderContext,
 			tools: baseTools.filter((tool: string) => tool !== "inspect_image"),
 		});
-		expect(withoutInspectImage).not.toContain("### Image inspection");
+		expect(withoutInspectImage).not.toContain("## Images");
 	});
 
 	test("system-prompt carries epistemic-integrity clause against sycophantic reversal", async () => {
@@ -218,10 +241,63 @@ describe("system Handlebars prompt templates", () => {
 			mcpDiscoveryServerSummaries: ["github (2 tools)", "slack (1 tool)"],
 		});
 
-		expect(rendered).toContain("### MCP tool discovery");
+		expect(rendered).toContain("## Discovery");
 		expect(rendered).toContain("Discoverable MCP servers in this session: github (2 tools), slack (1 tool).");
 		expect(rendered).not.toContain("Example discoverable MCP tools:");
 		expect(rendered).toContain("call `search_tool_bm25` before concluding no such tool exists");
+	});
+
+	test("buildSystemPrompt keeps system project and now as separate ordered blocks", async () => {
+		await withTempDir(async dir => {
+			const { systemPrompt } = await buildSystemPrompt({
+				cwd: dir,
+				contextFiles: [],
+				skills: [],
+				rules: [],
+				toolNames: ["read"],
+				workspaceTree: {
+					rootPath: dir,
+					rendered: ".\n  - src/        1m",
+					truncated: false,
+					totalLines: 2,
+					agentsMdFiles: [],
+				},
+			});
+
+			expect(systemPrompt).toHaveLength(3);
+			expect(systemPrompt[0]).toContain("[CONTRACT]");
+			expect(systemPrompt[0]).not.toContain("current working directory");
+			expect(systemPrompt[1]).toContain("<workstation>");
+			expect(systemPrompt[1]).toContain("<workspace-tree>");
+			expect(systemPrompt[1]).not.toContain("current working directory");
+			expect(systemPrompt[2]).toContain("Today is ");
+			expect(systemPrompt[2]).toContain(`current working directory is '${dir}'.`);
+		});
+	});
+	test("buildSystemPrompt renders workspace tree after directory context in project prompt", async () => {
+		await withTempDir(async dir => {
+			const { systemPrompt } = await buildSystemPrompt({
+				cwd: dir,
+				contextFiles: [],
+				skills: [],
+				rules: [],
+				toolNames: ["read"],
+				workspaceTree: {
+					rootPath: dir,
+					rendered: ".\n  - src/        1m",
+					truncated: true,
+					totalLines: 2,
+					agentsMdFiles: ["packages/coding-agent/AGENTS.md"],
+				},
+			});
+
+			const projectPrompt = systemPrompt[1] ?? "";
+
+			expect(projectPrompt).toContain("<workspace-tree>");
+			expect(projectPrompt).toContain("Working directory layout (sorted by mtime, recent first; depth ≤ 3):");
+			expect(projectPrompt).toContain("(some entries elided to keep the tree short");
+			expect(projectPrompt.indexOf("</dir-context>")).toBeLessThan(projectPrompt.indexOf("<workspace-tree>"));
+		});
 	});
 
 	test("buildSystemPrompt deduplicates always-apply rules already present in SYSTEM.md", async () => {
@@ -236,7 +312,7 @@ describe("system Handlebars prompt templates", () => {
 				["Project instructions", "", duplicateRule, "", "Trailing note"].join("\n"),
 			);
 
-			const prompt = await buildSystemPrompt({
+			const { systemPrompt } = await buildSystemPrompt({
 				cwd: dir,
 				contextFiles: [],
 				skills: [],
@@ -249,6 +325,8 @@ describe("system Handlebars prompt templates", () => {
 				],
 			});
 
+			const prompt = systemPrompt.join("\n\n");
+
 			expect(countOccurrences(prompt, "Use static imports.")).toBe(1);
 			expect(countOccurrences(prompt, "Do not use dynamic loading.")).toBe(1);
 			expect(countOccurrences(prompt, distinctRule)).toBe(1);
@@ -259,7 +337,7 @@ describe("system Handlebars prompt templates", () => {
 		const duplicateRule = ["Keep functions small.", "", "Extract shared helpers on the second use."].join("\n");
 		const distinctRule = "Surface failures explicitly to callers.";
 
-		const prompt = await buildSystemPrompt({
+		const { systemPrompt } = await buildSystemPrompt({
 			cwd: os.tmpdir(),
 			contextFiles: [],
 			skills: [],
@@ -271,6 +349,8 @@ describe("system Handlebars prompt templates", () => {
 				{ name: "truthful-failures", content: distinctRule, path: "/tmp/truthful-failures.md" },
 			],
 		});
+
+		const prompt = systemPrompt.join("\n\n");
 
 		expect(countOccurrences(prompt, "Keep functions small.")).toBe(1);
 		expect(countOccurrences(prompt, "Extract shared helpers on the second use.")).toBe(1);
@@ -293,7 +373,7 @@ describe("system Handlebars prompt templates", () => {
 	});
 
 	test("buildSystemPrompt references overridden tool wire names", async () => {
-		const systemPrompt = await buildSystemPrompt({
+		const { systemPrompt } = await buildSystemPrompt({
 			cwd: os.tmpdir(),
 			contextFiles: [],
 			skills: [],
@@ -310,10 +390,11 @@ describe("system Handlebars prompt templates", () => {
 			]),
 		});
 
-		expect(systemPrompt).toContain("Edit: `apply_patch`");
-		expect(systemPrompt).toContain("`read`, `search`, `find`, `apply_patch`, `lsp`");
-		expect(systemPrompt).toContain("Use `apply_patch` for surgical text changes");
-		expect(systemPrompt).not.toContain("Edit: `edit`");
+		const promptText = systemPrompt.join("\n\n");
+
+		expect(promptText).toContain("Edit: `apply_patch`");
+		expect(promptText).toContain("use `apply_patch` for surgical text changes");
+		expect(promptText).not.toContain("Edit: `edit`");
 	});
 
 	test("buildSystemPrompt omits CPU info when os.cpus fails", async () => {
@@ -321,7 +402,7 @@ describe("system Handlebars prompt templates", () => {
 			throw new Error("os.cpus() failed");
 		});
 
-		const systemPrompt = await buildSystemPrompt({
+		const { systemPrompt } = await buildSystemPrompt({
 			cwd: os.tmpdir(),
 			contextFiles: [],
 			skills: [],
@@ -329,7 +410,9 @@ describe("system Handlebars prompt templates", () => {
 			toolNames: ["read"],
 		});
 
-		const workstation = /<workstation>\n(?<content>[\s\S]*?)\n<\/workstation>/u.exec(systemPrompt)?.groups?.content;
+		const projectPrompt = systemPrompt[1] ?? "";
+
+		const workstation = /<workstation>\n(?<content>[\s\S]*?)\n<\/workstation>/u.exec(projectPrompt)?.groups?.content;
 		expect(workstation).toContain("OS:");
 		expect(workstation).not.toContain("CPU:");
 	});

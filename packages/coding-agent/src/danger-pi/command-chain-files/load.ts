@@ -1,7 +1,6 @@
 import * as path from "node:path";
 import { Ajv, type ErrorObject, type ValidateFunction } from "ajv";
 import { YAML } from "bun";
-import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { readDirEntries, readFile } from "../../capability/fs";
 import type { SlashCommand } from "../../capability/slash-command";
 import type { LoadResult } from "../../capability/types";
@@ -57,17 +56,10 @@ function pickDuplicateWinner(candidates: readonly CommandFileCandidate[]): Comma
 }
 
 function materializeTemplateCommand(candidate: CommandFileCandidate, provider: string): SlashCommand {
-	// Keep raw content (frontmatter included) so downstream loadSlashCommands /
-	// parseCommandTemplate can do its own frontmatter parsing. Surface the parsed
-	// description as a hint for consumers that read SlashCommand.description
-	// directly without going through parseCommandTemplate.
-	const { frontmatter } = parseFrontmatter(candidate.content, { source: candidate.filePath });
-	const description = typeof frontmatter.description === "string" ? frontmatter.description : undefined;
 	return {
 		kind: "template",
 		name: candidate.commandName,
 		path: candidate.filePath,
-		description,
 		content: candidate.content,
 		level: candidate.level,
 		_source: createSourceMeta(provider, candidate.filePath, candidate.level),

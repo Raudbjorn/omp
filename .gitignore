@@ -12,6 +12,10 @@ target/
 *.node
 *.b64.js
 
+# Generated JS from TS scripts (Bun runs .ts directly)
+packages/*/scripts/*.js
+scripts/*.js
+
 # Environment
 .env
 
@@ -61,11 +65,6 @@ pi-*.html
 packages/coding-agent/src/internal-urls/docs-index.generated.ts
 /runs/
 python/omp-rpc/src/omp_rpc.egg-info/
-
-scripts/session-stats/Cargo.lock
-
-scripts/session-stats/edit-analysis.csv
-
 # parallel-agent worktrees
 .wt/
 CPU*.md

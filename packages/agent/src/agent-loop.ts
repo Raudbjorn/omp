@@ -12,6 +12,15 @@ import {
 	validateToolArguments,
 } from "@oh-my-pi/pi-ai";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
+import {
+	createHarmonyAuditEvent,
+	extractHarmonyRemoved,
+	type HarmonyDetection,
+	type HarmonyRecoveredToolCall,
+	isHarmonyLeakMitigationTarget,
+	recoverHarmonyToolCall,
+	signalListLabel,
+} from "./harmony-leak";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -21,6 +30,60 @@ import type {
 	AgentToolResult,
 	StreamFn,
 } from "./types";
+
+/** Sentinel returned by the abort race in `streamAssistantResponse`. */
+const ABORTED: unique symbol = Symbol("agent-loop-aborted");
+
+class HarmonyLeakInterruption extends Error {
+	constructor(
+		readonly detection: HarmonyDetection,
+		readonly removed: string,
+		readonly recovered?: HarmonyRecoveredToolCall,
+	) {
+		super(`Detected GPT-5 Harmony protocol leakage (${signalListLabel(detection.signals)})`);
+		this.name = "HarmonyLeakInterruption";
+	}
+}
+
+/**
+ * Normalize a value coming back from `tool.execute()` (or its streaming partial-update callback)
+ * into a structurally valid {@link AgentToolResult}.
+ *
+ * The tool interface is typed, but third-party tools (MCP, extensions, user-authored AgentTools)
+ * can violate the contract at runtime. Persisting a malformed result corrupts the session file
+ * (missing `content` array → crash on reload). We coerce at the single boundary where untyped
+ * results enter the agent loop, so every downstream consumer can rely on the type.
+ */
+function coerceToolResult(raw: unknown): { result: AgentToolResult<any>; malformed: boolean } {
+	const rawObj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+	const rawContent = rawObj?.content;
+	const details = rawObj && "details" in rawObj ? rawObj.details : {};
+
+	if (!Array.isArray(rawContent)) {
+		return {
+			result: {
+				content: [{ type: "text", text: "Tool returned an invalid result: missing content array." }],
+				details,
+			},
+			malformed: true,
+		};
+	}
+
+	const content: AgentToolResult["content"] = [];
+	for (const block of rawContent) {
+		if (!block || typeof block !== "object" || !("type" in block)) continue;
+		if (block.type === "text" && typeof (block as { text?: unknown }).text === "string") {
+			content.push({ type: "text", text: sanitizeText((block as { text: string }).text) });
+		} else if (
+			block.type === "image" &&
+			typeof (block as { data?: unknown }).data === "string" &&
+			typeof (block as { mimeType?: unknown }).mimeType === "string"
+		) {
+			content.push(block as { type: "image"; data: string; mimeType: string });
+		}
+	}
+	return { result: { content, details }, malformed: false };
+}
 
 /**
  * Start an agent loop with a new prompt message.
@@ -212,6 +275,8 @@ async function runLoop(
 	let firstTurn = true;
 	// Check for steering messages at start (user may have typed while waiting)
 	let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
+	let harmonyRetryAttempt = 0;
+	let harmonyTruncateResumeCount = 0;
 
 	// Outer loop: continues when queued follow-up messages arrive after agent would stop
 	while (true) {
@@ -242,7 +307,44 @@ async function runLoop(
 			}
 
 			// Stream assistant response
-			const message = await streamAssistantResponse(currentContext, config, signal, stream, streamFn);
+			let recovered: HarmonyRecoveredToolCall | undefined;
+			let message: AssistantMessage;
+			try {
+				message = await streamAssistantResponse(
+					currentContext,
+					config,
+					signal,
+					stream,
+					streamFn,
+					harmonyRetryAttempt,
+				);
+				harmonyRetryAttempt = 0;
+				harmonyTruncateResumeCount = 0;
+			} catch (err) {
+				if (!(err instanceof HarmonyLeakInterruption)) throw err;
+				if (err.recovered) {
+					if (harmonyTruncateResumeCount >= 2) {
+						await emitHarmonyAudit(config, err, "escalated", harmonyRetryAttempt);
+						throw new Error(
+							`GPT-5 Harmony leak recurred after truncate-and-resume recovery (${signalListLabel(err.detection.signals)}).`,
+						);
+					}
+					harmonyTruncateResumeCount++;
+					recovered = err.recovered;
+					message = recovered.message;
+					await emitHarmonyAudit(config, err, "truncate_resume", harmonyRetryAttempt);
+				} else {
+					if (harmonyRetryAttempt >= 2) {
+						await emitHarmonyAudit(config, err, "escalated", harmonyRetryAttempt);
+						throw new Error(
+							`GPT-5 Harmony leak persisted after ${harmonyRetryAttempt} retries (${signalListLabel(err.detection.signals)}).`,
+						);
+					}
+					await emitHarmonyAudit(config, err, "abort_retry", harmonyRetryAttempt);
+					harmonyRetryAttempt++;
+					continue;
+				}
+			}
 			newMessages.push(message);
 			let steeringMessagesFromExecution: AgentMessage[] | undefined;
 
@@ -312,6 +414,23 @@ async function runLoop(
 	stream.end(newMessages);
 }
 
+async function emitHarmonyAudit(
+	config: AgentLoopConfig,
+	interruption: HarmonyLeakInterruption,
+	action: "truncate_resume" | "abort_retry" | "escalated",
+	retryN: number,
+): Promise<void> {
+	await config.onHarmonyLeak?.(
+		createHarmonyAuditEvent({
+			action,
+			detection: interruption.detection,
+			model: config.model,
+			retryN,
+			removed: interruption.removed,
+		}),
+	);
+}
+
 /**
  * Stream an assistant response from the LLM.
  * This is where AgentMessage[] gets transformed to Message[] for the LLM.
@@ -322,6 +441,7 @@ async function streamAssistantResponse(
 	signal: AbortSignal | undefined,
 	stream: EventStream<AgentEvent, AgentMessage[]>,
 	streamFn?: StreamFn,
+	harmonyRetryAttempt = 0,
 ): Promise<AssistantMessage> {
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	let messages = context.messages;
@@ -342,131 +462,150 @@ async function streamAssistantResponse(
 
 	const streamFunction = streamFn || streamSimple;
 
-	// Resolve API key (important for expiring tokens)
+	// Resolve API key (important for expiring tokens) — do this before resolving
+	// metadata so that the session-sticky credential recorded by getApiKey is
+	// visible to metadataResolver (e.g. for the correct account_uuid in metadata.user_id).
 	const resolvedApiKey =
 		(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
 
+	// Re-resolve metadata after credential selection so the per-request value
+	// reflects the credential actually used, not the snapshot from AgentLoopConfig construction.
+	const resolvedMetadata = config.metadataResolver ? config.metadataResolver(config.model.provider) : config.metadata;
+
 	const dynamicToolChoice = config.getToolChoice?.();
 	const dynamicReasoning = config.getReasoning?.();
+	const harmonyMitigationEnabled = isHarmonyLeakMitigationTarget(config.model);
+	const harmonyAbortController = harmonyMitigationEnabled ? new AbortController() : undefined;
+	const requestSignal = harmonyAbortController
+		? signal
+			? AbortSignal.any([signal, harmonyAbortController.signal])
+			: harmonyAbortController.signal
+		: signal;
 	const response = await streamFunction(config.model, llmContext, {
 		...config,
 		apiKey: resolvedApiKey,
+		metadata: resolvedMetadata,
 		toolChoice: dynamicToolChoice ?? config.toolChoice,
 		reasoning: dynamicReasoning ?? config.reasoning,
-		signal,
+		temperature:
+			harmonyRetryAttempt > 0 && config.temperature !== undefined ? config.temperature + 0.05 : config.temperature,
+		signal: requestSignal,
 	});
 
 	let partialMessage: AssistantMessage | null = null;
 	let addedPartial = false;
 
 	const responseIterator = response[Symbol.asyncIterator]();
-	while (true) {
-		const read = await readResponseEvent(responseIterator, signal);
-		if (read.type === "aborted") {
+
+	const _interruptForHarmonyLeak = (message: AssistantMessage, detection: HarmonyDetection): never => {
+		const recovered = recoverHarmonyToolCall(message, detection);
+		const removed = recovered?.removed ?? extractHarmonyRemoved(message, detection);
+		harmonyAbortController?.abort();
+		responseIterator.return?.()?.catch(() => {});
+		if (recovered) {
+			if (addedPartial) {
+				context.messages[context.messages.length - 1] = recovered.message;
+			} else {
+				context.messages.push(recovered.message);
+				stream.push({ type: "message_start", message: { ...recovered.message } });
+			}
+			stream.push({ type: "message_end", message: recovered.message });
+			throw new HarmonyLeakInterruption(detection, removed, recovered);
+		}
+		if (addedPartial) {
+			context.messages.pop();
+		}
+		throw new HarmonyLeakInterruption(detection, removed);
+	};
+	// Set up a single abort race: register the abort listener once for the whole
+	// stream and reuse the same race promise for every iterator.next() instead of
+	// allocating Promise.withResolvers and add/removeEventListener per event.
+	let abortRacePromise: Promise<typeof ABORTED> | undefined;
+	let detachAbortListener: (() => void) | undefined;
+	if (requestSignal) {
+		if (requestSignal.aborted) {
 			return emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
 		}
-		if (read.type === "error") {
-			throw read.error;
-		}
-		if (read.result.done) {
-			break;
-		}
+		const { promise, resolve } = Promise.withResolvers<typeof ABORTED>();
+		const onAbort = () => resolve(ABORTED);
+		requestSignal.addEventListener("abort", onAbort, { once: true });
+		abortRacePromise = promise;
+		detachAbortListener = () => requestSignal.removeEventListener("abort", onAbort);
+	}
 
-		const event = read.result.value;
-		// Check for abort signal before processing each event
-		if (signal?.aborted) {
-			return emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
-		}
+	try {
+		while (true) {
+			let next: IteratorResult<AssistantMessageEvent>;
+			if (abortRacePromise) {
+				const result = await Promise.race([responseIterator.next(), abortRacePromise]);
+				if (result === ABORTED) {
+					responseIterator.return?.()?.catch(() => {});
+					return emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
+				}
+				next = result;
+			} else {
+				next = await responseIterator.next();
+			}
+			if (requestSignal?.aborted) {
+				return emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
+			}
+			if (next.done) break;
 
-		switch (event.type) {
-			case "start":
-				partialMessage = event.partial;
-				context.messages.push(partialMessage);
-				addedPartial = true;
-				stream.push({ type: "message_start", message: { ...partialMessage } });
-				break;
+			const event = next.value;
 
-			case "text_start":
-			case "text_delta":
-			case "text_end":
-			case "thinking_start":
-			case "thinking_delta":
-			case "thinking_end":
-			case "toolcall_start":
-			case "toolcall_delta":
-			case "toolcall_end":
-				if (partialMessage) {
+			switch (event.type) {
+				case "start":
 					partialMessage = event.partial;
-					context.messages[context.messages.length - 1] = partialMessage;
-					config.onAssistantMessageEvent?.(partialMessage, event);
-					if (signal?.aborted) {
-						continue;
-					}
-					stream.push({
-						type: "message_update",
-						assistantMessageEvent: event,
-						message: { ...partialMessage },
-					});
-				}
-				break;
+					context.messages.push(partialMessage);
+					addedPartial = true;
+					stream.push({ type: "message_start", message: { ...partialMessage } });
+					break;
 
-			case "done":
-			case "error": {
-				const finalMessage = await response.result();
-				if (addedPartial) {
-					context.messages[context.messages.length - 1] = finalMessage;
-				} else {
-					context.messages.push(finalMessage);
+				case "text_start":
+				case "text_delta":
+				case "text_end":
+				case "thinking_start":
+				case "thinking_delta":
+				case "thinking_end":
+				case "toolcall_start":
+				case "toolcall_delta":
+				case "toolcall_end":
+					if (partialMessage) {
+						partialMessage = event.partial;
+						context.messages[context.messages.length - 1] = partialMessage;
+						config.onAssistantMessageEvent?.(partialMessage, event);
+						if (signal?.aborted) {
+							continue;
+						}
+						stream.push({
+							type: "message_update",
+							assistantMessageEvent: event,
+							message: { ...partialMessage },
+						});
+					}
+					break;
+
+				case "done":
+				case "error": {
+					const finalMessage = await response.result();
+					if (addedPartial) {
+						context.messages[context.messages.length - 1] = finalMessage;
+					} else {
+						context.messages.push(finalMessage);
+					}
+					if (!addedPartial) {
+						stream.push({ type: "message_start", message: { ...finalMessage } });
+					}
+					stream.push({ type: "message_end", message: finalMessage });
+					return finalMessage;
 				}
-				if (!addedPartial) {
-					stream.push({ type: "message_start", message: { ...finalMessage } });
-				}
-				stream.push({ type: "message_end", message: finalMessage });
-				return finalMessage;
 			}
 		}
+	} finally {
+		detachAbortListener?.();
 	}
 
 	return await response.result();
-}
-
-type ResponseEventRead =
-	| { type: "event"; result: IteratorResult<AssistantMessageEvent> }
-	| { type: "error"; error: unknown }
-	| { type: "aborted" };
-
-async function readResponseEvent(
-	iterator: AsyncIterator<AssistantMessageEvent>,
-	signal: AbortSignal | undefined,
-): Promise<ResponseEventRead> {
-	if (!signal) {
-		return { type: "event", result: await iterator.next() };
-	}
-	if (signal.aborted) {
-		const returnPromise = iterator.return?.();
-		if (returnPromise) void returnPromise.catch(() => {});
-		return { type: "aborted" };
-	}
-
-	const { promise: abortPromise, resolve: resolveAbort } = Promise.withResolvers<ResponseEventRead>();
-	const onAbort = () => resolveAbort({ type: "aborted" });
-	signal.addEventListener("abort", onAbort, { once: true });
-
-	const eventPromise = iterator.next().then(
-		result => ({ type: "event" as const, result }),
-		error => ({ type: "error" as const, error }),
-	);
-
-	try {
-		const read = await Promise.race([eventPromise, abortPromise]);
-		if (read.type === "aborted") {
-			const returnPromise = iterator.return?.();
-			if (returnPromise) void returnPromise.catch(() => {});
-		}
-		return read;
-	} finally {
-		signal.removeEventListener("abort", onAbort);
-	}
 }
 
 function emitAbortedAssistantMessage(
@@ -671,7 +810,7 @@ async function executeToolCalls(
 						toolCalls: toolCallInfos,
 					})
 				: undefined;
-			result = await tool.execute(
+			const rawResult = await tool.execute(
 				toolCall.id,
 				transformToolCallArguments ? transformToolCallArguments(effectiveArgs, toolCall.name) : effectiveArgs,
 				tool.nonAbortable ? undefined : toolSignal,
@@ -681,16 +820,14 @@ async function executeToolCalls(
 						toolCallId: toolCall.id,
 						toolName: toolCall.name,
 						args: argsForExecution,
-						partialResult: {
-							...partialResult,
-							content: partialResult.content.map(c =>
-								c.type === "text" ? { ...c, text: sanitizeText(c.text) } : c,
-							),
-						},
+						partialResult: coerceToolResult(partialResult).result,
 					});
 				},
 				toolContext,
 			);
+			const coerced = coerceToolResult(rawResult);
+			result = coerced.result;
+			if (coerced.malformed) isError = true;
 		} catch (e) {
 			result = {
 				content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }],

@@ -29,50 +29,7 @@ import { kimiUsageProvider } from "./usage/kimi";
 import { codexRankingStrategy, openaiCodexUsageProvider } from "./usage/openai-codex";
 import { zaiUsageProvider } from "./usage/zai";
 import { getOAuthApiKey, getOAuthProvider, refreshOAuthToken } from "./utils/oauth";
-// Re-export login functions so consumers of AuthStorage.login() have access
-// (these are used inside the login() switch-case)
-import { loginAlibabaCodingPlan } from "./utils/oauth/alibaba-coding-plan";
-import { loginAnthropic } from "./utils/oauth/anthropic";
-import { loginCerebras } from "./utils/oauth/cerebras";
-import { loginCloudflareAiGateway } from "./utils/oauth/cloudflare-ai-gateway";
-import { loginCursor } from "./utils/oauth/cursor";
-import { loginDevin } from "./utils/oauth/devin";
-import { loginGitHubCopilot } from "./utils/oauth/github-copilot";
-import { loginGitLabDuo } from "./utils/oauth/gitlab-duo";
-import { loginAntigravity } from "./utils/oauth/google-antigravity";
-import { loginGeminiCli } from "./utils/oauth/google-gemini-cli";
-import { loginHuggingface } from "./utils/oauth/huggingface";
-import { loginIpexLlm } from "./utils/oauth/ipex-llm";
-import { loginKagi } from "./utils/oauth/kagi";
-import { loginKilo } from "./utils/oauth/kilo";
-import { loginKimi } from "./utils/oauth/kimi";
-import { loginLiteLLM } from "./utils/oauth/litellm";
-import { loginLmStudio } from "./utils/oauth/lm-studio";
-import { loginMiniMaxCode, loginMiniMaxCodeCn } from "./utils/oauth/minimax-code";
-import { loginMoonshot } from "./utils/oauth/moonshot";
-import { loginNanoGPT } from "./utils/oauth/nanogpt";
-import { loginNvidia } from "./utils/oauth/nvidia";
-import { loginOllama } from "./utils/oauth/ollama";
-import { loginOllamaCloud } from "./utils/oauth/ollama-cloud";
-import { loginOpenAICodex } from "./utils/oauth/openai-codex";
-import { loginOpenCode } from "./utils/oauth/opencode";
-import { loginOpenvino } from "./utils/oauth/openvino";
-import { loginParallel } from "./utils/oauth/parallel";
-import { loginPerplexity } from "./utils/oauth/perplexity";
-import { loginQianfan } from "./utils/oauth/qianfan";
-import { loginQwenPortal } from "./utils/oauth/qwen-portal";
-import { loginSynthetic } from "./utils/oauth/synthetic";
-import { loginTavily } from "./utils/oauth/tavily";
-import { loginTogether } from "./utils/oauth/together";
 import type { OAuthController, OAuthCredentials, OAuthProvider, OAuthProviderId } from "./utils/oauth/types";
-import { loginUPB } from "./utils/oauth/upb";
-import { loginVenice } from "./utils/oauth/venice";
-import { loginVercelAiGateway } from "./utils/oauth/vercel-ai-gateway";
-import { loginVllm } from "./utils/oauth/vllm";
-import { loginWarp } from "./utils/oauth/warp";
-import { loginXiaomi } from "./utils/oauth/xiaomi";
-import { loginZai } from "./utils/oauth/zai";
-import { loginZenMux } from "./utils/oauth/zenmux";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Credential Types
@@ -125,6 +82,21 @@ export interface StoredAuthCredential {
 // AuthStorage Options
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Event payload describing a credential that was just soft-disabled.
+ *
+ * Today the only call site is OAuth refresh failures with a definitive cause
+ * (`invalid_grant`, `401/403` not from a network blip, etc.) — the
+ * disabled_cause string is the verbatim error captured for forensics.
+ *
+ * Subscribers can use this to surface a notification, banner, or auto-launch
+ * a re-login flow instead of letting the credential silently disappear.
+ */
+export interface CredentialDisabledEvent {
+	provider: string;
+	disabledCause: string;
+}
+
 export type AuthStorageOptions = {
 	usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;
 	rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
@@ -137,6 +109,14 @@ export type AuthStorageOptions = {
 	 * - Default: checks environment variable first, then treats as literal
 	 */
 	configValueResolver?: (config: string) => Promise<string | undefined>;
+	/**
+	 * Optional callback fired when AuthStorage automatically disables a
+	 * credential because something detected it as no longer usable — today
+	 * that's the OAuth refresh-failure path in `getApiKey`. NOT fired for
+	 * user-initiated `remove()` (the user already knows) or dedup of
+	 * duplicate credentials (uninteresting hygiene).
+	 */
+	onCredentialDisabled?: (event: CredentialDisabledEvent) => void | Promise<void>;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -317,6 +297,7 @@ export class AuthStorage {
 	#fallbackResolver?: (provider: string) => string | undefined;
 	#store: AuthCredentialStore;
 	#configValueResolver: (config: string) => Promise<string | undefined>;
+	#onCredentialDisabled?: (event: CredentialDisabledEvent) => void | Promise<void>;
 	#closed = false;
 
 	constructor(store: AuthCredentialStore, options: AuthStorageOptions = {}) {
@@ -327,6 +308,7 @@ export class AuthStorage {
 		this.#usageCache = new AuthStorageUsageCache(this.#store);
 		this.#usageFetch = options.usageFetch ?? fetch;
 		this.#usageRequestTimeoutMs = options.usageRequestTimeoutMs ?? DEFAULT_USAGE_REQUEST_TIMEOUT_MS;
+		this.#onCredentialDisabled = options.onCredentialDisabled;
 		this.#usageLogger =
 			options.usageLogger ??
 			({
@@ -596,8 +578,12 @@ export class AuthStorage {
 		const credentials = this.#getCredentialsForProvider(provider)
 			.map((credential, index) => ({ credential, index }))
 			.filter(
-				(entry): entry is { credential: Extract<AuthCredential, { type: T }>; index: number } =>
-					entry.credential.type === type,
+				(
+					entry,
+				): entry is {
+					credential: Extract<AuthCredential, { type: T }>;
+					index: number;
+				} => entry.credential.type === type,
 			);
 
 		if (credentials.length === 0) return undefined;
@@ -734,6 +720,23 @@ export class AuthStorage {
 		const updated = entries.filter((_value, idx) => idx !== index);
 		this.#setStoredCredentials(provider, updated);
 		this.#resetProviderAssignments(provider);
+		this.#emitCredentialDisabled({ provider, disabledCause });
+	}
+
+	#emitCredentialDisabled(event: CredentialDisabledEvent): void {
+		const handler = this.#onCredentialDisabled;
+		if (!handler) return;
+		const logHandlerError = (error: unknown): void => {
+			logger.warn("onCredentialDisabled handler threw", { provider: event.provider, error: String(error) });
+		};
+		try {
+			const result = handler(event);
+			if (result && typeof (result as PromiseLike<void>).then === "function") {
+				(result as Promise<void>).catch(logHandlerError);
+			}
+		} catch (error) {
+			logHandlerError(error);
+		}
 	}
 
 	/**
@@ -752,7 +755,10 @@ export class AuthStorage {
 		const stored = this.#store.replaceAuthCredentialsForProvider(provider, deduped);
 		this.#setStoredCredentials(
 			provider,
-			stored.map(record => ({ id: record.id, credential: record.credential })),
+			stored.map(record => ({
+				id: record.id,
+				credential: record.credential,
+			})),
 		);
 		this.#resetProviderAssignments(provider);
 	}
@@ -761,7 +767,10 @@ export class AuthStorage {
 		const stored = this.#store.upsertAuthCredentialForProvider(provider, credential);
 		this.#setStoredCredentials(
 			provider,
-			stored.map(record => ({ id: record.id, credential: record.credential })),
+			stored.map(record => ({
+				id: record.id,
+				credential: record.credential,
+			})),
 		);
 		this.#resetProviderAssignments(provider);
 	}
@@ -818,6 +827,44 @@ export class AuthStorage {
 	}
 
 	/**
+	 * Get the OAuth `accountId` for a provider, preferring the credential that is
+	 * session-sticky for `sessionId` when multiple OAuth credentials are configured.
+	 * Falls back to the first OAuth credential when no session preference exists (e.g.
+	 * first call before any `getApiKey` has been issued, or single-credential setups).
+	 * Returns `undefined` when no OAuth credential carries an `accountId`.
+	 */
+	getOAuthAccountId(provider: string, sessionId?: string): string | undefined {
+		const allCredentials = this.#getCredentialsForProvider(provider);
+		const oauthCredentials = allCredentials.filter((c): c is OAuthCredential => c.type === "oauth");
+		if (oauthCredentials.length === 0) return undefined;
+
+		// Runtime override always returns before recording a session credential.
+		if (this.#runtimeOverrides.has(provider)) return undefined;
+
+		// Prefer the session-sticky credential when available.
+		const sessionPref = this.#getSessionCredential(provider, sessionId);
+		// If the session has been routed to a stored API key, do not inject OAuth account_uuid.
+		if (sessionPref !== undefined && sessionPref.type !== "oauth") return undefined;
+
+		// When no session-sticky credential is recorded yet (first call before any getApiKey,
+		// or all stored credentials are unavailable), the request falls through to the env-key
+		// or fallback-resolver path in getApiKey() — neither is OAuth-authenticated, so
+		// account_uuid injection would misattribute traffic. Only apply this guard when
+		// sessionPref is absent; a recorded OAuth sticky (sessionPref.type === "oauth") must
+		// NOT be blocked even if an env key also happens to exist.
+		if (!sessionPref && (getEnvApiKey(provider) || this.#fallbackResolver?.(provider))) return undefined;
+		// Resolve the sticky index against the full credential list — the index is
+		// recorded against the unfiltered provider array (by #recordSessionCredential /
+		// #tryOAuthCredential), not the OAuth-only subset, so dereferencing it into the
+		// filtered array would be off-by-N when any non-OAuth credential precedes the
+		// OAuth ones (e.g. [api_key, oauth_A, oauth_B] stored order).
+		const stickyCredential = sessionPref?.type === "oauth" ? allCredentials[sessionPref.index] : undefined;
+		const preferred = stickyCredential?.type === "oauth" ? stickyCredential : oauthCredentials[0];
+		const accountId = preferred?.accountId;
+		return typeof accountId === "string" && accountId.length > 0 ? accountId : undefined;
+	}
+
+	/**
 	 * Get all credentials.
 	 */
 	getAll(): AuthStorageData {
@@ -850,7 +897,10 @@ export class AuthStorage {
 			const newCredential: ApiKeyCredential = { type: "api_key", key: apiKey };
 			await this.set(provider, newCredential);
 		};
-		const manualCodeInput = () => ctrl.onPrompt({ message: "Paste the authorization code (or full redirect URL):" });
+		const manualCodeInput = () =>
+			ctrl.onPrompt({
+				message: "Paste the authorization code (or full redirect URL):",
+			});
 		switch (provider) {
 			case "anthropic": {
 				const { loginAnthropic } = await import("./utils/oauth/anthropic");
@@ -1303,7 +1353,10 @@ export class AuthStorage {
 			typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
 				? AbortSignal.timeout(timeoutMs)
 				: undefined;
-		let params: UsageRequestDescriptor & { signal?: AbortSignal } = { ...request, signal: timeoutSignal };
+		let params: UsageRequestDescriptor & { signal?: AbortSignal } = {
+			...request,
+			signal: timeoutSignal,
+		};
 
 		if (
 			request.credential.type === "oauth" &&
@@ -1359,7 +1412,10 @@ export class AuthStorage {
 		const promise = (async () => {
 			const report = await this.#fetchUsageUncached(request, timeoutMs);
 			if (report !== null) {
-				this.#usageCache.set(cacheKey, { value: report, expiresAt: Date.now() + USAGE_REPORT_TTL_MS });
+				this.#usageCache.set(cacheKey, {
+					value: report,
+					expiresAt: Date.now() + USAGE_REPORT_TTL_MS,
+				});
 				return report;
 			}
 			return cached?.value ?? null;
@@ -1469,7 +1525,9 @@ export class AuthStorage {
 		const base = sorted[0];
 		const mergedLimits = [...base.limits];
 		const limitIds = new Set(mergedLimits.map(limit => limit.id));
-		const mergedMetadata: Record<string, unknown> = { ...(base.metadata ?? {}) };
+		const mergedMetadata: Record<string, unknown> = {
+			...(base.metadata ?? {}),
+		};
 		let fetchedAt = base.fetchedAt;
 
 		for (const report of sorted.slice(1)) {
@@ -1611,7 +1669,10 @@ export class AuthStorage {
 			const reports = results.filter((report): report is UsageReport => report !== null);
 			const deduped = this.#dedupeUsageReports(reports);
 			if (deduped.length > 0) {
-				this.#usageCache.set(cacheKey, { value: deduped, expiresAt: Date.now() + USAGE_REPORT_TTL_MS });
+				this.#usageCache.set(cacheKey, {
+					value: deduped,
+					expiresAt: Date.now() + USAGE_REPORT_TTL_MS,
+				});
 			}
 			const resolved = deduped.length > 0 ? deduped : (cached?.value ?? []);
 			this.#usageLogger?.debug("Usage fetch resolved", {
@@ -1783,7 +1844,12 @@ export class AuthStorage {
 					...args.options,
 					timeoutMs: this.#usageRequestTimeoutMs,
 				});
-				return { selection, usage, usageChecked: true, blockedUntil: undefined as number | undefined };
+				return {
+					selection,
+					usage,
+					usageChecked: true,
+					blockedUntil: undefined as number | undefined,
+				};
 			}),
 		);
 
@@ -1938,7 +2004,11 @@ export class AuthStorage {
 			: order
 					.map(idx => credentials[idx])
 					.filter((selection): selection is { credential: OAuthCredential; index: number } => Boolean(selection))
-					.map(selection => ({ selection, usage: null, usageChecked: false }));
+					.map(selection => ({
+						selection,
+						usage: null,
+						usageChecked: false,
+					}));
 
 		if (sessionPreferredIndex !== undefined && !requiresProModel) {
 			const sessionPreferredCandidate = candidates.findIndex(
@@ -2274,7 +2344,11 @@ export class AuthStorage {
 			return oauthKey;
 		}
 
-		// Fall back to environment variable
+		// Fall back to environment variable or custom resolver. If we reach here after
+		// an OAuth miss, the session sticky (if any) is stale — the request will
+		// authenticate via env/fallback, not OAuth, so clear the sticky now so that
+		// getOAuthAccountId() correctly suppresses account_uuid for this session.
+		if (sessionId) this.#sessionLastCredential.get(provider)?.delete(sessionId);
 		const envKey = getEnvApiKey(provider);
 		if (envKey) return envKey;
 
@@ -2357,7 +2431,10 @@ function deserializeCredential(row: AuthRow): AuthCredential | null {
 		}
 	}
 	if (row.credential_type === "oauth") {
-		return { type: "oauth", ...(parsed as Record<string, unknown>) } as AuthCredential;
+		return {
+			type: "oauth",
+			...(parsed as Record<string, unknown>),
+		} as AuthCredential;
 	}
 	return null;
 }
@@ -2368,7 +2445,12 @@ function normalizeDisabledCause(disabledCause: string): string {
 }
 
 function toStoredAuthCredential(row: AuthRow, credential: AuthCredential): StoredAuthCredential {
-	return { id: row.id, provider: row.provider, credential, disabledCause: row.disabled_cause };
+	return {
+		id: row.id,
+		provider: row.provider,
+		credential,
+		disabledCause: row.disabled_cause,
+	};
 }
 
 function resolveProviderCredentialIdentityKey(provider: string, identifiers: string[]): string | null {
@@ -2779,7 +2861,12 @@ export class AuthCredentialStore {
 				if (match) {
 					matchedExistingIds.add(match.id);
 					this.#updateStmt.run(serialized.credentialType, serialized.data, serialized.identityKey, match.id);
-					result.push({ id: match.id, provider: providerName, credential, disabledCause: null });
+					result.push({
+						id: match.id,
+						provider: providerName,
+						credential,
+						disabledCause: null,
+					});
 				} else {
 					const row = this.#insertStmt.get(
 						providerName,
@@ -2788,7 +2875,12 @@ export class AuthCredentialStore {
 						serialized.identityKey,
 					) as { id?: number } | undefined;
 					if (row?.id) {
-						result.push({ id: row.id, provider: providerName, credential, disabledCause: null });
+						result.push({
+							id: row.id,
+							provider: providerName,
+							credential,
+							disabledCause: null,
+						});
 					}
 				}
 			}

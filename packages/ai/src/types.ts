@@ -45,9 +45,7 @@ export type KnownApi =
 	| "google-gemini-cli"
 	| "google-vertex"
 	| "ollama-chat"
-	| "cursor-agent"
-	| "devin-agent"
-	| "warp-agent";
+	| "cursor-agent";
 export type Api = KnownApi | (string & {});
 export interface ApiOptionsMap {
 	"anthropic-messages": AnthropicOptions;
@@ -90,6 +88,12 @@ export interface ThinkingConfig {
 	minLevel: Effort;
 	/** Most intensive supported user-facing effort level. */
 	maxLevel: Effort;
+	/**
+	 * Optional explicit list of supported levels. When present, takes precedence over
+	 * the `minLevel`..`maxLevel` range — used to encode discrete sets with gaps
+	 * (e.g. Gemini 3 Pro supports `low` and `high` but not `medium`).
+	 */
+	levels?: readonly Effort[];
 	/** Optional default effort applied when this model is selected. Falls back to global default if absent. */
 	defaultLevel?: Effort;
 	/** Provider-specific transport used to encode the selected effort. */
@@ -192,6 +196,12 @@ export interface ProviderResponseMetadata {
 	metadata?: Record<string, unknown>;
 }
 
+export interface RawSseEvent {
+	event: string | null;
+	data: string;
+	raw: string[];
+}
+
 export interface StreamOptions {
 	temperature?: number;
 	topP?: number;
@@ -247,10 +257,22 @@ export interface StreamOptions {
 	 */
 	onResponse?: (response: ProviderResponseMetadata, model?: Model<Api>) => void | Promise<void>;
 	/**
+	 * Optional callback for raw Server-Sent Events as they arrive from HTTP streaming providers.
+	 *
+	 * Diagnostic only: provider implementations must ignore callback failures and must not
+	 * let observers alter stream contents.
+	 */
+	onSseEvent?: (event: RawSseEvent, model?: Model<Api>) => void;
+	/**
 	 * Optional override for the first streamed event watchdog in milliseconds.
 	 * Set to 0 to disable the first-event watchdog for this request.
 	 */
 	streamFirstEventTimeoutMs?: number;
+	/**
+	 * Optional override for the maximum idle gap between streamed events in milliseconds.
+	 * Set to 0 to disable the inter-event idle watchdog for this request.
+	 */
+	streamIdleTimeoutMs?: number;
 	/** Cursor exec/MCP tool handlers (cursor-agent only). */
 	execHandlers?: CursorExecHandlers;
 }
@@ -267,6 +289,14 @@ export interface SimpleStreamOptions extends StreamOptions {
 	 * this way when `reasoning` is undefined.
 	 */
 	disableReasoning?: boolean;
+	/**
+	 * If true, request that the provider omit thinking/reasoning summaries
+	 * from the response (e.g. Anthropic `thinking.display = "omitted"`,
+	 * OpenAI Responses `reasoning.summary` left unset). The model still
+	 * reasons internally; only the human-readable summary stream is dropped.
+	 * Useful when the UI hides thinking blocks anyway and the summary is wasted bandwidth.
+	 */
+	hideThinkingSummary?: boolean;
 	/** Custom token budgets for thinking levels (token-based providers only) */
 	thinkingBudgets?: ThinkingBudgets;
 	/** Cursor exec handlers for local tool execution */
@@ -514,7 +544,7 @@ export interface Tool<TParameters extends TSchema = TSchema> {
 }
 
 export interface Context {
-	systemPrompt?: string;
+	systemPrompt?: string[];
 	messages: Message[];
 	tools?: Tool[];
 }
@@ -552,6 +582,19 @@ export interface OpenAICompat {
 	supportsStore?: boolean;
 	/** Whether the provider supports the `developer` role (vs `system`). Default: auto-detected from URL. */
 	supportsDeveloperRole?: boolean;
+	/**
+	 * Whether the provider's chat-completions endpoint accepts multiple
+	 * leading `system`/`developer` messages. When false, ordered system
+	 * prompts are coalesced into a single message joined by `\n\n` so
+	 * strict chat templates (e.g. Qwen-served via vLLM, MiniMax) accept
+	 * the request. Default: detected per provider/baseUrl. Canonical
+	 * OpenAI/Azure/OpenRouter/Cerebras/Together/Fireworks/Groq/DeepSeek/
+	 * Mistral/xAI/Z.ai/GitHub Copilot/Zenmux are treated as `true`;
+	 * unknown or strict-template hosts default to `false`. Setting this
+	 * to `true` preserves separate blocks, which is preferred for
+	 * KV-cache reuse when the trailing prompt changes between calls.
+	 */
+	supportsMultipleSystemMessages?: boolean;
 	/** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
 	supportsReasoningEffort?: boolean;
 	/** Optional mapping from pi-ai reasoning levels to provider/model-specific `reasoning_effort` values. */
@@ -588,6 +631,13 @@ export interface OpenAICompat {
 	 * enabled` whenever both are present. Default: auto-detected (Kimi).
 	 */
 	disableReasoningOnForcedToolChoice?: boolean;
+	/**
+	 * Drop reasoning fields (`reasoning_effort`, OpenRouter `reasoning`) for
+	 * any request that sends `tool_choice`. Use for providers/models that accept
+	 * tools and `tool_choice`, but reject `tool_choice` while thinking is enabled.
+	 * Default: auto-detected (DeepSeek reasoning models).
+	 */
+	disableReasoningOnToolChoice?: boolean;
 	/** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */
 	openRouterRouting?: OpenRouterRouting;
 	/** Vercel AI Gateway routing preferences. Only used when baseUrl points to Vercel AI Gateway. */
@@ -678,7 +728,7 @@ export interface Model<TApi extends Api = any> {
 	/** Canonical thinking capability metadata for this model. */
 	thinking?: ThinkingConfig;
 	/** Compatibility overrides per API. If not set, auto-detected from baseUrl. */
-	compat?: TApi extends "openai-completions"
+	compat?: TApi extends "openai-completions" | "openai-responses"
 		? OpenAICompat
 		: TApi extends "anthropic-messages"
 			? AnthropicCompat

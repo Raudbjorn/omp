@@ -5,8 +5,8 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { $envpos, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { computeLineHash, HL_BODY_SEP } from "../edit/line-hash";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import { computeLineHash, HL_BODY_SEP } from "../hashline/hash";
 import type { Theme } from "../modes/theme/theme";
 import astEditDescription from "../prompts/tools/ast-edit.md" with { type: "text" };
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
@@ -167,10 +167,12 @@ export interface AstEditToolDetails {
 export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolDetails> {
 	readonly name = "ast_edit";
 	readonly label = "AST Edit";
+	readonly summary = "Perform AST-aware code edits (structural refactoring)";
 	readonly description: string;
 	readonly parameters = astEditSchema;
 	readonly strict = true;
 	readonly deferrable = true;
+	readonly loadMode = "discoverable";
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(astEditDescription);
 	}

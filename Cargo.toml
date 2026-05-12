@@ -4,7 +4,7 @@ exclude = ["crates/brush-core-vendored", "crates/brush-builtins-vendored"]
 resolver = "3"
 
 [workspace.package]
-version = "14.6.5"
+version = "14.9.3"
 edition = "2024"
 license = "MIT"
 authors = ["Can Boluk"]
@@ -26,7 +26,7 @@ inherits = "release"
 lto = "thin"
 codegen-units = 16
 debug = "line-tables-only"
-strip = "none"
+strip = true
 split-debuginfo = "off"
 
 [profile.local]
@@ -37,9 +37,17 @@ incremental = true
 strip = false
 
 [profile.dev]
-opt-level = 3
-lto = "thin"
-codegen-units = 16
+opt-level = 0
+lto = false
+codegen-units = 256
+incremental = true
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
+# Deps compile optimized once and cache; your own crates stay fast.
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
 
 [workspace.lints.clippy]
 # Base Lint Levels

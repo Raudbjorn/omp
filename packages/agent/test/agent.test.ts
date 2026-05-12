@@ -12,7 +12,7 @@ describe("Agent", () => {
 		const agent = new Agent();
 
 		expect(agent.state).toBeDefined();
-		expect(agent.state.systemPrompt).toBe("");
+		expect(agent.state.systemPrompt).toEqual([]);
 		expect(agent.state.model).toBeDefined();
 		expect(agent.state.thinkingLevel).toBeUndefined();
 		expect(agent.state.tools).toEqual([]);
@@ -27,13 +27,13 @@ describe("Agent", () => {
 		const customModel = getBundledModel("openai", "gpt-4o-mini");
 		const agent = new Agent({
 			initialState: {
-				systemPrompt: "You are a helpful assistant.",
+				systemPrompt: ["You are a helpful assistant."],
 				model: customModel,
 				thinkingLevel: ThinkingLevel.Low,
 			},
 		});
 
-		expect(agent.state.systemPrompt).toBe("You are a helpful assistant.");
+		expect(agent.state.systemPrompt).toEqual(["You are a helpful assistant."]);
 		expect(agent.state.model).toBe(customModel);
 		expect(agent.state.thinkingLevel).toBe(ThinkingLevel.Low);
 	});
@@ -50,13 +50,13 @@ describe("Agent", () => {
 		expect(eventCount).toBe(0);
 
 		// State mutators don't emit events
-		agent.setSystemPrompt("Test prompt");
+		agent.setSystemPrompt(["Test prompt"]);
 		expect(eventCount).toBe(0);
-		expect(agent.state.systemPrompt).toBe("Test prompt");
+		expect(agent.state.systemPrompt).toEqual(["Test prompt"]);
 
 		// Unsubscribe should work
 		unsubscribe();
-		agent.setSystemPrompt("Another prompt");
+		agent.setSystemPrompt(["Another prompt"]);
 		expect(eventCount).toBe(0); // Should not increase
 	});
 
@@ -64,8 +64,8 @@ describe("Agent", () => {
 		const agent = new Agent();
 
 		// Test setSystemPrompt
-		agent.setSystemPrompt("Custom prompt");
-		expect(agent.state.systemPrompt).toBe("Custom prompt");
+		agent.setSystemPrompt(["Custom prompt"]);
+		expect(agent.state.systemPrompt).toEqual(["Custom prompt"]);
 
 		// Test setModel
 		const newModel = getBundledModel("google", "gemini-2.5-flash");
@@ -229,13 +229,13 @@ describe("Agent", () => {
 		const agent = new Agent({
 			initialState: {
 				model: getBundledModel("openai", "gpt-4o-mini"),
-				systemPrompt: "prompt-one",
+				systemPrompt: ["prompt-one"],
 				tools: [alphaTool],
 				messages: [],
 			},
 			streamFn: (_model, context) => {
 				callContexts.push({
-					systemPrompt: context.systemPrompt ?? "",
+					systemPrompt: context.systemPrompt?.join("\n\n") ?? "",
 					toolNames: (context.tools ?? []).map(tool => tool.name),
 				});
 				const stream = new MockAssistantStream();
@@ -249,7 +249,7 @@ describe("Agent", () => {
 
 		const unsubscribe = agent.subscribe(event => {
 			if (event.type === "message_end" && event.message.role === "toolResult") {
-				agent.setSystemPrompt("prompt-two");
+				agent.setSystemPrompt(["prompt-two"]);
 				agent.setTools([alphaTool, betaTool]);
 			}
 		});
@@ -426,5 +426,61 @@ describe("Agent", () => {
 		unsubscribe();
 
 		expect(reasoningPerCall).toEqual([ThinkingLevel.Low, ThinkingLevel.High]);
+	});
+
+	it("returns static metadata via the plain setter", () => {
+		const agent = new Agent();
+		expect(agent.metadata).toBeUndefined();
+
+		const value = { user_id: "static" };
+		agent.metadata = value;
+		expect(agent.metadata).toEqual({ user_id: "static" });
+
+		agent.metadata = undefined;
+		expect(agent.metadata).toBeUndefined();
+	});
+
+	it("metadataForProvider resolves dynamic value at every call when a resolver is installed", () => {
+		const agent = new Agent();
+		let live = "alpha";
+		agent.setMetadataResolver(() => ({ user_id: live }));
+
+		expect(agent.metadataForProvider("anthropic")).toEqual({ user_id: "alpha" });
+		live = "beta";
+		expect(agent.metadataForProvider("anthropic")).toEqual({ user_id: "beta" });
+		// Static getter is unaffected by the resolver.
+		expect(agent.metadata).toBeUndefined();
+	});
+
+	it("clears any installed resolver when assigning the plain setter", () => {
+		const agent = new Agent();
+		agent.setMetadataResolver(() => ({ user_id: "from-resolver" }));
+		expect(agent.metadataForProvider("any")).toEqual({ user_id: "from-resolver" });
+
+		agent.metadata = { user_id: "from-static" };
+		expect(agent.metadata).toEqual({ user_id: "from-static" });
+		expect(agent.metadataForProvider("any")).toEqual({ user_id: "from-static" });
+	});
+
+	it("metadataForProvider returns undefined from the resolver even when a static value is set", () => {
+		// Pin the contract that an installed resolver wins unconditionally over
+		// `#metadata` in the per-provider path.
+		const agent = new Agent();
+		agent.metadata = { user_id: "static" };
+		agent.setMetadataResolver(() => undefined);
+		expect(agent.metadataForProvider("any")).toBeUndefined();
+		// The static getter returns the pre-set static value; the resolver does not affect it.
+		expect(agent.metadata).toEqual({ user_id: "static" });
+	});
+
+	it("reverts to the plain-setter value when the resolver is cleared via setMetadataResolver(undefined)", () => {
+		const agent = new Agent();
+		agent.metadata = { user_id: "static" };
+		agent.setMetadataResolver(() => ({ user_id: "from-resolver" }));
+		expect(agent.metadataForProvider("any")).toEqual({ user_id: "from-resolver" });
+
+		agent.setMetadataResolver(undefined);
+		expect(agent.metadataForProvider("any")).toEqual({ user_id: "static" });
+		expect(agent.metadata).toEqual({ user_id: "static" });
 	});
 });

@@ -49,7 +49,7 @@ function createMockSession(
 
 	const session = {
 		state,
-		agent: { state: { systemPrompt: "test" } },
+		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
 		extensionRunner: undefined,
 		sessionManager: {
@@ -114,6 +114,70 @@ describe("runSubprocess yield reminders", () => {
 		enableLsp: false,
 	};
 
+	it("skips modelRegistry.refresh when reusing the parent registry", async () => {
+		const session = createMockSession(({ emit }) => {
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-skip-refresh",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+		const createAgentSessionSpy = mockCreateAgentSession(session);
+		const modelRegistry = {
+			refresh: async () => {},
+		} as unknown as import("../../src/config/model-registry").ModelRegistry;
+		const refreshSpy = vi.spyOn(modelRegistry, "refresh");
+
+		await runSubprocess({ ...baseOptions, id: "subagent-skip-refresh", modelRegistry });
+
+		expect(refreshSpy).not.toHaveBeenCalled();
+		expect(createAgentSessionSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("renders shared task context in subagent system prompt before now", async () => {
+		let userPrompt = "";
+		const session = createMockSession(({ text, emit }) => {
+			userPrompt = text;
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-context-system",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+		const createAgentSessionSpy = mockCreateAgentSession(session);
+
+		await runSubprocess({
+			...baseOptions,
+			id: "subagent-context-system",
+			context: "Shared task background",
+			task: "Your assignment is below.\nBe thorough and complete fully before yielding.\n\nDo the task.",
+		});
+
+		const systemPromptBuilder = createAgentSessionSpy.mock.calls[0]?.[0]?.systemPrompt;
+		expect(systemPromptBuilder).toBeFunction();
+		if (typeof systemPromptBuilder !== "function") throw new Error("Expected system prompt builder");
+		const systemPrompt = systemPromptBuilder(["system", "project", "now"]);
+
+		expect(systemPrompt).toHaveLength(4);
+		expect(systemPrompt?.[0]).toBe("system");
+		expect(systemPrompt?.[1]).toBe("project");
+		expect(systemPrompt?.[2]).toContain("[CONTEXT]\nShared task background\n[/CONTEXT]");
+		expect(systemPrompt?.[2]).toContain("[ROLE]\ntest\n[/ROLE]");
+		expect(systemPrompt?.[3]).toBe("now");
+		expect(userPrompt).not.toContain("[CONTEXT]");
+		expect(userPrompt).not.toContain("Shared task background");
+	});
+
 	it("sends reminder prompt when subagent stops without yield", async () => {
 		const prompts: string[] = [];
 		const promptOptions: Array<PromptOptions | undefined> = [];
@@ -145,7 +209,7 @@ describe("runSubprocess yield reminders", () => {
 		expect(promptOptions).toHaveLength(2);
 		expect(promptOptions[0]?.attribution).toBe("agent");
 		expect(promptOptions[1]?.attribution).toBe("agent");
-		expect(prompts[1]).toContain("You stopped without calling yield");
+		expect(prompts[1]).toContain("Your last turn ended without a tool call");
 		expect(result.output).toContain('"done": true');
 		expect(result.output.includes("SYSTEM WARNING")).toBe(false);
 	});

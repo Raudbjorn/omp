@@ -12,7 +12,7 @@ import {
 	tryParseJson,
 } from "@oh-my-pi/pi-utils";
 import type { ExtensionModule } from "../capability/extension-module";
-import { invalidate as invalidateFsCache, readDirEntries, readFile } from "../capability/fs";
+import { invalidate as invalidateFsCache, readFile } from "../capability/fs";
 import { parseRuleConditionAndScope, type Rule, type RuleFrontmatter } from "../capability/rule";
 import type { Skill, SkillFrontmatter } from "../capability/skill";
 import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
@@ -264,7 +264,16 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	const thinkingLevel = parseThinkingLevel(rawThinkingLevel);
 	const model = parseModelList(frontmatter.model);
 	const blocking = parseBoolean(frontmatter.blocking);
-	return { name, description, tools, spawns, model, output, thinkingLevel, blocking };
+	return {
+		name,
+		description,
+		tools,
+		spawns,
+		model,
+		output,
+		thinkingLevel,
+		blocking,
+	};
 }
 
 export interface ScanSkillsFromDirOptions {
@@ -305,7 +314,9 @@ export async function scanSkillsFromDir(
 		try {
 			const content = await readFile(skillPath);
 			if (!content) return;
-			const { frontmatter, body } = parseFrontmatter(content, { source: skillPath });
+			const { frontmatter, body } = parseFrontmatter(content, {
+				source: skillPath,
+			});
 			if (frontmatter.enabled === false) {
 				return;
 			}
@@ -477,7 +488,10 @@ async function readExtensionModuleManifest(
 	const content = await readFile(packageJsonPath);
 	if (!content) return null;
 
-	const pkg = tryParseJson<{ omp?: ExtensionModuleManifest; pi?: ExtensionModuleManifest }>(content);
+	const pkg = tryParseJson<{
+		omp?: ExtensionModuleManifest;
+		pi?: ExtensionModuleManifest;
+	}>(content);
 	const manifest = pkg?.omp ?? pkg?.pi;
 	if (manifest && typeof manifest === "object") {
 		return manifest;
@@ -846,9 +860,10 @@ export async function listClaudePluginRoots(
 
 	// ── OMP installed plugins registry ───────────────────────────────────────
 	// OMP registry is authoritative: its entries replace Claude's entries for the same plugin ID.
-	// getPluginsDir() resolves to the same path the marketplace writer uses
-	// (XDG-aware via the dir resolver), so reads and writes always agree.
-	const ompRegistryPath = path.join(getPluginsDir(), "installed_plugins.json");
+	// In production `home` is `os.homedir()`, so `getPluginsDir(home)` resolves to the
+	// same XDG-aware path the marketplace writer uses (reads and writes always agree).
+	// Tests pass a temp dir, which short-circuits the resolver for deterministic isolation.
+	const ompRegistryPath = path.join(getPluginsDir(home), "installed_plugins.json");
 	const ompContent = await readFile(ompRegistryPath);
 	if (ompContent) {
 		const ompRegistry = parseClaudePluginsRegistry(ompContent);

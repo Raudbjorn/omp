@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-coding-agent",
-	"version": "14.6.5",
+	"version": "14.9.3",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"homepage": "https://github.com/can1357/oh-my-pi",
 	"author": "Can Boluk",
@@ -45,7 +45,7 @@
 	},
 	"dependencies": {
 		"@agentclientprotocol/sdk": "catalog:",
-		"@lancedb/lancedb": "0.26.2",
+		"@babel/parser": "catalog:",
 		"@mozilla/readability": "catalog:",
 		"@oh-my-pi/omp-stats": "catalog:",
 		"@oh-my-pi/pi-agent-core": "catalog:",
@@ -55,7 +55,7 @@
 		"@oh-my-pi/pi-utils": "catalog:",
 		"@puppeteer/browsers": "catalog:",
 		"@sinclair/typebox": "catalog:",
-		"@xterm/addon-unicode11": "catalog:",
+		"@types/turndown": "catalog:",
 		"@xterm/headless": "catalog:",
 		"@xterm/xterm": "catalog:",
 		"ajv": "catalog:",
@@ -67,21 +67,20 @@
 		"lru-cache": "catalog:",
 		"markit-ai": "catalog:",
 		"puppeteer-core": "catalog:",
-		"qrcode-terminal": "catalog:",
 		"turndown": "catalog:",
 		"turndown-plugin-gfm": "catalog:",
 		"zod": "catalog:"
 	},
 	"devDependencies": {
-		"@types/bun": "catalog:",
-		"@types/turndown": "catalog:"
+		"@types/bun": "catalog:"
 	},
 	"engines": {
 		"bun": ">=1.3.7"
 	},
-	"files": [
+ "files": [
 		"src",
 		"scripts",
+		"skills",
 		"examples",
 		"README.md",
 		"CHANGELOG.md"
@@ -262,6 +261,14 @@
 		"./edit/modes/*": {
 			"types": "./src/edit/modes/*.ts",
 			"import": "./src/edit/modes/*.ts"
+		},
+		"./hashline": {
+			"types": "./src/hashline/index.ts",
+			"import": "./src/hashline/index.ts"
+		},
+		"./hashline/*": {
+			"types": "./src/hashline/*.ts",
+			"import": "./src/hashline/*.ts"
 		},
 		"./exa": {
 			"types": "./src/exa/index.ts",

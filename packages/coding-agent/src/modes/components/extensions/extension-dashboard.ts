@@ -37,26 +37,23 @@ import {
 } from "./extension-actions";
 import { ExtensionList } from "./extension-list";
 import { InspectorPanel } from "./inspector-panel";
-import { applyFilter, createInitialState, filterByProvider, refreshState, toggleProvider } from "./state-manager";
-import type { DashboardState, Extension } from "./types";
+import {
+	applyDisabledExtensionsToState,
+	applyFilter,
+	createInitialState,
+	filterByProvider,
+	refreshState,
+	toggleProvider,
+} from "./state-manager";
+import type { DashboardState } from "./types";
 
 export class ExtensionDashboard extends Container {
 	#state!: DashboardState;
 	#mainList!: ExtensionList;
 	#inspector!: InspectorPanel;
-	#scrollStartTime = 0;
-	#lastScrollTime = 0;
-	#lastScrollDirection = 0;
-	#layoutMode: "vertical" | "horizontal" = "vertical";
-	#actionMode:
-		| null
-		| { type: "confirm"; action: "delete"; ext: Extension; message: string }
-		| { type: "picker"; action: "move"; ext: Extension; options: MoveTarget[]; selectedIndex: number }
-		| { type: "input"; action: "rename" | "custom-path"; ext: Extension; buffer: string; placeholder?: string } =
-		null;
+	#refreshToken = 0;
 
 	onClose?: () => void;
-	onOpenFile?: (path: string) => void;
 	onRequestRender?: () => void;
 
 	private constructor(
@@ -269,68 +266,20 @@ export class ExtensionDashboard extends Container {
 			}
 		}
 
-		sm.set("disabledExtensions", globalDisabled);
-		sm.setProject("projectDisabledExtensions", projectDisabled);
-		setDisabledExtensions(
-			(sm.get("disabledExtensions") as string[]) ?? [],
-			(sm.getProject("projectDisabledExtensions") as string[] | undefined) ?? [],
-		);
-		void this.#refreshFromState();
-	}
-
-	#handleCategoryToggle(extensions: Extension[]): void {
-		const sm = this.settings ?? Settings.instance;
-		if (!sm) return;
-
-		const projectDisabled = ((sm.getProject("projectDisabledExtensions") as string[] | undefined) ?? []).slice();
-
-		// If any eligible item is active, disable all for project; otherwise enable all
-		const anyActive = extensions.some(e => e.state === "active");
-		for (const ext of extensions) {
-			const idx = projectDisabled.indexOf(ext.id);
-			if (anyActive) {
-				if (idx === -1) projectDisabled.push(ext.id);
-			} else {
-				if (idx !== -1) projectDisabled.splice(idx, 1);
-			}
-		}
-
-		sm.setProject("projectDisabledExtensions", projectDisabled);
-		setDisabledExtensions((sm.get("disabledExtensions") as string[]) ?? [], projectDisabled);
-		void this.#refreshFromState();
-	}
-
-	#handleRestrictionToggle(ext: Extension): void {
-		// No-op if globally disabled
-		if (ext.isGlobalDisabled) return;
-
-		const sm = this.settings ?? Settings.instance;
-		if (!sm) return;
-
-		const restrictions = (sm.get("restrictedExtensions") as Record<string, string>) ?? {};
-		const updated = { ...restrictions };
-
-		if (ext.id in updated) {
-			// Remove restriction
-			delete updated[ext.id];
-		} else {
-			// Restrict to current project
-			updated[ext.id] = this.cwd;
-		}
-
-		sm.set("restrictedExtensions", updated);
-		setRestrictedExtensions(updated, this.cwd);
+		this.#applyDisabledExtensions(disabled);
 		void this.#refreshFromState();
 	}
 
 	async #refreshFromState(): Promise<void> {
+		const refreshToken = ++this.#refreshToken;
 		// Remember current tab ID before refresh
 		const currentTabId = this.#state.tabs[this.#state.activeTabIndex]?.id;
 
 		const sm = this.settings ?? Settings.instance;
 		const disabledIds = sm ? ((sm.get("disabledExtensions") as string[]) ?? []) : [];
-		const projectDisabledIds = sm ? ((sm.getProject("projectDisabledExtensions") as string[] | undefined) ?? []) : [];
-		this.#state = await refreshState(this.#state, this.cwd, disabledIds, projectDisabledIds, this.mcpManager);
+		const nextState = await refreshState(this.#state, this.cwd, disabledIds);
+		if (refreshToken !== this.#refreshToken) return;
+		this.#state = nextState;
 
 		// Find the same tab in the new (re-sorted) list
 		if (currentTabId) {
@@ -347,6 +296,16 @@ export class ExtensionDashboard extends Container {
 			this.#inspector.setExtension(this.#state.selected);
 		}
 
+		this.#buildLayout();
+		this.onRequestRender?.();
+	}
+
+	#applyDisabledExtensions(disabledIds: string[]): void {
+		this.#state = applyDisabledExtensionsToState(this.#state, disabledIds);
+		this.#mainList.setExtensions(this.#state.searchFiltered);
+		if (this.#state.selected) {
+			this.#inspector.setExtension(this.#state.selected);
+		}
 		this.#buildLayout();
 		this.onRequestRender?.();
 	}

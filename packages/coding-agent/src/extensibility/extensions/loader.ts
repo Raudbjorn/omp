@@ -18,7 +18,9 @@ import type { ExecOptions } from "../../exec/exec";
 import { execCommand } from "../../exec/exec";
 import type { CustomMessage } from "../../session/messages";
 import { EventBus } from "../../utils/event-bus";
+import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "../plugins/legacy-pi-compat";
 import { getAllPluginExtensionPaths } from "../plugins/loader";
+
 import { resolvePath } from "../utils";
 import type {
 	Extension,
@@ -32,7 +34,15 @@ import type {
 	ToolDefinition,
 } from "./types";
 
+installLegacyPiSpecifierShim();
+
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
+type LoadedExtensionModule = ExtensionFactory | { default?: ExtensionFactory };
+
+function getExtensionFactory(module: LoadedExtensionModule): ExtensionFactory | null {
+	const candidate = typeof module === "function" ? module : module.default;
+	return typeof candidate === "function" ? candidate : null;
+}
 
 export class ExtensionRuntimeNotInitializedError extends Error {
 	constructor() {
@@ -268,10 +278,9 @@ async function loadExtension(
 	runtime: IExtensionRuntime,
 ): Promise<{ extension: Extension | null; error: string | null }> {
 	const resolvedPath = resolvePath(extensionPath, cwd);
-
 	try {
-		const module = await import(resolvedPath);
-		const factory = (module.default ?? module) as ExtensionFactory;
+		const module = (await loadLegacyPiModule(resolvedPath)) as LoadedExtensionModule;
+		const factory = getExtensionFactory(module);
 
 		if (typeof factory !== "function") {
 			return {

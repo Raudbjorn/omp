@@ -21,14 +21,21 @@ export declare class MacAppearanceObserver {
 /**
  * Long-lived macOS power assertion.
  *
- * On macOS this acquires an `IOKit` assertion that prevents idle sleep until
- * the handle is stopped or dropped. On other platforms it is a no-op handle so
- * the caller can keep one cross-platform code path.
+ * On macOS this acquires one or more `IOKit` assertions that prevent the
+ * requested sleep modes until the handle is stopped or dropped. On other
+ * platforms it is a no-op handle so the caller can keep one cross-platform
+ * code path.
  */
 export declare class MacOSPowerAssertion {
-  /** Acquire a macOS power assertion. */
+  /**
+   * Acquire a macOS power assertion. On non-macOS platforms returns a
+   * no-op handle so callers can stay cross-platform.
+   */
   static start(options?: MacOSPowerAssertionOptions | undefined | null): MacOSPowerAssertion
-  /** Release the power assertion early. */
+  /**
+   * Release every assertion held by this handle. Safe to call multiple
+   * times; subsequent calls are a no-op.
+   */
   stop(): void
 }
 
@@ -408,7 +415,7 @@ export declare enum Encoding {
  * streamed stdout/stderr output. Returns the exit code when the command
  * completes, or flags when cancelled or timed out.
  */
-export declare function executeShell(options: ShellExecuteOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null): Promise<ShellExecuteResult>
+export declare function executeShell(options: ShellExecuteOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null): Promise<ShellRunResult>
 
 /**
  * Extract the before/after slices around an overlay region.
@@ -519,6 +526,8 @@ export interface GlobMatch {
    * `symlink_metadata`).
    */
   mtime?: number
+  /** File size in bytes for regular files. */
+  size?: number
 }
 
 /** Input options for `glob`, including traversal, filtering, and cancellation. */
@@ -647,7 +656,10 @@ export declare enum GrepOutputMode {
 export interface GrepResult {
   /** Matches or per-file counts, depending on output mode. */
   matches: Array<GrepMatch>
-  /** Total matches across all files. */
+  /**
+   * Total matches across all files, or matched file count in filesWithMatches
+   * mode.
+   */
   totalMatches: number
   /** Number of files with at least one match. */
   filesWithMatches: number
@@ -764,6 +776,50 @@ export declare enum KeyEventType {
 }
 
 /**
+ * Walk the workspace once and return tree entries plus AGENTS.md candidates.
+ *
+ * File-level ignore rules for AGENTS.md are bypassed by checking each
+ * traversed directory directly when `collectAgentsMd` is enabled, but ignored
+ * directories are still pruned by the walker and are not searched.
+ */
+export declare function listWorkspace(options: ListWorkspaceOptions): Promise<ListWorkspaceResult>
+
+/** Input options for `listWorkspace`, the single-pass workspace startup scan. */
+export interface ListWorkspaceOptions {
+  /** Directory to scan. */
+  path: string
+  /** Maximum depth for returned tree entries. Root children are depth 1. */
+  maxDepth: number
+  /** Include hidden files and directories. Default: false. */
+  hidden?: boolean
+  /** Respect .gitignore files. Default: true. */
+  gitignore?: boolean
+  /**
+   * Also surface AGENTS.md files in directories at depth 1..=4, even when
+   * gitignore would otherwise hide the file. Walks deeper than `maxDepth`
+   * to find them. Default: false.
+   */
+  collectAgentsMd?: boolean
+  /** Timeout in milliseconds for the operation. */
+  timeoutMs?: number
+  /** Abort signal for cancelling the operation. */
+  signal?: unknown
+}
+
+/** Result payload returned by a workspace scan. */
+export interface ListWorkspaceResult {
+  /** Entries within `maxDepth`, with mtime and regular-file size metadata. */
+  entries: Array<GlobMatch>
+  /**
+   * Directory-scoped AGENTS.md files within depth 1..=4 (capped at 200).
+   * Always empty when `collectAgentsMd` is false.
+   */
+  agentsMdFiles: Array<string>
+  /** True when any output cap was hit. */
+  truncated: boolean
+}
+
+/**
  * System UI appearance reported by native macOS APIs (`detectMacOSAppearance`
  * and observer).
  */
@@ -774,11 +830,27 @@ export declare enum MacOSAppearance {
   Light = 'light'
 }
 
-/** Options for starting a macOS power assertion. */
+/**
+ * Options for starting a macOS power assertion.
+ *
+ * Each boolean maps to a `caffeinate(8)` flag and a corresponding `IOKit`
+ * `IOPMAssertion` type. Multiple flags can be combined; when set, one
+ * assertion is taken per flag and all are released together when the
+ * handle is stopped or dropped.
+ *
+ * If every flag is unset (or omitted), the handle behaves as if `idle`
+ * were `true` — preserving the historical default of `caffeinate -i`.
+ */
 export interface MacOSPowerAssertionOptions {
   /** Human-readable reason shown in macOS power diagnostics. */
   reason?: string
-  /** Keep the display awake in addition to preventing idle system sleep. */
+  /** `caffeinate -i`: prevent the system from idle-sleeping. */
+  idle?: boolean
+  /** `caffeinate -s`: prevent the system from sleeping (AC power only). */
+  system?: boolean
+  /** `caffeinate -u`: declare the user is active (wakes the display). */
+  user?: boolean
+  /** `caffeinate -d`: prevent the display from idle-sleeping. */
   display?: boolean
 }
 
@@ -1080,6 +1152,8 @@ export interface ShellExecuteOptions {
   env?: Record<string, string>
   /** Environment variables to apply once per session. */
   sessionEnv?: Record<string, string>
+  /** Run the command attached to a PTY. */
+  pty?: boolean
   /** Timeout in milliseconds before cancelling the command. */
   timeoutMs?: number
   /** Optional snapshot file to source on session creation. */
@@ -1088,18 +1162,6 @@ export interface ShellExecuteOptions {
   minimizer?: MinimizerOptions
   /** Abort signal for cancelling the operation. */
   signal?: unknown
-}
-
-/** Result of executing a shell command via brush-core. */
-export interface ShellExecuteResult {
-  /** Exit code when the command completes normally. */
-  exitCode?: number
-  /** Whether the command was cancelled via abort. */
-  cancelled: boolean
-  /** Whether the command timed out before completion. */
-  timedOut: boolean
-  /** See [`ShellRunResult::minimized`]. */
-  minimized?: MinimizerResult
 }
 
 /** Options for configuring a persistent shell session. */
@@ -1120,6 +1182,8 @@ export interface ShellRunOptions {
   cwd?: string
   /** Environment variables to apply for this command only. */
   env?: Record<string, string>
+  /** Run the command attached to a PTY. */
+  pty?: boolean
   /** Timeout in milliseconds before cancelling the command. */
   timeoutMs?: number
   /** Abort signal for cancelling the operation. */
@@ -1161,6 +1225,45 @@ export interface SliceResult {
  * width.
  */
 export declare function sliceWithWidth(line: string, startCol: number, length: number, strict: boolean | undefined | null, tabWidth: number): SliceResult
+
+export declare function summarizeCode(options: SummaryOptions): SummaryResult
+
+export interface SummaryOptions {
+  /** Source code to summarize. */
+  code: string
+  /** Language alias (e.g. "rust", "typescript") used before path inference. */
+  lang?: string
+  /** File path used to infer language by extension when `lang` is omitted. */
+  path?: string
+  /** Minimum total node lines before eliding a body/literal node. */
+  minBodyLines?: number
+  /** Minimum total comment lines before eliding a multiline block comment. */
+  minCommentLines?: number
+}
+
+export interface SummaryResult {
+  /** Canonical language name when parsing succeeded. */
+  language?: string
+  /** True when tree-sitter parsed the source without syntax errors. */
+  parsed: boolean
+  /** True when at least one elision span was emitted. */
+  elided: boolean
+  /** Total source lines. */
+  totalLines: number
+  /** Kept/elided segments in source order. */
+  segments: Array<SummarySegment>
+}
+
+export interface SummarySegment {
+  /** "kept" or "elided". */
+  kind: string
+  /** 1-based inclusive start line. */
+  startLine: number
+  /** 1-based inclusive end line. */
+  endLine: number
+  /** Verbatim text for kept segments; absent for elided segments. */
+  text?: string
+}
 
 /**
  * Check if a language is supported for highlighting.

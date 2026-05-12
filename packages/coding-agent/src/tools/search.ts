@@ -6,6 +6,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import { getFileReadCache } from "../edit/file-read-cache";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
@@ -50,7 +51,7 @@ const searchSchema = Type.Object({
 
 export type SearchToolInput = Static<typeof searchSchema>;
 
-const DEFAULT_MATCH_LIMIT = 500;
+export const DEFAULT_MATCH_LIMIT = 100;
 
 export interface SearchToolDetails {
 	truncation?: TruncationResult;
@@ -80,6 +81,8 @@ type SearchParams = Static<typeof searchSchema>;
 export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDetails> {
 	readonly name = "search";
 	readonly label = "Search";
+	readonly loadMode = "discoverable";
+	readonly summary = "Search file contents using ripgrep (fast text search)";
 	readonly description: string;
 	readonly parameters = searchSchema;
 	readonly strict = true;
@@ -118,7 +121,6 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			const patternHasNewline = normalizedPattern.includes("\n") || normalizedPattern.includes("\\n");
 			const effectiveMultiline = patternHasNewline;
 
-			const useHashLines = resolveFileDisplayMode(this.session).hashLines;
 			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
 			let searchPath: string;
 			let scopePath: string;
@@ -131,6 +133,10 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			}
 			const internalRouter = this.session.internalRouter;
 			const resolvedPathInputs: string[] = [];
+			// Absolute filesystem paths whose source is immutable (e.g. artifact://,
+			// pi://, skill://). Hashline anchors are suppressed for these on a
+			// per-file basis, leaving editable mixed-in files untouched.
+			const immutableSourcePaths = new Set<string>();
 			for (const rawPath of rawPaths) {
 				if (!internalRouter?.canHandle(rawPath)) {
 					resolvedPathInputs.push(rawPath);
@@ -143,8 +149,13 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				if (!resource.sourcePath) {
 					throw new ToolError(`Cannot search internal URL without a backing file: ${rawPath}`);
 				}
+				if (resource.immutable) {
+					immutableSourcePaths.add(path.resolve(resource.sourcePath));
+				}
 				resolvedPathInputs.push(resource.sourcePath);
 			}
+			const baseDisplayMode = resolveFileDisplayMode(this.session);
+			const immutableDisplayMode = resolveFileDisplayMode(this.session, { immutable: true });
 			// Tolerate missing entries in a multi-path call: skip ones whose base
 			// directory is gone, and only error if every entry is missing. Single
 			// missing path keeps the original ENOENT semantics.
@@ -333,6 +344,10 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				const modelOut: string[] = [];
 				const displayOut: string[] = [];
 				const fileMatches = matchesByFile.get(relativePath) ?? [];
+				const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
+				const useHashLines = immutableSourcePaths.has(absoluteFilePath)
+					? immutableDisplayMode.hashLines
+					: baseDisplayMode.hashLines;
 				const lineNumberWidth = fileMatches.reduce((width, match) => {
 					let nextWidth = Math.max(width, String(match.lineNumber).length);
 					for (const ctx of match.contextBefore ?? []) {
@@ -343,26 +358,31 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					}
 					return nextWidth;
 				}, 0);
+				const cacheEntries: Array<readonly [number, string]> = [];
 				for (const match of fileMatches) {
-					const pushLine = (lineNumber: number, line: string, isMatch: boolean) => {
+					const pushLine = (lineNumber: number, line: string, isMatch: boolean, recordable: boolean) => {
 						modelOut.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
 						displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
+						if (recordable) cacheEntries.push([lineNumber, line] as const);
 					};
 					if (match.contextBefore) {
 						for (const ctx of match.contextBefore) {
-							pushLine(ctx.lineNumber, ctx.line, false);
+							pushLine(ctx.lineNumber, ctx.line, false, true);
 						}
 					}
-					pushLine(match.lineNumber, match.line, true);
+					pushLine(match.lineNumber, match.line, true, !match.truncated);
 					if (match.truncated) {
 						linesTruncated = true;
 					}
 					if (match.contextAfter) {
 						for (const ctx of match.contextAfter) {
-							pushLine(ctx.lineNumber, ctx.line, false);
+							pushLine(ctx.lineNumber, ctx.line, false, true);
 						}
 					}
 					fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
+				}
+				if (cacheEntries.length > 0) {
+					getFileReadCache(this.session).recordSparse(path.resolve(searchPath, relativePath), cacheEntries);
 				}
 				return { model: modelOut, display: displayOut };
 			};

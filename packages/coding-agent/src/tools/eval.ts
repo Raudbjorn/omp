@@ -4,10 +4,10 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Markdown, Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { jsBackend, parseEvalInput, pythonBackend } from "../eval";
+import { jsBackend, parseEvalInput, pythonBackend, sniffEvalLanguage } from "../eval";
 import type { ExecutorBackend } from "../eval/backend";
 import evalGrammar from "../eval/eval.lark" with { type: "text" };
-import type { ParsedEvalCell } from "../eval/parse";
+import { ABORT_WARNING, type ParsedEvalCell } from "../eval/parse";
 import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
@@ -16,8 +16,8 @@ import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
 import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
 import { resolveEvalBackends, type ToolSession } from ".";
-import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
-import { formatTimeoutLine, formatTitle, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
+import { formatStyledTruncationWarning } from "./output-meta";
+import { formatTitle, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
@@ -26,7 +26,7 @@ export const EVAL_DEFAULT_PREVIEW_LINES = 10;
 
 export const evalSchema = Type.Object({
 	input: Type.String({
-		description: "eval input as a sequence of `===== <info> =====` cell headers followed by code",
+		description: "eval input as a sequence of `*** Begin <LANG>` cell headers followed by code",
 	}),
 });
 export type EvalToolParams = Static<typeof evalSchema>;
@@ -131,33 +131,6 @@ function timeoutSecondsFromMs(timeoutMs: number): number {
 	return clampTimeout("eval", timeoutMs / 1000);
 }
 
-/**
- * Best-effort language sniff for cells with no explicit `language`.
- *
- * Order:
- * 1. Shebang on first line (`#!/usr/bin/env python`, `#!/usr/bin/env node`, etc.)
- * 2. Strong syntactic markers unique to one language. We bias false negatives over
- *    false positives — anything ambiguous returns `undefined` and the caller falls
- *    back to the default-backend rules.
- */
-function sniffLanguage(code: string): EvalLanguage | undefined {
-	const stripped = code.replace(/^\s+/, "");
-	if (stripped.startsWith("#!")) {
-		const firstLine = stripped.split("\n", 1)[0]!.toLowerCase();
-		if (/(\bpython\d?\b|\bipython\b)/.test(firstLine)) return "python";
-		if (/(\bnode\b|\bbun\b|\bdeno\b|\bjavascript\b|\bjs\b)/.test(firstLine)) return "js";
-	}
-	const jsMarkers =
-		/(^|\n)\s*(const|let|var|async\s+function|function\s*\*?\s*[\w$]*\s*\(|import\s+[^\n]+\sfrom\s|export\s+(default|const|let|function|class|async)|require\s*\(|console\.\w+\s*\(|=>|;\s*$)/m;
-	const pyMarkers =
-		/(^|\n)\s*(def\s+\w+\s*\(|from\s+[\w.]+\s+import|import\s+\w+(\s+as\s+\w+)?\s*$|class\s+\w+\s*[(:]|print\s*\(|elif\s+[^\n]*:|with\s+[^\n]+:\s*$|@[\w.]+\s*$)/m;
-	const hasJs = jsMarkers.test(code);
-	const hasPy = pyMarkers.test(code);
-	if (hasJs && !hasPy) return "js";
-	if (hasPy && !hasJs) return "python";
-	return undefined;
-}
-
 async function resolveBackend(
 	session: ToolSession,
 	requested: EvalLanguage | undefined,
@@ -180,7 +153,7 @@ async function resolveBackend(
 		return { backend: jsBackend, fallback: false };
 	}
 	// Auto-detect.
-	const sniffed = sniffLanguage(code);
+	const sniffed = sniffEvalLanguage(code);
 	if (sniffed === "python" && allowPy && (await pythonBackend.isAvailable(session))) {
 		return { backend: pythonBackend, fallback: false };
 	}
@@ -207,6 +180,8 @@ async function resolveBackend(
 
 export class EvalTool implements AgentTool<typeof evalSchema> {
 	readonly name = "eval";
+	readonly summary = "Execute Python or JavaScript code in an in-process eval backend";
+	readonly loadMode = "discoverable";
 	readonly label = "Eval";
 	get description(): string {
 		if (!this.session) return getEvalToolDescription();
@@ -216,6 +191,16 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	readonly parameters = evalSchema;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
+	readonly intent = (args: Partial<Static<typeof evalSchema>>): string | undefined => {
+		const input = args.input;
+		if (input) {
+			try {
+				const cells = parseEvalInput(input).cells;
+				return cells.map(cell => cell.title || `running ${cell.language}`).join("\n");
+			} catch {}
+		}
+		return "evaluating";
+	};
 
 	get customFormat(): { syntax: "lark"; definition: string } {
 		return { syntax: "lark", definition: evalGrammar };
@@ -434,10 +419,11 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						pushUpdate();
 						const errorMsg = result.output || "Command aborted";
 						const combinedOutput = cellOutputs.join("\n\n");
+						const abortSuffix = parsedInput.aborted ? `\n\n${ABORT_WARNING}` : "";
 						const outputText =
-							cells.length > 1
+							(cells.length > 1
 								? `${combinedOutput}\n\nCell ${i + 1} aborted: ${errorMsg}`
-								: combinedOutput || errorMsg;
+								: combinedOutput || errorMsg) + abortSuffix;
 
 						const summaryForMeta = await summarizeFinal(combinedOutput, finalizeOutput);
 						const details: EvalToolDetails = {
@@ -461,12 +447,13 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						cellResult.status = "error";
 						pushUpdate();
 						const combinedOutput = cellOutputs.join("\n\n");
+						const abortSuffix = parsedInput.aborted ? `\n\n${ABORT_WARNING}` : "";
 						const outputText =
-							cells.length > 1
+							(cells.length > 1
 								? `${combinedOutput}\n\nCell ${i + 1} failed (exit code ${result.exitCode}). Earlier cells succeeded—their state persists. Fix only cell ${i + 1}.`
 								: combinedOutput
 									? `${combinedOutput}\n\nCommand exited with code ${result.exitCode}`
-									: `Command exited with code ${result.exitCode}`;
+									: `Command exited with code ${result.exitCode}`) + abortSuffix;
 
 						const summaryForMeta = await summarizeFinal(combinedOutput, finalizeOutput);
 						const details: EvalToolDetails = {
@@ -491,8 +478,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 				}
 
 				const combinedOutput = cellOutputs.join("\n\n");
+				const abortSuffix = parsedInput.aborted ? `\n\n${ABORT_WARNING}` : "";
 				const outputText =
-					combinedOutput || (jsonOutputs.length > 0 || images.length > 0 ? "(no text output)" : "(no output)");
+					(combinedOutput || (jsonOutputs.length > 0 || images.length > 0 ? "(no text output)" : "(no output)")) +
+					abortSuffix;
 				const summaryForMeta = await summarizeFinal(combinedOutput, finalizeOutput);
 
 				const details: EvalToolDetails = {
@@ -560,6 +549,29 @@ interface EvalRenderContext {
 	previewLines?: number;
 	timeout?: number;
 	executionStartMs?: number;
+}
+
+function decodePartialJsonStringFragment(fragment: string): string {
+	let text = fragment.replace(/\\u[0-9a-fA-F]{0,3}$/, "");
+	const trailingBackslashes = text.match(/\\+$/)?.[0].length ?? 0;
+	if (trailingBackslashes % 2 === 1) text = text.slice(0, -1);
+	try {
+		return JSON.parse(`"${text}"`) as string;
+	} catch {
+		return text;
+	}
+}
+
+function extractPartialJsonString(partialJson: string | undefined, key: string): string | undefined {
+	if (!partialJson) return undefined;
+	const pattern = new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)`, "u");
+	const match = pattern.exec(partialJson);
+	if (!match) return undefined;
+	return decodePartialJsonStringFragment(match[1]);
+}
+
+function getRenderInput(args: EvalRenderArgs | undefined): string | undefined {
+	return args?.input ?? extractPartialJsonString(args?.__partialJson, "input");
 }
 
 function decodePartialJsonStringFragment(fragment: string): string {

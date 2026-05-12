@@ -44,6 +44,7 @@ import {
 	restoreLineEndings,
 	stripBom,
 } from "../normalize";
+import { readEditFileText, serializeEditFileText } from "../read-file";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
 import {
 	type ContextLineResult,
@@ -104,13 +105,13 @@ export const defaultFileSystem: FileSystem = {
 		return Bun.file(path).exists();
 	},
 	async read(path: string): Promise<string> {
-		return Bun.file(path).text();
+		return readEditFileText(path, path);
 	},
 	async readBinary(path: string): Promise<Uint8Array> {
 		return fs.promises.readFile(path);
 	},
 	async write(path: string, content: string): Promise<void> {
-		await Bun.write(path, content);
+		await Bun.write(path, await serializeEditFileText(path, path, content));
 	},
 	async delete(path: string): Promise<void> {
 		await fs.promises.unlink(path);
@@ -999,7 +1000,7 @@ async function readExistingPatchFile(fileSystem: FileSystem, absolutePath: strin
 	try {
 		return await fileSystem.read(absolutePath);
 	} catch (error) {
-		if (isEnoent(error)) {
+		if (isEnoent(error) || (error instanceof Error && error.message.startsWith("File not found:"))) {
 			throw new ApplyPatchError(`File not found: ${path}`);
 		}
 		throw error;
@@ -1637,7 +1638,7 @@ class LspFileSystem implements FileSystem {
 	}
 
 	async read(path: string): Promise<string> {
-		return this.#getFile(path).text();
+		return readEditFileText(path, path);
 	}
 
 	async readBinary(path: string): Promise<Uint8Array> {
@@ -1647,10 +1648,11 @@ class LspFileSystem implements FileSystem {
 
 	async write(path: string, content: string): Promise<void> {
 		const file = this.#getFile(path);
+		const finalContent = await serializeEditFileText(path, path, content);
 		const deferredForPath = this.deferredForPath;
 		const result = await this.writethrough(
 			path,
-			content,
+			finalContent,
 			this.signal,
 			file,
 			this.batchRequest,

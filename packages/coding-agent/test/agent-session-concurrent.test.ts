@@ -56,7 +56,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			getApiKey: () => "test-key",
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 			},
 			streamFn: (_model, _context, options) => {
@@ -110,11 +110,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		// Start first prompt (don't await, it will block until abort)
 		const firstPrompt = session.prompt("First message");
 
-		// Wait a tick for isStreaming to be set
-		await Bun.sleep(10);
-
-		// Verify we're streaming
-		expect(session.isStreaming).toBe(true);
+		await waitFor(() => session.isStreaming);
 
 		// Second prompt should reject
 		await expect(session.prompt("Second message")).rejects.toBeInstanceOf(AgentBusyError);
@@ -129,7 +125,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		// Start first prompt
 		const firstPrompt = session.prompt("First message");
-		await Bun.sleep(10);
+		await waitFor(() => session.isStreaming);
 
 		// steer should work while streaming
 		expect(() => session.steer("Steering message")).not.toThrow();
@@ -145,7 +141,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		// Start first prompt
 		const firstPrompt = session.prompt("First message");
-		await Bun.sleep(10);
+		await waitFor(() => session.isStreaming);
 
 		// followUp should work while streaming
 		expect(() => session.followUp("Follow-up message")).not.toThrow();
@@ -165,7 +161,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			getApiKey: () => "test-key",
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 			},
 			convertToLlm,
@@ -239,7 +235,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			getApiKey: () => "test-key",
 			initialState: {
 				model,
-				systemPrompt: "Test",
+				systemPrompt: ["Test"],
 				tools: [],
 			},
 			streamFn: () => {
@@ -384,7 +380,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 		const agent = new Agent({
 			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: "Test", tools: [] },
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
 			streamFn: (_model, _context, options) => {
 				streamCallCount++;
 				const stream = new MockAssistantStream();
@@ -445,7 +441,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 		const agent = new Agent({
 			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: "Test", tools: [] },
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
 			streamFn: (_model, _context, _options) => {
 				streamCallCount++;
 				const stream = new MockAssistantStream();
@@ -517,7 +513,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 		const agent = new Agent({
 			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: "Test", tools: [] },
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
 			streamFn: (_model, _context, options) => {
 				const stream = new MockAssistantStream();
 				const signal = options?.signal;
@@ -633,7 +629,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 		const agent = new Agent({
 			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: "Test", tools: [mockTool] },
+			initialState: { model, systemPrompt: ["Test"], tools: [mockTool] },
 			streamFn: (_model, _context, options) => {
 				streamCallCount++;
 				const stream = new MockAssistantStream();
@@ -743,7 +739,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 		const agent = new Agent({
 			getApiKey: () => "test-key",
-			initialState: { model: sparkModel, systemPrompt: "Test", tools: [] },
+			initialState: { model: sparkModel, systemPrompt: ["Test"], tools: [] },
 			streamFn: () => {
 				streamCallCount++;
 				const stream = new MockAssistantStream();

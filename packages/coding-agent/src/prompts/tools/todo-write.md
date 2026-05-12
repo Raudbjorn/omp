@@ -1,16 +1,17 @@
 Manages a phased task list. Pass `ops`: a flat array of operations.
 The next pending task is auto-promoted to `in_progress` after each completion.
+Allowed `op` values are only `init`, `start`, `done`, `drop`, `rm`, `append`, and `note`. `pending` is a task status, not an `op`; leave not-yet-started tasks implicit in `init`/`append` lists.
 
 ## Operations
 
 |`op`|Required fields|Effect|
 |---|---|---|
-|`init`|`list`|Initialize the full list|
+|`init`|`list: [{phase, items: string[]}]`|Initialize the full list (replaces any existing list)|
 |`start`|`task`|Mark in progress|
 |`done`|`task` or `phase`|Mark completed|
 |`drop`|`task` or `phase`|Mark abandoned|
 |`rm`|`task` or `phase`|Remove|
-|`append`|`phase`, `items: string[]`|Append tasks; lazily creates phase|
+|`append`|`phase`, `items: string[]`|Append tasks to `phase`; lazily creates phase|
 |`note`|`task`, `text`|Append a note to a task. Reminders for future-you only.|
 
 ## Anatomy

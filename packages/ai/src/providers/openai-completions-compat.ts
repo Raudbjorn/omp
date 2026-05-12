@@ -100,6 +100,52 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 	const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
 	const isMistral = provider === "mistral" || baseUrl.includes("mistral.ai");
 
+	// Hosts whose chat-completions endpoints are known to accept multiple
+	// leading `system`/`developer` messages (preferred for KV-cache reuse).
+	// Anything outside this allowlist defaults to coalescing because
+	// strict chat templates (Qwen 3.5+ via vLLM, MiniMax, etc.) reject
+	// follow-up system messages with a 400.
+	const isOpenAIHost = provider === "openai" || baseUrl.includes("api.openai.com");
+	const isAzureHost =
+		provider === "azure" ||
+		baseUrl.includes(".openai.azure.com") ||
+		baseUrl.includes("models.inference.ai.azure.com") ||
+		baseUrl.includes("azure.com/openai");
+	const isOpenRouter = provider === "openrouter" || baseUrl.includes("openrouter.ai");
+	const isTogether = provider === "together" || baseUrl.includes("api.together.xyz");
+	const isFireworks = baseUrl.includes("fireworks.ai");
+	const isGroqHost = provider === "groq" || baseUrl.includes("api.groq.com");
+	const isCopilotHost = provider === "github-copilot";
+	const isZenmuxHost = provider === "zenmux";
+	// Endpoints that MUST receive a single system block. MiniMax's OpenAI
+	// endpoint returns error 2013 on multiple system messages; Alibaba's
+	// Dashscope and Qwen Portal serve Qwen models whose chat template
+	// raises "System message must be at the beginning" if any system
+	// message appears past index 0.
+	const isMiniMaxHost =
+		provider === "minimax-code" ||
+		provider === "minimax-code-cn" ||
+		baseUrl.includes("api.minimax.io") ||
+		baseUrl.includes("api.minimaxi.com");
+	const isQwenPortal = provider === "qwen-portal" || baseUrl.includes("portal.qwen.ai");
+	const supportsMultipleSystemMessagesDefault =
+		!isMiniMaxHost &&
+		!isAlibaba &&
+		!isQwenPortal &&
+		(isOpenAIHost ||
+			isAzureHost ||
+			isOpenRouter ||
+			isCerebras ||
+			isTogether ||
+			isFireworks ||
+			isGroqHost ||
+			isDeepseekFamily ||
+			isMistral ||
+			isGrok ||
+			isZai ||
+			isCopilotHost ||
+			isZenmuxHost);
+
 	const reasoningEffortMap: NonNullable<OpenAICompat["reasoningEffortMap"]> =
 		provider === "groq" && model.id === "qwen/qwen3-32b"
 			? ({
@@ -116,10 +162,12 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 	return {
 		supportsStore: !isNonStandard,
 		supportsDeveloperRole: !isNonStandard,
+		supportsMultipleSystemMessages: supportsMultipleSystemMessagesDefault,
 		supportsReasoningEffort: !isGrok && !isZai,
 		reasoningEffortMap,
 		supportsUsageInStreaming: !isCerebras,
 		disableReasoningOnForcedToolChoice: isKimiModel || isAnthropicModel,
+		disableReasoningOnToolChoice: isDeepseekFamily && Boolean(model.reasoning),
 		supportsToolChoice: true,
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: isMistral,
@@ -175,6 +223,8 @@ export function resolveOpenAICompat(
 	return {
 		supportsStore: model.compat.supportsStore ?? detected.supportsStore,
 		supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
+		supportsMultipleSystemMessages:
+			model.compat.supportsMultipleSystemMessages ?? detected.supportsMultipleSystemMessages,
 		supportsReasoningEffort: model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
 		reasoningEffortMap: model.compat.reasoningEffortMap ?? detected.reasoningEffortMap,
 		supportsUsageInStreaming: model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
@@ -196,6 +246,7 @@ export function resolveOpenAICompat(
 			model.compat.requiresAssistantContentForToolCalls ?? detected.requiresAssistantContentForToolCalls,
 		disableReasoningOnForcedToolChoice:
 			model.compat.disableReasoningOnForcedToolChoice ?? detected.disableReasoningOnForcedToolChoice,
+		disableReasoningOnToolChoice: model.compat.disableReasoningOnToolChoice ?? detected.disableReasoningOnToolChoice,
 		openRouterRouting: model.compat.openRouterRouting ?? detected.openRouterRouting,
 		vercelGatewayRouting: model.compat.vercelGatewayRouting ?? detected.vercelGatewayRouting,
 		supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,

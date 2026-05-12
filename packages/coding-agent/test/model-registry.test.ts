@@ -226,6 +226,34 @@ describe("ModelRegistry", () => {
 			expect(variants.some(variant => variant.selector === "openrouter/z-ai/glm-4.7-20251222:nitro")).toBe(true);
 		});
 
+		test("uses bundled metadata for Ollama cloud aliases in custom local-proxy configs", () => {
+			writeRawModelsJson({
+				ollama: {
+					baseUrl: "http://127.0.0.1:11434/v1",
+					api: "openai-completions",
+					auth: "none",
+					models: [
+						{
+							id: "deepseek-v4-pro:cloud",
+							name: "DeepSeek V4 Pro (Ollama Cloud)",
+							reasoning: true,
+							input: ["text"],
+							contextWindow: 1_048_576,
+							maxTokens: 65_536,
+						},
+					],
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const model = registry.find("ollama", "deepseek-v4-pro:cloud");
+			const variants = registry.getCanonicalVariants("deepseek-v4-pro");
+
+			expect(model?.cost.cacheRead).toBeGreaterThan(0);
+			expect(model?.thinking?.maxLevel).toBe(Effort.XHigh);
+			expect(variants.some(variant => variant.selector === "ollama/deepseek-v4-pro:cloud")).toBe(true);
+		});
+
 		test("collapses anthropic latest aliases into the best upstream claude family id", () => {
 			writeRawModelsJson({
 				demo: providerConfig("https://demo.example.com/v1", [
@@ -444,6 +472,24 @@ describe("ModelRegistry", () => {
 			expect(anthropicModels.length).toBeGreaterThan(1);
 			for (const model of anthropicModels) {
 				expect(model.headers?.["X-Custom-Header"]).toBe("custom-only");
+			}
+		});
+
+		test("authHeader override applies bearer auth to built-in models without custom models", () => {
+			writeRawModelsJson({
+				anthropic: {
+					baseUrl: "https://anthropic-proxy.example.com/v1",
+					apiKey: "issue-929-key",
+					authHeader: true,
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const anthropicModels = getModelsForProvider(registry, "anthropic");
+
+			expect(anthropicModels.length).toBeGreaterThan(1);
+			for (const model of anthropicModels) {
+				expect(model.headers?.Authorization).toBe("Bearer issue-929-key");
 			}
 		});
 

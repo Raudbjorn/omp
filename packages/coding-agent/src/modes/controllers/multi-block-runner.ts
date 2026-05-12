@@ -250,7 +250,7 @@ export async function runMultiBlockSubmission(options: MultiBlockRunnerOptions):
 }
 
 function findInvalidPromptChainCommand(
-	blocks: SubmissionBlock[],
+	blocks: SubmissionLineIntentEntry[] extends never ? never : ReturnType<typeof splitSubmissionIntoBlocks>["blocks"],
 	options: Parameters<typeof hasFutureHandledBlock>[2],
 ): string | null {
 	for (let i = 0; i < blocks.length; i += 1) {

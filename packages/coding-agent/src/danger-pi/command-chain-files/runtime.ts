@@ -4,7 +4,7 @@ import { parseCommandArgs, substituteArgs } from "../../utils/command-args";
 
 export type PromptChainStreamingBehavior = "followUp" | "steer";
 
-export interface PromptChainDispatchOptions {
+interface PromptChainDispatchOptions {
 	streamingBehavior?: PromptChainStreamingBehavior;
 	images?: readonly ImageContent[];
 }
@@ -65,16 +65,19 @@ export function createPromptChainExecutor(host: PromptChainRuntimeHost): PromptC
 		}
 	};
 
-	// Only invoked after onTurnComplete has confirmed result.success, so this
-	// unconditionally advances to the next step. Failures abort the chain in the
-	// onTurnComplete callback before we get here.
-	const completeCurrentStep = (): void => {
+	const completeCurrentStep = (result: PromptChainTurnResult): void => {
 		const chain = queue[0];
 		if (!chain || chain.activeStepIndex === undefined) {
 			return;
 		}
-		chain.nextStepIndex = chain.activeStepIndex + 1;
+
+		const completedStepIndex = chain.activeStepIndex;
 		chain.activeStepIndex = undefined;
+		if (!result.success) {
+			return;
+		}
+
+		chain.nextStepIndex = completedStepIndex + 1;
 	};
 
 	const dispatchCurrentStep = async (chain: QueuedChainState, options?: PromptChainDispatchOptions): Promise<void> => {
@@ -106,18 +109,13 @@ export function createPromptChainExecutor(host: PromptChainRuntimeHost): PromptC
 			return;
 		}
 		listenerInstalled = true;
-		// Errors from dispatchCurrentStep are intentionally allowed to propagate so
-		// that the chain state (activeStepIndex cleared, nextStepIndex unchanged)
-		// is preserved for the next turn completion to retry the failed step.
-		// The production caller in AgentSession is responsible for catching the
-		// rejection on the void-ed promise to prevent unhandled-rejection noise.
 		host.onTurnComplete(async result => {
 			const hadActiveStep = queue[0]?.activeStepIndex !== undefined;
 			if (!result.success && hadActiveStep) {
 				clearQueue();
 				return;
 			}
-			completeCurrentStep();
+			completeCurrentStep(result);
 			removeFinishedChains();
 			const chain = queue[0];
 			if (!chain) {

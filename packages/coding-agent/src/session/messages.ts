@@ -32,6 +32,12 @@ export const MULTI_BLOCK_TEXT_MESSAGE_TYPE = "multi-block-text";
 /** Custom message type for builtin slash commands emitted within multi-block submissions. */
 export const MULTI_BLOCK_COMMAND_MESSAGE_TYPE = "multi-block-command";
 
+/** Custom message type for textual blocks emitted during multi-block submissions. */
+export const MULTI_BLOCK_TEXT_MESSAGE_TYPE = "multi-block-text";
+
+/** Custom message type for builtin slash commands emitted within multi-block submissions. */
+export const MULTI_BLOCK_COMMAND_MESSAGE_TYPE = "multi-block-command";
+
 export interface SkillPromptDetails {
 	name: string;
 	path: string;

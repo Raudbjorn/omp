@@ -111,35 +111,6 @@ function getStrictFlags(params: unknown): boolean[] {
 	return tools.map(tool => tool.strict === true);
 }
 
-function createRejectedMockRequest(error: Error): MockAnthropicRequest {
-	return {
-		async withResponse() {
-			throw error;
-		},
-	};
-}
-
-function createStrictGrammarTooLargeError(): Error {
-	const error = new Error(
-		'400 {"type":"error","error":{"type":"invalid_request_error","message":"The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas or reduce the number of strict tools."},"request_id":"req_test"}',
-	);
-	(error as Error & { status: number }).status = 400;
-	return error;
-}
-
-function createOtherInvalidRequestError(): Error {
-	const error = new Error(
-		'400 {"type":"error","error":{"type":"invalid_request_error","message":"Some other validation error."},"request_id":"req_test"}',
-	);
-	(error as Error & { status: number }).status = 400;
-	return error;
-}
-
-function getStrictFlags(params: unknown): boolean[] {
-	const tools = (params as { tools?: Array<{ strict?: unknown }> }).tools ?? [];
-	return tools.map(tool => tool.strict === true);
-}
-
 function createTextSuccessEvents(text: string): MockAnthropicEvent[] {
 	return [
 		{

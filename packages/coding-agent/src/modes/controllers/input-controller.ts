@@ -320,43 +320,23 @@ export class InputController {
 			}
 
 			// Handle skill commands (/skill:name [args])
-			if (text.startsWith("/skill:")) {
+			if (isSingleLineSubmission && !safePasteIntent && text.startsWith("/skill:")) {
+				const skillOutcome = await this.#handleSkillCommand(text, {
+					addToHistory: true,
+				});
+				if (skillOutcome !== "not-handled") {
+					return;
+				}
+			}
+
+			if (isSingleLineSubmission && !safePasteIntent && text.startsWith("/") && runner?.getCommand) {
 				const spaceIndex = text.indexOf(" ");
 				const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-				const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
-				const skillEntry = this.ctx.skillCommands?.get(commandName);
-				const skillPath = skillEntry?.filePath;
-				if (skillPath) {
-					this.ctx.editor.addToHistory(text);
+				if (runner.getCommand(commandName)) {
 					this.ctx.editor.setText("");
-					try {
-						const content = await Bun.file(skillPath).text();
-						const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
-						const metaLines = [`Skill: ${skillPath}`];
-						if (args) {
-							metaLines.push(`User: ${args}`);
-						}
-						const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
-						const skillName = commandName.slice("skill:".length);
-						const details: SkillPromptDetails = {
-							name: skillName || commandName,
-							path: skillPath,
-							args: args || undefined,
-							lineCount: body ? body.split("\n").length : 0,
-						};
-						await this.ctx.session.promptCustomMessage(
-							{
-								customType: SKILL_PROMPT_MESSAGE_TYPE,
-								content: message,
-								display: true,
-								details,
-								attribution: "user",
-							},
-							{ streamingBehavior: "followUp" },
-						);
-					} catch (err) {
-						this.ctx.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
-					}
+					const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
+					this.ctx.pendingImages = [];
+					await this.ctx.session.prompt(text, { images });
 					return;
 				}
 			}
@@ -379,8 +359,8 @@ export class InputController {
 				const isExcluded = text.startsWith("$$");
 				const code = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (code) {
-					if (this.ctx.session.isEvalRunning) {
-						this.ctx.showWarning("A Python execution is already running. Press Esc to cancel it first.");
+					const handled = await executePythonShortcut(this.ctx, code, isExcluded, { historyEntry: text });
+					if (!handled) {
 						this.ctx.editor.setText(text);
 					}
 					return;
@@ -416,7 +396,11 @@ export class InputController {
 				// the streaming/queue path.
 				await this.ctx.withLocalSubmission(
 					text,
-					() => this.ctx.session.prompt(text, { streamingBehavior: "steer", images }),
+					() =>
+						this.ctx.session.prompt(text, {
+							streamingBehavior: "steer",
+							images,
+						}),
 					{ imageCount: images?.length ?? 0 },
 				);
 				this.ctx.updatePendingMessagesDisplay();
@@ -429,24 +413,7 @@ export class InputController {
 			this.ctx.flushPendingBashComponents();
 
 			// Generate session title on first message
-			const hasUserMessages = this.ctx.session.messages.some((m: AgentMessage) => m.role === "user");
-			if (!hasUserMessages && !this.ctx.sessionManager.getSessionName() && !$env.PI_NO_TITLE) {
-				const registry = this.ctx.session.modelRegistry;
-				generateSessionTitle(text, registry, this.ctx.settings, this.ctx.session.sessionId, this.ctx.session.model)
-					.then(async title => {
-						if (title) {
-							const applied = await this.ctx.sessionManager.setSessionName(title, "auto");
-							if (applied) {
-								setSessionTerminalTitle(
-									this.ctx.sessionManager.getSessionName()!,
-									this.ctx.sessionManager.getCwd(),
-								);
-								this.ctx.updateEditorBorderColor();
-							}
-						}
-					})
-					.catch(() => {});
-			}
+			this.#maybeGenerateSessionTitle(text);
 
 			if (this.ctx.onInputCallback) {
 				// Include any pending images from clipboard paste
@@ -491,7 +458,14 @@ export class InputController {
 			return;
 		}
 		const registry = this.ctx.session.modelRegistry;
-		generateSessionTitle(text, registry, this.ctx.settings, this.ctx.session.sessionId, this.ctx.session.model)
+		generateSessionTitle(
+			text,
+			registry,
+			this.ctx.settings,
+			this.ctx.session.sessionId,
+			this.ctx.session.model,
+			provider => this.ctx.session.agent.metadataForProvider(provider),
+		)
 			.then(async title => {
 				if (title) {
 					const applied = await this.ctx.sessionManager.setSessionName(title, "auto");
@@ -519,7 +493,9 @@ export class InputController {
 	}
 
 	handleCtrlD(): void {
-		// Only called when editor is empty (enforced by CustomEditor)
+		// Editor text (if any) is snapshotted at the start of shutdown() and
+		// persisted as a draft for the next resume. Empty text is also fine —
+		// shutdown clears any stale sidecar in that case.
 		void this.ctx.shutdown();
 	}
 
@@ -745,7 +721,10 @@ export class InputController {
 		this.ctx.editor.setText("");
 		try {
 			const content = await Bun.file(skillPath).text();
-			const { body } = parseFrontmatter(content, { source: skillPath, level: "fatal" });
+			const { body } = parseFrontmatter(content, {
+				source: skillPath,
+				level: "fatal",
+			});
 			const skillName = commandName.slice("skill:".length);
 			const expandedBody = isNative
 				? await interpolateShellExpressions({
@@ -911,6 +890,7 @@ export class InputController {
 	toggleThinkingBlockVisibility(): void {
 		this.ctx.hideThinkingBlock = !this.ctx.hideThinkingBlock;
 		settings.set("hideThinkingBlock", this.ctx.hideThinkingBlock);
+		this.ctx.session.agent.hideThinkingSummary = this.ctx.hideThinkingBlock;
 
 		// Rebuild chat from session messages
 		this.ctx.chatContainer.clear();

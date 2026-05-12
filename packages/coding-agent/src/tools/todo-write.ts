@@ -108,12 +108,6 @@ function cloneTask(task: TodoItem): TodoItem {
 	return out;
 }
 
-function cloneTask(task: TodoItem): TodoItem {
-	const out: TodoItem = { id: task.id, content: task.content, status: task.status };
-	if (task.notes && task.notes.length > 0) out.notes = [...task.notes];
-	return out;
-}
-
 function clonePhases(phases: TodoPhase[]): TodoPhase[] {
 	return phases.map(phase => ({ name: phase.name, tasks: phase.tasks.map(cloneTask) }));
 }
@@ -442,142 +436,6 @@ export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: str
 	normalizeInProgressTask(phases);
 	return { phases, errors };
 }
-/** Apply an array of `todo_write`-style ops to existing phases. Used by /todo slash command. */
-export function applyOpsToPhases(
-	currentPhases: TodoPhase[],
-	ops: TodoWriteParams["ops"],
-): { phases: TodoPhase[]; errors: string[] } {
-	const startFile = fileFromPhases(currentPhases);
-	const { file, errors } = applyParams(startFile, { ops });
-	return { phases: file.phases, errors };
-}
-
-// =============================================================================
-// Markdown round-trip
-// =============================================================================
-
-const STATUS_TO_MARKER: Record<TodoStatus, string> = {
-	pending: " ",
-	in_progress: "/",
-	completed: "x",
-	abandoned: "-",
-};
-
-/** Render todo phases as a Markdown checklist suitable for editing/copying. */
-export function phasesToMarkdown(phases: TodoPhase[]): string {
-	if (phases.length === 0) return "# I. Todos\n";
-	const out: string[] = [];
-	for (let i = 0; i < phases.length; i++) {
-		if (i > 0) out.push("");
-		out.push(`# ${phases[i].name}`);
-		for (const task of phases[i].tasks) {
-			out.push(`- [${STATUS_TO_MARKER[task.status]}] ${task.content}`);
-			if (task.notes && task.notes.length > 0) {
-				for (let j = 0; j < task.notes.length; j++) {
-					if (j > 0) out.push("  >");
-					for (const noteLine of task.notes[j].split("\n")) {
-						out.push(noteLine === "" ? "  >" : `  > ${noteLine}`);
-					}
-				}
-			}
-		}
-	}
-	return `${out.join("\n")}\n`;
-}
-
-const MARKER_TO_STATUS: Record<string, TodoStatus> = {
-	" ": "pending",
-	"": "pending",
-	x: "completed",
-	X: "completed",
-	"/": "in_progress",
-	">": "in_progress",
-	"-": "abandoned",
-	"~": "abandoned",
-};
-
-/**
- * Parse a Markdown checklist back into todo phases. Task and phase ids are
- * regenerated; the agent observes the new ids in the system reminder.
- */
-export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: string[] } {
-	const errors: string[] = [];
-	const phases: TodoPhase[] = [];
-	let currentPhase: TodoPhase | undefined;
-	let currentTask: TodoItem | undefined;
-	let noteBuf: string[] = [];
-	let nextPhaseId = 1;
-	let nextTaskId = 1;
-
-	const flushNote = () => {
-		if (!currentTask || noteBuf.length === 0) {
-			noteBuf = [];
-			return;
-		}
-		while (noteBuf.length > 0 && noteBuf[noteBuf.length - 1] === "") noteBuf.pop();
-		if (noteBuf.length === 0) return;
-		const joined = noteBuf.join("\n");
-		currentTask.notes = currentTask.notes ? [...currentTask.notes, joined] : [joined];
-		noteBuf = [];
-	};
-
-	const lines = md.split(/\r?\n/);
-	for (let lineNum = 0; lineNum < lines.length; lineNum++) {
-		const raw = lines[lineNum];
-
-		// Blockquote line attached to the current task: `  > text` or `  >`
-		const noteMatch = /^\s*>\s?(.*)$/.exec(raw);
-		if (noteMatch && currentTask) {
-			const noteLine = noteMatch[1];
-			if (noteLine === "") {
-				// Blank `>` separates two distinct notes
-				flushNote();
-			} else {
-				noteBuf.push(noteLine);
-			}
-			continue;
-		}
-
-		const trimmed = raw.trim();
-		if (!trimmed) continue;
-
-		const headingMatch = /^#{1,6}\s+(.+?)\s*$/.exec(trimmed);
-		if (headingMatch) {
-			flushNote();
-			currentTask = undefined;
-			currentPhase = { id: `phase-${nextPhaseId++}`, name: headingMatch[1].trim(), tasks: [] };
-			phases.push(currentPhase);
-			continue;
-		}
-
-		const taskMatch = /^[-*+]\s*\[(.?)\]\s+(.+?)\s*$/.exec(trimmed);
-		if (taskMatch) {
-			flushNote();
-			if (!currentPhase) {
-				currentPhase = { id: `phase-${nextPhaseId++}`, name: "I. Todos", tasks: [] };
-				phases.push(currentPhase);
-			}
-			const marker = taskMatch[1];
-			const status = MARKER_TO_STATUS[marker];
-			if (!status) {
-				errors.push(`Line ${lineNum + 1}: unknown status marker "[${marker}]" (use [ ], [x], [/], [-])`);
-				currentTask = undefined;
-				continue;
-			}
-			currentTask = { id: `task-${nextTaskId++}`, content: taskMatch[2].trim(), status };
-			currentPhase.tasks.push(currentTask);
-			continue;
-		}
-
-		flushNote();
-		currentTask = undefined;
-		errors.push(`Line ${lineNum + 1}: unrecognized syntax "${trimmed}"`);
-	}
-	flushNote();
-
-	normalizeInProgressTask(phases);
-	return { phases, errors };
-}
 
 function formatSummary(phases: TodoPhase[], errors: string[]): string {
 	const tasks = phases.flatMap(phase => phase.tasks);
@@ -645,12 +503,12 @@ function formatSummary(phases: TodoPhase[], errors: string[]): string {
 export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWriteToolDetails> {
 	readonly name = "todo_write";
 	readonly label = "Todo Write";
+	readonly summary = "Write a structured todo list to track progress within a session";
 	readonly description: string;
 	readonly parameters = todoWriteSchema;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
-	readonly intent = "omit" as const;
-
+	readonly loadMode = "discoverable";
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(todoWriteDescription);
 	}

@@ -23,6 +23,7 @@ import type { ToolSession } from "..";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
 import type { Theme } from "../modes/theme/theme";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
+import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
 import { formatBytes, formatDuration } from "../tools/render-utils";
@@ -38,7 +39,6 @@ import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { renderResult, renderCall as renderTaskCall } from "./render";
 import { getTaskSimpleModeCapabilities, type TaskSimpleMode } from "./simple-mode";
-import { renderTemplate } from "./template";
 import {
 	type AgentDefinition,
 	type AgentProgress,
@@ -65,6 +65,12 @@ import {
 	type WorktreeBaseline,
 } from "./worktree";
 
+function renderSubagentUserPrompt(assignment: string, simpleMode: TaskSimpleMode): string {
+	return prompt.render(subagentUserPromptTemplate, {
+		assignment: assignment.trim(),
+		independentMode: simpleMode === "independent",
+	});
+}
 function createUsageTotals(): Usage {
 	return {
 		input: 0,
@@ -195,7 +201,9 @@ function validateTaskModeParams(simpleMode: TaskSimpleMode, params: TaskParams):
 export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 	readonly name = "task";
 	readonly label = "Task";
+	readonly summary = "Spawn a subagent to complete a parallel task";
 	readonly strict = true;
+	readonly loadMode = "discoverable";
 	readonly renderResult = renderResult;
 	readonly #discoveredAgents: AgentDefinition[];
 	readonly #blockedAgent: string | undefined;
@@ -280,21 +288,19 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 		const uniqueIds = await outputManager.allocateBatch(taskItems.map(t => t.id));
 		const fallbackAgentSource =
 			this.#discoveredAgents.find(agent => agent.name === params.agent)?.source ?? "bundled";
-		const { contextEnabled } = getTaskSimpleModeCapabilities(simpleMode);
-		const sharedContext = contextEnabled ? params.context : undefined;
-		const renderedTasks = taskItems.map(taskItem => renderTemplate(sharedContext, taskItem, simpleMode));
 		const progressByTaskId = new Map<string, AgentProgress>();
-		for (let index = 0; index < renderedTasks.length; index++) {
-			const renderedTask = renderedTasks[index];
-			progressByTaskId.set(renderedTask.id, {
+		for (let index = 0; index < taskItems.length; index++) {
+			const taskItem = taskItems[index];
+			const assignment = taskItem.assignment.trim();
+			progressByTaskId.set(taskItem.id, {
 				index,
-				id: renderedTask.id,
+				id: taskItem.id,
 				agent: params.agent,
 				agentSource: fallbackAgentSource,
 				status: "pending",
-				task: renderedTask.task,
-				assignment: renderedTask.assignment,
-				description: renderedTask.description,
+				task: renderSubagentUserPrompt(assignment, simpleMode),
+				assignment,
+				description: taskItem.description,
 				recentTools: [],
 				recentOutput: [],
 				toolCount: 0,
@@ -504,7 +510,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 		const { agent: agentName, context, schema: outputSchema } = params;
 		const simpleMode = this.#getTaskSimpleMode();
 		const { contextEnabled, customSchemaEnabled } = getTaskSimpleModeCapabilities(simpleMode);
-		const sharedContext = contextEnabled ? context : undefined;
+		const sharedContext = contextEnabled ? context?.trim() : undefined;
 		const isolationMode = this.session.settings.get("task.isolation.mode");
 		const isolationRequested = "isolated" in params ? params.isolated === true : false;
 		const isIsolated = isolationMode !== "none" && isolationRequested;
@@ -581,11 +587,12 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 		// Apply per-agent model override from settings (highest priority)
 		const agentModelOverrides = this.session.settings.get("task.agentModelOverrides");
 		const settingsModelOverride = agentModelOverrides[agentName];
+		const parentActiveModelPattern = this.session.getActiveModelString?.();
 		const modelOverride = resolveAgentModelPatterns({
 			settingsOverride: settingsModelOverride,
 			agentModel: effectiveAgent.model,
 			settings: this.session.settings,
-			activeModelPattern: this.session.getActiveModelString?.(),
+			activeModelPattern: parentActiveModelPattern,
 			fallbackModelPattern: this.session.getModelString?.(),
 		});
 		const thinkingLevelOverride = effectiveAgent.thinkingLevel;
@@ -799,8 +806,6 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 			}
 			const tasksWithUniqueIds = tasks.map((t, i) => ({ ...t, id: uniqueIds[i] }));
 
-			// Build full prompts using shared context only when the current task mode allows it.
-			const tasksWithContext = tasksWithUniqueIds.map(t => renderTemplate(sharedContext, t, simpleMode));
 			const availableSkills = [...(this.session.skills ?? [])];
 			const contextFiles = this.session.contextFiles?.filter(
 				file => path.basename(file.path).toLowerCase() !== "agents.md",
@@ -808,39 +813,42 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 			const promptTemplates = this.session.promptTemplates;
 
 			// Initialize progress for all tasks
-			for (let i = 0; i < tasksWithContext.length; i++) {
-				const t = tasksWithContext[i];
+			for (let i = 0; i < tasksWithUniqueIds.length; i++) {
+				const taskItem = tasksWithUniqueIds[i];
+				const assignment = taskItem.assignment.trim();
 				progressMap.set(i, {
 					index: i,
-					id: t.id,
+					id: taskItem.id,
 					agent: agentName,
 					agentSource: agent.source,
 					status: "pending",
-					task: t.task,
-					assignment: t.assignment,
+					task: renderSubagentUserPrompt(assignment, simpleMode),
+					assignment,
 					recentTools: [],
 					recentOutput: [],
 					toolCount: 0,
 					tokens: 0,
 					durationMs: 0,
 					modelOverride,
-					description: t.description,
+					description: taskItem.description,
 				});
 			}
 			emitProgress();
 
-			const runTask = async (task: (typeof tasksWithContext)[number], index: number) => {
+			const runTask = async (task: (typeof tasksWithUniqueIds)[number], index: number) => {
 				if (!isIsolated) {
 					return runSubprocess({
 						cwd: this.session.cwd,
 						agent,
-						task: task.task,
-						assignment: task.assignment,
+						task: renderSubagentUserPrompt(task.assignment, simpleMode),
+						assignment: task.assignment.trim(),
+						context: sharedContext,
 						description: task.description,
 						index,
 						id: task.id,
 						taskDepth,
 						modelOverride,
+						parentActiveModelPattern,
 						thinkingLevel: thinkingLevelOverride,
 						outputSchema: effectiveOutputSchema,
 						sessionFile,
@@ -862,6 +870,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						mcpManager: this.session.mcpManager,
 						contextFiles,
 						skills: availableSkills,
+						workspaceTree: this.session.workspaceTree,
 						promptTemplates,
 						localProtocolOptions,
 						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
@@ -889,13 +898,15 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						cwd: this.session.cwd,
 						worktree: isolationDir,
 						agent,
-						task: task.task,
-						assignment: task.assignment,
+						task: renderSubagentUserPrompt(task.assignment, simpleMode),
+						assignment: task.assignment.trim(),
+						context: sharedContext,
 						description: task.description,
 						index,
 						id: task.id,
 						taskDepth,
 						modelOverride,
+						parentActiveModelPattern,
 						thinkingLevel: thinkingLevelOverride,
 						outputSchema: effectiveOutputSchema,
 						sessionFile,
@@ -917,6 +928,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 						mcpManager: this.session.mcpManager,
 						contextFiles,
 						skills: availableSkills,
+						workspaceTree: this.session.workspaceTree,
 						promptTemplates,
 						localProtocolOptions,
 						parentHindsightSessionState: this.session.getHindsightSessionState?.(),
@@ -972,13 +984,14 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 					return result;
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
+					const assignment = task.assignment.trim();
 					return {
 						index,
 						id: task.id,
 						agent: agent.name,
 						agentSource: agent.source,
-						task: task.task,
-						assignment: task.assignment,
+						task: renderSubagentUserPrompt(assignment, simpleMode),
+						assignment,
 						description: task.description,
 						exitCode: 1,
 						output: "",
@@ -1004,7 +1017,7 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 
 			// Execute in parallel with concurrency limit
 			const { results: partialResults, aborted } = await mapWithConcurrencyLimit(
-				tasksWithContext,
+				tasksWithUniqueIds,
 				maxConcurrency,
 				runTask,
 				signal,
@@ -1015,14 +1028,15 @@ export class TaskTool implements AgentTool<TSchema, TaskToolDetails, Theme> {
 				if (result !== undefined) {
 					return result;
 				}
-				const task = tasksWithContext[index];
+				const task = tasksWithUniqueIds[index];
+				const assignment = task.assignment.trim();
 				return {
 					index,
 					id: task.id,
 					agent: agentName,
 					agentSource: agent.source,
-					task: task.task,
-					assignment: task.assignment,
+					task: renderSubagentUserPrompt(assignment, simpleMode),
+					assignment,
 					description: task.description,
 					exitCode: 1,
 					output: "",

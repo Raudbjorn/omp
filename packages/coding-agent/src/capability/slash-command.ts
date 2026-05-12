@@ -19,8 +19,6 @@ interface BaseSlashCommand {
 
 export interface TemplateSlashCommand extends BaseSlashCommand {
 	kind?: "template";
-	/** Optional description parsed from `description:` in frontmatter. */
-	description?: string;
 	/** Command content (markdown template) */
 	content: string;
 }

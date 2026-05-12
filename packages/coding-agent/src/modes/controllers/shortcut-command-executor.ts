@@ -24,12 +24,9 @@ export async function executeBashShortcut(
 		ctx.editor.addToHistory(options.historyEntry);
 	}
 
-	try {
-		await ctx.handleBashCommand(command, excludeFromContext);
-	} finally {
-		ctx.isBashMode = false;
-		ctx.updateEditorBorderColor();
-	}
+	await ctx.handleBashCommand(command, excludeFromContext);
+	ctx.isBashMode = false;
+	ctx.updateEditorBorderColor();
 	return true;
 }
 
@@ -39,7 +36,7 @@ export async function executePythonShortcut(
 	excludeFromContext: boolean,
 	options?: ShortcutExecutionOptions,
 ): Promise<boolean> {
-	if (ctx.session.isPythonRunning) {
+	if (ctx.session.isEvalRunning) {
 		ctx.showWarning("A Python execution is already running. Press Esc to cancel it first.");
 		return false;
 	}
@@ -48,11 +45,8 @@ export async function executePythonShortcut(
 		ctx.editor.addToHistory(options.historyEntry);
 	}
 
-	try {
-		await ctx.handlePythonCommand(code, excludeFromContext);
-	} finally {
-		ctx.isPythonMode = false;
-		ctx.updateEditorBorderColor();
-	}
+	await ctx.handlePythonCommand(code, excludeFromContext);
+	ctx.isPythonMode = false;
+	ctx.updateEditorBorderColor();
 	return true;
 }

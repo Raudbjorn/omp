@@ -26,6 +26,15 @@ It focuses on current implementation behavior, including fallback paths and cave
 
 `SessionManager.list(cwd, sessionDir?)` reads only that directory unless an explicit `sessionDir` is provided.
 
+### Global recent listing
+
+`omp --list-recent` uses `SessionManager.listAll()` to scan every project scope under the active sessions directory.
+
+- sorts by file `mtime` descending
+- prints the 10 most recently modified sessions
+- displays title, directory name, full session id, and a relative last-used time
+- colors each row with the session accent only when the session has a stored header title (the same title source used for the editor outline)
+
 ### Two listing paths with different payloads
 
 There are two different listing pipelines:

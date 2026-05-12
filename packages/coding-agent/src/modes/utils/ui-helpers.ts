@@ -11,7 +11,6 @@ import { CustomMessageComponent } from "../../modes/components/custom-message";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { EvalExecutionComponent } from "../../modes/components/eval-execution";
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
-import { SkillMessageComponent } from "../../modes/components/skill-message";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { UserMessageComponent } from "../../modes/components/user-message";
 import { theme } from "../../modes/theme/theme";
@@ -21,8 +20,6 @@ import {
 	type HookMessage,
 	MULTI_BLOCK_COMMAND_MESSAGE_TYPE,
 	MULTI_BLOCK_TEXT_MESSAGE_TYPE,
-	SKILL_PROMPT_MESSAGE_TYPE,
-	type SkillPromptDetails,
 } from "../../session/messages";
 import type { SessionContext } from "../../session/session-manager";
 import { formatBytes, formatDuration } from "../../tools/render-utils";
@@ -135,6 +132,19 @@ export class UiHelpers {
 						this.ctx.chatContainer.addChild(component);
 						break;
 					}
+					if (message.customType === MULTI_BLOCK_TEXT_MESSAGE_TYPE) {
+						const textContent = this.#getCustomMessageText(message);
+						const userComponent = new UserMessageComponent(textContent, true);
+						this.ctx.chatContainer.addChild(userComponent);
+						break;
+					}
+					if (message.customType === MULTI_BLOCK_COMMAND_MESSAGE_TYPE) {
+						const renderer = this.ctx.session.extensionRunner?.getMessageRenderer(message.customType);
+						const commandComponent = new CustomMessageComponent(message as CustomMessage<unknown>, renderer);
+						commandComponent.setExpanded(this.ctx.toolOutputExpanded);
+						this.ctx.chatContainer.addChild(commandComponent);
+						break;
+					}
 					if (
 						message.customType === "irc:incoming" ||
 						message.customType === "irc:autoreply" ||
@@ -234,7 +244,9 @@ export class UiHelpers {
 				break;
 			}
 			case "assistant": {
-				const assistantComponent = new AssistantMessageComponent(message, this.ctx.hideThinkingBlock);
+				const assistantComponent = new AssistantMessageComponent(message, this.ctx.hideThinkingBlock, () =>
+					this.ctx.ui.requestRender(),
+				);
 				this.ctx.chatContainer.addChild(assistantComponent);
 				break;
 			}
@@ -317,7 +329,10 @@ export class UiHelpers {
 							}
 							readGroup.updateArgs(content.arguments, content.id);
 							readGroup.updateResult(
-								{ content: [{ type: "text", text: errorMessage }], isError: true },
+								{
+									content: [{ type: "text", text: errorMessage }],
+									isError: true,
+								},
 								false,
 								content.id,
 							);
@@ -347,6 +362,7 @@ export class UiHelpers {
 							showImages: settings.get("terminal.showImages"),
 							editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 							editAllowFuzzy: settings.get("edit.fuzzyMatch"),
+							hashlineAutoDropPureInsertDuplicates: settings.get("edit.hashlineAutoDropPureInsertDuplicates"),
 						},
 						tool,
 						this.ctx.ui,
@@ -358,7 +374,10 @@ export class UiHelpers {
 
 					if (hasErrorStop && errorMessage) {
 						component.updateResult(
-							{ content: [{ type: "text", text: errorMessage }], isError: true },
+							{
+								content: [{ type: "text", text: errorMessage }],
+								isError: true,
+							},
 							false,
 							content.id,
 						);
@@ -538,7 +557,10 @@ export class UiHelpers {
 	}
 
 	queueCompactionMessage(text: string, mode: "steer" | "followUp"): void {
-		this.ctx.compactionQueuedMessages.push({ text, mode } as CompactionQueuedMessage);
+		this.ctx.compactionQueuedMessages.push({
+			text,
+			mode,
+		} as CompactionQueuedMessage);
 		this.ctx.editor.addToHistory(text);
 		this.ctx.editor.setText("");
 		this.ctx.updatePendingMessagesDisplay();

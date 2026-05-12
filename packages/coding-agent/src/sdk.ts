@@ -36,30 +36,6 @@ import { CursorExecHandlers } from "./cursor";
 import "./discovery";
 import * as path from "node:path";
 import { resolveConfigValue } from "./config/resolve-config-value";
-import {
-	deriveBudget,
-	estimateMessageTokens,
-	estimateToolDefinitionTokens,
-	segmentIntoTurns,
-	type TransformMetadata,
-	transformMessages,
-} from "./context/assembler";
-import { dedupCodec, readCodec, warmCodec } from "./context/assembler/codecs";
-import { formatAssemblySummary } from "./context/assembly-summary";
-import { ToolResultBridge } from "./context/bridge";
-import { captureEffectivePromptSnapshot, type EffectivePromptSnapshot } from "./context/effective-prompt-snapshot";
-import { extractPaths } from "./context/extract-paths";
-import {
-	extractAssistantText,
-	extractPathsFromText,
-	extractUserText,
-	formatHydratedContext,
-	IngestPipeline,
-	PassiveHydrator,
-	RecallStore,
-	resolveMemexLicense,
-} from "./context/recall";
-import { ToolResultStore } from "./context/recall/tool-result-store";
 import { dangerPiBundledExtensions } from "./danger-pi/extensions";
 import { initializeWithSettings } from "./discovery";
 import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./eval/py/executor";
@@ -107,12 +83,9 @@ import {
 	collectDiscoverableMCPTools,
 	formatDiscoverableMCPToolServerSummary,
 	selectDiscoverableMCPToolNamesByServer,
-	summarizeDiscoverableMCPTools,
 } from "./mcp/discoverable-tool-metadata";
 import { getMemoryRoot } from "./memories";
 import { resolveMemoryBackend } from "./memory-backend";
-import { compileSystemPrompt } from "./prompts/composer/compile";
-import composerInvariants from "./prompts/composer/invariants.md" with { type: "text" };
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
@@ -129,8 +102,7 @@ import { SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
-	type AgentsMdSearch,
-	buildAgentsMdSearch,
+	type BuildSystemPromptResult,
 	buildSystemPrompt as buildSystemPromptInternal,
 	buildSystemPromptToolMetadata,
 	loadProjectContextFiles as loadContextFilesInternal,
@@ -138,8 +110,14 @@ import {
 import { AgentOutputManager } from "./task/output-manager";
 import { parseThinkingLevel, resolveThinkingLevelForModel, toReasoningEffort } from "./thinking";
 import {
+	collectDiscoverableTools,
+	type DiscoverableTool,
+	summarizeDiscoverableTools,
+} from "./tool-discovery/tool-index";
+import {
 	BashTool,
 	BUILTIN_TOOLS,
+	computeEssentialBuiltinNames,
 	createTools,
 	discoverStartupLspServers,
 	EditTool,
@@ -168,6 +146,7 @@ import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { queueResolveHandler } from "./tools/resolve";
 import { EventBus } from "./utils/event-bus";
 import { buildNamedToolChoice } from "./utils/tool-choice";
+import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
 // Types
 export interface CreateAgentSessionOptions {
@@ -193,8 +172,8 @@ export interface CreateAgentSessionOptions {
 	/** Models available for cycling (Ctrl+P in interactive mode) */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 
-	/** System prompt. String replaces default, function receives default and returns final. */
-	systemPrompt?: string | ((defaultPrompt: string) => string);
+	/** System prompt blocks. Array replaces default, function receives default blocks and returns final blocks. */
+	systemPrompt?: string[] | ((defaultPrompt: string[]) => string[]);
 	/** Optional provider-facing session identifier for prompt caches and sticky auth selection.
 	 * Keeps persisted session files isolated while reusing provider-side caches. */
 	providerSessionId?: string;
@@ -222,6 +201,8 @@ export interface CreateAgentSessionOptions {
 	rules?: Rule[];
 	/** Context files (AGENTS.md content). Default: discovered walking up from cwd */
 	contextFiles?: Array<{ path: string; content: string }>;
+	/** Pre-built workspace tree (skips re-scanning; passed by parents to subagents). */
+	workspaceTree?: WorkspaceTree;
 	/** Prompt templates. Default: discovered from cwd/.omp/prompts/ + agentDir/prompts/ */
 	promptTemplates?: PromptTemplate[];
 	/** File-based slash commands. Default: discovered from commands/ directories */
@@ -313,6 +294,12 @@ export type {
 	MCPToolsLoadResult,
 } from "./mcp";
 export type { Tool } from "./tools";
+export {
+	buildDirectoryTree,
+	buildWorkspaceTree,
+	type DirectoryTree,
+	type WorkspaceTree,
+} from "./workspace-tree";
 
 export {
 	// Individual tool classes (for custom usage)
@@ -444,9 +431,12 @@ export interface BuildSystemPromptOptions {
 }
 
 /**
- * Build the default system prompt.
+ * Build the default provider-facing system prompt blocks.
+ *
+ * The returned `systemPrompt` preserves the stable harness prompt and dynamic project context
+ * as separate entries so providers can cache prompt prefixes without concatenating blocks.
  */
-export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<string> {
+export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<BuildSystemPromptResult> {
 	return await buildSystemPromptInternal({
 		cwd: options.cwd,
 		skills: options.skills,
@@ -713,7 +703,7 @@ function buildMCPPromptCommands(manager: MCPManager): LoadedCustomCommand[] {
  * const { session } = await createAgentSession({
  *   model: myModel,
  *   getApiKey: async () => Bun.env.MY_KEY,
- *   systemPrompt: 'You are helpful.',
+ *   systemPrompt: ['You are helpful.'],
  *   tools: codingTools({ cwd: getProjectDir() }),
  *   skills: [],
  *   sessionManager: SessionManager.inMemory(),
@@ -733,14 +723,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage);
 
 	const settings = options.settings ?? (await logger.time("settings", Settings.init, { cwd, agentDir }));
-	logger.time("initializeWithSettings", initializeWithSettings, settings, cwd);
+	logger.time("initializeWithSettings", initializeWithSettings, settings);
 	if (!options.modelRegistry) {
 		modelRegistry.refreshInBackground();
 	}
-	// Kick off AGENTS.md filesystem search in parallel — it is the slowest piece of buildSystemPrompt
-	// (~200ms on large repos) and only needs `cwd`, so it can overlap with everything that follows.
-	const agentsMdSearchPromise: Promise<AgentsMdSearch> = logger.time("buildAgentsMdSearch", buildAgentsMdSearch, cwd);
-	agentsMdSearchPromise.catch(() => {});
+	// Kick off workspace tree discovery early. The native workspace scan returns
+	// both the rendered-tree input and the AGENTS.md directory-context index, so
+	// startup does not perform a second recursive filesystem search. Subagents
+	// inherit the parent's resolved values via options.
+	const STARTUP_SCAN_DEADLINE_MS = 5000;
+	const workspaceTreePromise: Promise<WorkspaceTree> = options.workspaceTree
+		? Promise.resolve(options.workspaceTree)
+		: logger.time("buildWorkspaceTree", () => buildWorkspaceTree(cwd, { timeoutMs: STARTUP_SCAN_DEADLINE_MS }));
+	workspaceTreePromise.catch(() => {});
 
 	// Independent discoveries that depend only on cwd/agentDir — kicked off in parallel and awaited
 	// at their respective consumer sites. Their work can overlap with model resolution, secret loading,
@@ -938,11 +933,32 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		return { ttsrManager, rulebookRules, alwaysApplyRules };
 	});
 
-	const contextFiles = await contextFilesPromise;
+	// Resolve contextFiles up-front (it's needed before tool creation). The
+	// workspace tree scan is slow on large repos and we MUST NOT block startup on
+	// it. On timeout we forward `undefined` to ToolSession; buildSystemPromptInternal
+	// will re-race the same promise through its own withDeadline path. Background
+	// work continues so caches still warm.
+	const raceWithDeadline = <T>(name: string, work: Promise<T>): Promise<T | undefined> =>
+		Promise.race([
+			work,
+			Bun.sleep(STARTUP_SCAN_DEADLINE_MS).then(() => {
+				logger.warn("Startup scan exceeded deadline; deferring to system prompt fallback", {
+					name,
+					timeoutMs: STARTUP_SCAN_DEADLINE_MS,
+					cwd,
+				});
+				return undefined;
+			}),
+		]);
+	const [contextFiles, resolvedWorkspaceTree] = await Promise.all([
+		contextFilesPromise,
+		raceWithDeadline("buildWorkspaceTree", workspaceTreePromise),
+	]);
 
 	let agent: Agent;
 	let session!: AgentSession;
 	let hasSession = false;
+	let hasRegistered = false;
 	const enableLsp = options.enableLsp ?? true;
 	const backgroundJobsEnabled = isBackgroundJobSupportEnabled(settings);
 	const asyncMaxJobs = Math.min(100, Math.max(1, settings.get("async.maxJobs") ?? 100));
@@ -1006,76 +1022,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		options.agentDisplayName ?? ((options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main");
 	const evalKernelOwnerId = `agent-session:${Snowflake.next()}`;
 
-	// Initialize recall store early so the recall tool can be created during tool setup.
-	// Both the recall tool and ingest pipeline share the same store instance.
-	let recallStore: RecallStore | undefined;
-	let memexLicense: string | undefined;
-	try {
-		memexLicense = await resolveMemexLicense();
-		recallStore = await RecallStore.open({
-			agentDir,
-			sessionId: sessionManager.getSessionId(),
-		});
-		postmortem.register("recall-store-close", () => recallStore?.close());
-		logger.debug("RecallStore initialized for recall tool + ingest pipeline");
-	} catch (err) {
-		// No memex license or LanceDB init failure — recall is optional.
-		logger.debug("Recall infrastructure not available", {
-			error: err instanceof Error ? err.message : String(err),
-		});
-		recallStore = undefined;
-		memexLicense = undefined;
-	}
-
-	// Initialize FTS5 tool result store for keyword search over past tool results.
-	let toolResultStore: ToolResultStore | undefined;
-	try {
-		toolResultStore = ToolResultStore.open(path.join(agentDir, "tool-results.db"));
-		toolResultStore.cleanup(30 * 24 * 60 * 60 * 1000); // 30 days
-		postmortem.register("tool-result-store-close", () => toolResultStore?.close());
-		logger.debug("ToolResultStore initialized");
-	} catch (err) {
-		logger.debug("ToolResultStore not available", {
-			error: err instanceof Error ? err.message : String(err),
-		});
-		toolResultStore = undefined;
-	}
-
-	// Initialize recall store early so the recall tool can be created during tool setup.
-	// Both the recall tool and ingest pipeline share the same store instance.
-	let recallStore: RecallStore | undefined;
-	let memexLicense: string | undefined;
-	try {
-		memexLicense = await resolveMemexLicense();
-		recallStore = await RecallStore.open({
-			agentDir,
-			sessionId: sessionManager.getSessionId(),
-		});
-		postmortem.register("recall-store-close", () => recallStore?.close());
-		logger.debug("RecallStore initialized for recall tool + ingest pipeline");
-	} catch (err) {
-		// No memex license or LanceDB init failure — recall is optional.
-		logger.debug("Recall infrastructure not available", {
-			error: err instanceof Error ? err.message : String(err),
-		});
-		recallStore = undefined;
-		memexLicense = undefined;
-	}
-
-	// Initialize FTS5 tool result store for keyword search over past tool results.
-	let toolResultStore: ToolResultStore | undefined;
-	try {
-		toolResultStore = ToolResultStore.open(path.join(agentDir, "tool-results.db"));
-		toolResultStore.cleanup(30 * 24 * 60 * 60 * 1000); // 30 days
-		postmortem.register("tool-result-store-close", () => toolResultStore?.close());
-		logger.debug("ToolResultStore initialized");
-	} catch (err) {
-		logger.debug("ToolResultStore not available", {
-			error: err instanceof Error ? err.message : String(err),
-		});
-		toolResultStore = undefined;
-	}
-
 	try {
 		const getActiveModelString = (): string | undefined => {
 			const activeModel = agent?.state.model;
@@ -1095,6 +1041,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			},
 			skipPythonPreflight: options.skipPythonPreflight,
 			contextFiles,
+			workspaceTree: resolvedWorkspaceTree,
 			skills,
 			eventBus,
 			outputSchema: options.outputSchema,
@@ -1122,6 +1069,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getDiscoverableMCPSearchIndex: () => session.getDiscoverableMCPSearchIndex(),
 			getSelectedMCPToolNames: () => session.getSelectedMCPToolNames(),
 			activateDiscoveredMCPTools: toolNames => session.activateDiscoveredMCPTools(toolNames),
+			// Generic tool discovery (unified — covers built-in + MCP + extension)
+			isToolDiscoveryEnabled: () => session.isToolDiscoveryEnabled(),
+			getDiscoverableTools: filter => session.getDiscoverableTools(filter),
+			getDiscoverableToolSearchIndex: () => session.getDiscoverableToolSearchIndex(),
+			getSelectedDiscoveredToolNames: () => session.getSelectedDiscoveredToolNames(),
+			activateDiscoveredTools: toolNames => session.activateDiscoveredTools(toolNames),
 			getCheckpointState: () => session.getCheckpointState(),
 			setCheckpointState: state => session.setCheckpointState(state ?? undefined),
 			getToolChoiceQueue: () => session.toolChoiceQueue,
@@ -1468,15 +1421,40 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const repeatToolDescriptions = settings.get("repeatToolDescriptions");
 		const eagerTasks = settings.get("task.eager");
 		const intentField = settings.get("tools.intentTracing") || $flag("PI_INTENT_TRACING") ? INTENT_FIELD : undefined;
-		const rebuildSystemPrompt = async (toolNames: string[], tools: Map<string, AgentTool>): Promise<string> => {
+		const rebuildSystemPrompt = async (
+			toolNames: string[],
+			tools: Map<string, AgentTool>,
+		): Promise<BuildSystemPromptResult> => {
 			toolContextStore.setToolNames(toolNames);
 			const discoverableMCPTools = mcpDiscoveryEnabled ? collectDiscoverableMCPTools(tools.values()) : [];
-			const discoverableMCPSummary = summarizeDiscoverableMCPTools(discoverableMCPTools);
-			const hasDiscoverableMCPTools =
-				mcpDiscoveryEnabled && toolNames.includes("search_tool_bm25") && discoverableMCPTools.length > 0;
+			const activeToolNames = new Set(toolNames);
+			const discoverableBuiltinTools: DiscoverableTool[] =
+				effectiveDiscoveryMode === "all"
+					? collectDiscoverableTools(
+							Array.from(tools.values()).filter(
+								tool => tool.loadMode === "discoverable" && !activeToolNames.has(tool.name),
+							),
+							{ source: "builtin" },
+						)
+					: [];
+			const discoverableToolsForDesc: DiscoverableTool[] = [
+				...discoverableBuiltinTools,
+				...discoverableMCPTools.map(t => ({
+					name: t.name,
+					label: t.label,
+					summary: t.description,
+					source: "mcp" as const,
+					serverName: t.serverName,
+					mcpToolName: t.mcpToolName,
+					schemaKeys: t.schemaKeys,
+				})),
+			];
+			const discoverableToolSummary = summarizeDiscoverableTools(discoverableToolsForDesc);
+			const hasDiscoverableTools =
+				mcpDiscoveryEnabled && toolNames.includes("search_tool_bm25") && discoverableToolsForDesc.length > 0;
 			const promptTools = buildSystemPromptToolMetadata(tools, {
 				search_tool_bm25: {
-					description: renderSearchToolBm25Description(discoverableMCPTools),
+					description: renderSearchToolBm25Description(discoverableToolsForDesc),
 				},
 			});
 			const memoryInstructions = await resolveMemoryBackend(settings).buildDeveloperInstructions(
@@ -1515,11 +1493,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				appendSystemPrompt: appendPrompt,
 				repeatToolDescriptions,
 				intentField,
-				mcpDiscoveryMode: hasDiscoverableMCPTools,
-				mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(formatDiscoverableMCPToolServerSummary),
+				mcpDiscoveryMode: hasDiscoverableTools,
+				mcpDiscoveryServerSummaries: discoverableToolSummary.servers.map(formatDiscoverableMCPToolServerSummary),
 				eagerTasks,
 				secretsEnabled,
-				agentsMdSearch: agentsMdSearchPromise,
+				workspaceTree: workspaceTreePromise,
 			});
 
 			const applySystemPromptOverride = async (basePrompt: string): Promise<string> => {
@@ -1614,28 +1592,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					});
 				}
 			}
-			if (typeof options.systemPrompt === "string") {
-				return await buildSystemPromptInternal({
-					cwd,
-					skills,
-					contextFiles,
-					tools: promptTools,
-					toolNames,
-					rules: rulebookRules,
-					alwaysApplyRules,
-					skillsSettings: settings.getGroup("skills"),
-					customPrompt: options.systemPrompt,
-					appendSystemPrompt: appendPrompt,
-					repeatToolDescriptions,
-					intentField,
-					mcpDiscoveryMode: hasDiscoverableMCPTools,
-					mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(formatDiscoverableMCPToolServerSummary),
-					eagerTasks,
-					secretsEnabled,
-					agentsMdSearch: agentsMdSearchPromise,
-				});
+			if (Array.isArray(options.systemPrompt)) {
+				return { systemPrompt: options.systemPrompt };
 			}
-			return options.systemPrompt(defaultPrompt);
+			return {
+				systemPrompt: options.systemPrompt(defaultPrompt.systemPrompt),
+			};
 		};
 
 		const toolNamesFromRegistry = Array.from(toolRegistry.keys());
@@ -1644,7 +1606,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			toolNamesFromRegistry;
 		const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
 		const includeExitPlanMode = requestedToolNames.includes("exit_plan_mode");
-		const mcpDiscoveryEnabled = settings.get("mcp.discoveryMode") ?? false;
+		// Effective discovery mode: tools.discoveryMode takes precedence; mcp.discoveryMode is back-compat alias.
+		const toolsDiscoveryModeSetting = settings.get("tools.discoveryMode");
+		const effectiveDiscoveryMode: "off" | "mcp-only" | "all" =
+			toolsDiscoveryModeSetting !== "off"
+				? (toolsDiscoveryModeSetting as "off" | "mcp-only" | "all")
+				: settings.get("mcp.discoveryMode")
+					? "mcp-only"
+					: "off";
+		const mcpDiscoveryEnabled = effectiveDiscoveryMode !== "off"; // back-compat: true when any discovery active
 		const defaultInactiveToolNames = new Set(
 			registeredTools.filter(tool => tool.definition.defaultInactive).map(tool => tool.definition.name),
 		);
@@ -1701,7 +1671,47 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
-		const systemPrompt = await logger.time("buildSystemPrompt", rebuildSystemPrompt, initialToolNames, toolRegistry);
+		// When tools.discoveryMode === "all", hide non-essential built-in discoverable tools
+		// from the initial set unless they were explicitly requested or restored from persistence.
+		// The model finds them via search_tool_bm25 and activates them on demand.
+		if (effectiveDiscoveryMode === "all") {
+			const essentialBuiltinNames = new Set(computeEssentialBuiltinNames(settings));
+			const explicitlyRequestedToolNames = new Set(options.toolNames?.map(name => name.toLowerCase()) ?? []);
+			// Back-compat: persisted activations live under selectedMCPToolNames today (built-in
+			// activation persistence is a follow-up). MCP names won't collide with built-in names.
+			const restoredDiscoveredNames = new Set(existingSession.selectedMCPToolNames);
+			initialToolNames = initialToolNames.filter(name => {
+				const tool = toolRegistry.get(name);
+				if (!tool?.loadMode) return true; // not a built-in — leave MCP/custom/extension to existing logic
+				if (tool.loadMode === "essential") return true;
+				if (essentialBuiltinNames.has(name)) return true;
+				if (explicitlyRequestedToolNames.has(name)) return true;
+				if (restoredDiscoveredNames.has(name)) return true;
+				return false;
+			});
+		}
+
+		// Pre-register in the global agent registry BEFORE building the system prompt,
+		// so that subagents launched in the same parallel batch can see each other in
+		// their initial `# IRC Peers` block (rendered inside `rebuildSystemPrompt`).
+		// The session reference is attached after construction below.
+		agentRegistry.register({
+			id: resolvedAgentId,
+			displayName: resolvedAgentDisplayName,
+			kind: (options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main",
+			parentId: options.parentTaskPrefix,
+			session: null,
+			sessionFile: sessionManager.getSessionFile() ?? null,
+			status: "running",
+		});
+		hasRegistered = true;
+
+		const { systemPrompt } = await logger.time(
+			"buildSystemPrompt",
+			rebuildSystemPrompt,
+			initialToolNames,
+			toolRegistry,
+		);
 
 		const promptTemplates = await promptTemplatesPromise;
 		toolSession.promptTemplates = promptTemplates;
@@ -2090,13 +2100,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			presencePenalty: settings.get("presencePenalty") >= 0 ? settings.get("presencePenalty") : undefined,
 			repetitionPenalty: settings.get("repetitionPenalty") >= 0 ? settings.get("repetitionPenalty") : undefined,
 			serviceTier: initialServiceTier,
+			hideThinkingSummary: settings.get("hideThinkingBlock"),
 			kimiApiFormat: settings.get("providers.kimiApiFormat") ?? "anthropic",
 			preferWebsockets: preferOpenAICodexWebsockets,
 			getToolContext: tc => toolContextStore.getContext(tc),
 			getApiKey: async provider => {
-				// Use the provider-facing session id for sticky credential selection so cache keys
-				// and provider auth affinity stay aligned across fresh benchmark sessions.
-				const key = await modelRegistry.getApiKeyForProvider(provider, providerSessionId);
+				// Read agent.sessionId at call time so credential selection stays aligned
+				// with metadataResolver after /new, fork, resume, or branch switches.
+				const key = await modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
 				if (!key) {
 					throw new Error(`No API key found for provider "${provider}"`);
 				}
@@ -2179,22 +2190,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			asyncJobManager,
 			agentId: resolvedAgentId,
 			agentRegistry,
-			assemblerBridge: assemblerActive ? assemblerBridge : undefined,
-			getLastPromptSnapshotFn: () => lastPromptSnapshot,
+			providerSessionId: options.providerSessionId,
 		});
 		hasSession = true;
 
-		// Register this session in the global agent registry so other agents can
-		// address it via the irc tool. Wrap dispose to unregister on teardown.
-		agentRegistry.register({
-			id: resolvedAgentId,
-			displayName: resolvedAgentDisplayName,
-			kind: (options.taskDepth ?? 0) > 0 || options.parentTaskPrefix ? "sub" : "main",
-			parentId: options.parentTaskPrefix,
-			session,
-			sessionFile: sessionManager.getSessionFile() ?? null,
-			status: "running",
-		});
+		// Attach the live session to the pre-registered ref so peers can route IRC
+		// messages here. Refresh sessionFile in case it was unavailable at pre-register
+		// time. The dispose wrapper below unregisters on teardown.
+		agentRegistry.attachSession(resolvedAgentId, session, sessionManager.getSessionFile() ?? null);
 		{
 			const originalDispose = session.dispose.bind(session);
 			session.dispose = async () => {
@@ -2351,6 +2354,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (hasSession) {
 				await session.dispose();
 			} else {
+				if (hasRegistered) agentRegistry.unregister(resolvedAgentId);
 				await disposeKernelSessionsByOwner(evalKernelOwnerId);
 			}
 		} catch (cleanupError) {

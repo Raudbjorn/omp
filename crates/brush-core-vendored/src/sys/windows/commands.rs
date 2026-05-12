@@ -1,10 +1,10 @@
 //! Command execution utilities.
 
-use std::ffi::OsStr;
-use std::os::windows::process::CommandExt as WindowsCommandExt;
+use std::{ffi::OsStr, os::windows::process::CommandExt as WindowsCommandExt};
+
+use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
 
 use crate::{ShellFd, error, openfiles};
-use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
 
 /// Extension trait for Windows command extensions.
 pub trait CommandExt {
@@ -89,11 +89,31 @@ impl CommandFdInjectionExt for std::process::Command {
 pub trait CommandFgControlExt {
 	/// Arranges for the command to take the foreground when it is executed.
 	fn take_foreground(&mut self);
+	/// Arranges for the command to become a session leader when it is executed.
+	fn lead_session(&mut self);
 }
 
 impl CommandFgControlExt for std::process::Command {
 	fn take_foreground(&mut self) {
 		self.creation_flags(CREATE_NEW_PROCESS_GROUP);
+	}
+
+	fn lead_session(&mut self) {
+		self.creation_flags(CREATE_NEW_PROCESS_GROUP);
+	}
+}
+
+/// Extension trait for detaching a command from the parent's controlling terminal.
+pub trait CommandSessionExt {
+	/// Arranges for the command to run in a new POSIX session with no controlling
+	/// terminal. On Windows this is a no-op; process-group behavior is handled
+	/// by `CommandFgControlExt` via `CREATE_NEW_PROCESS_GROUP`.
+	fn detach_session(&mut self);
+}
+
+impl CommandSessionExt for std::process::Command {
+	fn detach_session(&mut self) {
+		// NOTE: Windows has no setsid; intentionally a no-op.
 	}
 }
 

@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
 	type Api,
@@ -20,15 +21,15 @@ import {
 	type ThinkingConfig,
 	unregisterCustomApis,
 } from "@oh-my-pi/pi-ai";
-
 // Sentinel for local-only OAuth token (LM Studio, vLLM) — declared inline to avoid loading
 // any provider module at startup. Must match `DEFAULT_LOCAL_TOKEN` in oauth/lm-studio.ts.
 const DEFAULT_LOCAL_TOKEN = "lm-studio-local";
 
 import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
-import { isRecord, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import { YAML } from "bun";
 import { type ConfigError, ConfigFile } from "../config";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import { isValidThemeColor, type ThemeColor } from "../modes/theme/theme";
@@ -258,7 +259,12 @@ const ModelOverrideSchema = Type.Object({
 type ModelOverride = Static<typeof ModelOverrideSchema>;
 
 const ProviderDiscoverySchema = Type.Object({
-	type: Type.Union([Type.Literal("ollama"), Type.Literal("llama.cpp"), Type.Literal("lm-studio")]),
+	type: Type.Union([
+		Type.Literal("ollama"),
+		Type.Literal("llama.cpp"),
+		Type.Literal("lm-studio"),
+		Type.Literal("openai-models-list"),
+	]),
 });
 
 const ProviderAuthSchema = Type.Union([Type.Literal("apiKey"), Type.Literal("none"), Type.Literal("oauth")]);
@@ -343,10 +349,11 @@ function validateProviderConfiguration(
 				!config.compat &&
 				!config.disableStrictTools &&
 				!hasModelOverrides &&
-				!config.discovery
+				!config.discovery &&
+				!config.apiKey
 			) {
 				throw new Error(
-					`Provider ${providerName}: must specify "baseUrl", "headers", "compat", "disableStrictTools", "modelOverrides", "discovery", or "models"`,
+					`Provider ${providerName}: must specify "baseUrl", "headers", "compat", "disableStrictTools", "modelOverrides", "discovery", "apiKey", or "models"`,
 				);
 			}
 		}
@@ -422,6 +429,7 @@ interface ProviderOverride {
 	baseUrl?: string;
 	headers?: Record<string, string>;
 	apiKey?: string;
+	authHeader?: boolean;
 	compat?: Model<Api>["compat"];
 }
 
@@ -435,7 +443,7 @@ interface DiscoveryProviderConfig {
 	optional?: boolean;
 }
 
-export type ProviderDiscoveryStatus = "idle" | "ok" | "cached" | "unavailable" | "unauthenticated";
+export type ProviderDiscoveryStatus = "idle" | "ok" | "empty" | "cached" | "unavailable" | "unauthenticated";
 
 export interface ProviderDiscoveryState {
 	provider: string;
@@ -668,14 +676,36 @@ function mergeCustomModelHeaders(
 	authHeader: boolean | undefined,
 	apiKeyConfig: string | undefined,
 ): Record<string, string> | undefined {
-	let headers = providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined;
-	if (authHeader && apiKeyConfig) {
-		const resolvedKey = resolveApiKeyConfig(apiKeyConfig);
-		if (resolvedKey) {
-			headers = { ...headers, Authorization: `Bearer ${resolvedKey}` };
-		}
+	return mergeAuthHeader({ ...providerHeaders, ...modelHeaders }, authHeader, apiKeyConfig);
+}
+
+function mergeAuthHeader(
+	headers: Record<string, string> | undefined,
+	authHeader: boolean | undefined,
+	apiKeyConfig: string | undefined,
+): Record<string, string> | undefined {
+	const nextHeaders = headers && Object.keys(headers).length > 0 ? { ...headers } : undefined;
+	if (!authHeader || !apiKeyConfig) {
+		return nextHeaders;
 	}
-	return headers;
+	const resolvedKey = resolveApiKeyConfig(apiKeyConfig);
+	return resolvedKey ? { ...nextHeaders, Authorization: `Bearer ${resolvedKey}` } : nextHeaders;
+}
+
+/**
+ * Decide whether a custom-yaml model should force OAuth-style request shaping.
+ * - Explicit `auth: oauth` → force on.
+ * - Explicit `auth: apiKey` / `auth: none` → leave unset (auto-detect by key prefix).
+ * - No `auth` specified and `api: anthropic-messages` → default on. Custom Anthropic
+ *   endpoints are typically Claude-Code-style proxies (e.g. CLIProxyAPI) that expect
+ *   the cloaked request shape regardless of how the proxy itself is authenticated.
+ * - Otherwise → unset.
+ */
+function resolveCustomModelIsOAuth(api: Api, providerAuth: ProviderAuthMode | undefined): boolean | undefined {
+	if (providerAuth === "oauth") return true;
+	if (providerAuth !== undefined) return undefined;
+	if (api === "anthropic-messages") return true;
+	return undefined;
 }
 
 /**
@@ -727,6 +757,69 @@ function buildCustomModelOverlay(
 	};
 }
 
+// Custom provider entries often front a known upstream model through a local proxy.
+// Use bundled metadata for missing pricing/capability fields, but keep the custom transport.
+function shouldReplaceCustomReference(existing: Model<Api> | undefined, candidate: Model<Api>): boolean {
+	if (!existing) return true;
+	if (candidate.contextWindow !== existing.contextWindow) {
+		return candidate.contextWindow > existing.contextWindow;
+	}
+	if (candidate.maxTokens !== existing.maxTokens) {
+		return candidate.maxTokens > existing.maxTokens;
+	}
+	const existingHasCachePricing = existing.cost.cacheRead > 0 || existing.cost.cacheWrite > 0;
+	const candidateHasCachePricing = candidate.cost.cacheRead > 0 || candidate.cost.cacheWrite > 0;
+	if (candidateHasCachePricing !== existingHasCachePricing) {
+		return candidateHasCachePricing;
+	}
+	return existing.provider !== "openai" && candidate.provider === "openai";
+}
+
+function buildCustomReferenceMap(): Map<string, Model<Api>> {
+	const references = new Map<string, Model<Api>>();
+	for (const provider of getBundledProviders()) {
+		for (const model of getBundledModels(provider as Parameters<typeof getBundledModels>[0])) {
+			const candidate = model as Model<Api>;
+			if (shouldReplaceCustomReference(references.get(candidate.id), candidate)) {
+				references.set(candidate.id, candidate);
+			}
+		}
+	}
+	return references;
+}
+
+const customReferenceMap = buildCustomReferenceMap();
+
+function getCustomReferenceCandidateIds(modelId: string): string[] {
+	const candidates = new Set<string>();
+	const queue = [modelId];
+	for (let index = 0; index < queue.length; index += 1) {
+		const candidate = queue[index]?.trim();
+		if (!candidate || candidates.has(candidate)) continue;
+		candidates.add(candidate);
+
+		for (const suffix of [":cloud", "-cloud"] as const) {
+			if (candidate.toLowerCase().endsWith(suffix)) {
+				queue.push(candidate.slice(0, -suffix.length));
+			}
+		}
+
+		const colonToDash = candidate.replace(/:/g, "-");
+		if (colonToDash !== candidate) {
+			queue.push(colonToDash);
+		}
+	}
+	return [...candidates];
+}
+
+function resolveCustomModelReference(modelId: string): Model<Api> | undefined {
+	for (const candidate of getCustomReferenceCandidateIds(modelId)) {
+		const reference = customReferenceMap.get(candidate);
+		if (reference) return reference;
+	}
+	return undefined;
+}
+
 function applyStandaloneCustomModelPolicies(model: CustomModelOverlay): CustomModelOverlay {
 	if (model.id !== "gpt-5.4" || model.provider === "github-copilot" || model.contextWindow !== undefined) {
 		return model;
@@ -736,23 +829,27 @@ function applyStandaloneCustomModelPolicies(model: CustomModelOverlay): CustomMo
 
 function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuildOptions): Model<Api> {
 	const resolvedModel = options.useDefaults ? applyStandaloneCustomModelPolicies(model) : model;
+	const reference = options.useDefaults ? resolveCustomModelReference(resolvedModel.id) : undefined;
 	const cost =
-		resolvedModel.cost ?? (options.useDefaults ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } : undefined);
-	const input = resolvedModel.input ?? (options.useDefaults ? ["text"] : undefined);
+		resolvedModel.cost ??
+		reference?.cost ??
+		(options.useDefaults ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } : undefined);
+	const input = resolvedModel.input ?? reference?.input ?? (options.useDefaults ? ["text"] : undefined);
 	return enrichModelThinking({
 		id: resolvedModel.id,
 		name: resolvedModel.name ?? (options.useDefaults ? resolvedModel.id : undefined),
 		api: resolvedModel.api,
 		provider: resolvedModel.provider,
 		baseUrl: resolvedModel.baseUrl,
-		reasoning: resolvedModel.reasoning ?? (options.useDefaults ? false : undefined),
-		thinking: resolvedModel.thinking,
+		reasoning: resolvedModel.reasoning ?? reference?.reasoning ?? (options.useDefaults ? false : undefined),
+		thinking: resolvedModel.thinking ?? reference?.thinking,
 		input: input as ("text" | "image")[],
 		cost,
-		contextWindow: resolvedModel.contextWindow ?? (options.useDefaults ? 128000 : undefined),
-		maxTokens: resolvedModel.maxTokens ?? (options.useDefaults ? 16384 : undefined),
+		contextWindow:
+			resolvedModel.contextWindow ?? reference?.contextWindow ?? (options.useDefaults ? 128000 : undefined),
+		maxTokens: resolvedModel.maxTokens ?? reference?.maxTokens ?? (options.useDefaults ? 16384 : undefined),
 		headers: resolvedModel.headers,
-		compat: resolvedModel.compat,
+		compat: mergeCompat(reference?.compat, resolvedModel.compat),
 		contextPromotionTarget: resolvedModel.contextPromotionTarget,
 		premiumMultiplier: resolvedModel.premiumMultiplier,
 		isOAuth: resolvedModel.isOAuth,
@@ -955,10 +1052,9 @@ export class ModelRegistry {
 
 			return models.map(m => {
 				if (!providerOverride) return m;
+				const withTransportOverride = this.#applyProviderTransportOverride(m, providerOverride);
 				return {
-					...m,
-					baseUrl: providerOverride.baseUrl ?? m.baseUrl,
-					headers: providerOverride.headers ? { ...m.headers, ...providerOverride.headers } : m.headers,
+					...withTransportOverride,
 					compat: mergeCompat(m.compat, providerOverride.compat),
 				};
 			});
@@ -1144,11 +1240,12 @@ export class ModelRegistry {
 		const configuredProviders = new Set(Object.keys(value.providers ?? {}));
 
 		for (const [providerName, providerConfig] of providerEntries) {
-			// Always set overrides when baseUrl/headers/apiKey/compat/disableStrictTools are present
+			// Always set overrides when baseUrl/headers/apiKey/authHeader/compat/disableStrictTools are present
 			if (
 				providerConfig.baseUrl ||
 				providerConfig.headers ||
 				providerConfig.apiKey ||
+				providerConfig.authHeader !== undefined ||
 				providerConfig.compat ||
 				providerConfig.disableStrictTools
 			) {
@@ -1157,6 +1254,7 @@ export class ModelRegistry {
 					baseUrl: providerConfig.baseUrl,
 					headers: providerConfig.headers,
 					apiKey: providerConfig.apiKey,
+					authHeader: providerConfig.authHeader,
 					compat: mergeCompat(providerConfig.compat, disableStrictCompat),
 				});
 			}
@@ -1304,11 +1402,13 @@ export class ModelRegistry {
 			? result.models.length > 0
 				? "cached"
 				: "unavailable"
-			: result.models.length > 0 && strategy !== "offline"
-				? "ok"
-				: cached
+			: strategy === "offline"
+				? cached
 					? "cached"
-					: "idle";
+					: "idle"
+				: result.models.length > 0
+					? "ok"
+					: "empty";
 		this.#providerDiscoveryStates.set(providerId, {
 			provider: providerId,
 			status,
@@ -1337,7 +1437,8 @@ export class ModelRegistry {
 			case "llama.cpp":
 				return this.#discoverLlamaCppModels(providerConfig);
 			case "lm-studio":
-				return this.#discoverLmStudioModels(providerConfig);
+			case "openai-models-list":
+				return this.#discoverOpenAIModelsList(providerConfig);
 		}
 	}
 
@@ -1632,8 +1733,8 @@ export class ModelRegistry {
 		return this.#applyProviderModelOverrides(providerConfig.provider, discovered);
 	}
 
-	async #discoverLmStudioModels(providerConfig: DiscoveryProviderConfig): Promise<Model<Api>[]> {
-		const baseUrl = this.#normalizeLmStudioBaseUrl(providerConfig.baseUrl);
+	async #discoverOpenAIModelsList(providerConfig: DiscoveryProviderConfig): Promise<Model<Api>[]> {
+		const baseUrl = this.#normalizeOpenAIModelsListBaseUrl(providerConfig.baseUrl);
 		const modelsUrl = `${baseUrl}/models`;
 
 		const headers: Record<string, string> = { ...(providerConfig.headers ?? {}) };
@@ -1703,7 +1804,7 @@ export class ModelRegistry {
 		}
 	}
 
-	#normalizeLmStudioBaseUrl(baseUrl?: string): string {
+	#normalizeOpenAIModelsListBaseUrl(baseUrl?: string): string {
 		const defaultBaseUrl = "http://127.0.0.1:1234/v1";
 		const raw = baseUrl || defaultBaseUrl;
 		try {
@@ -1739,18 +1840,24 @@ export class ModelRegistry {
 		return {
 			baseUrl: override.baseUrl ?? baseOverride?.baseUrl,
 			apiKey: override.apiKey ?? baseOverride?.apiKey,
+			authHeader: override.authHeader ?? baseOverride?.authHeader,
 			headers: override.headers ? { ...(baseOverride?.headers ?? {}), ...override.headers } : baseOverride?.headers,
 			compat: override.compat ? mergeCompat(baseOverride?.compat, override.compat) : baseOverride?.compat,
 		};
 	}
 	#applyProviderTransportOverride<T extends { baseUrl?: string; headers?: Record<string, string> }>(
 		entry: T,
-		override: Pick<ProviderOverride, "baseUrl" | "headers">,
+		override: Pick<ProviderOverride, "baseUrl" | "headers" | "authHeader" | "apiKey">,
 	): T {
+		const headers = mergeAuthHeader(
+			override.headers ? { ...entry.headers, ...override.headers } : entry.headers,
+			override.authHeader,
+			override.apiKey,
+		);
 		return {
 			...entry,
 			baseUrl: override.baseUrl ?? entry.baseUrl,
-			headers: override.headers ? { ...entry.headers, ...override.headers } : entry.headers,
+			headers,
 		};
 	}
 	#applyRuntimeProviderOverrides(models: Model<Api>[]): Model<Api>[] {
@@ -2029,13 +2136,69 @@ export class ModelRegistry {
 		return this.authStorage.getApiKey(provider, sessionId, { baseUrl });
 	}
 
+	/**
+	 * Check if a provider has an API key configured in models.yml (not env var or auth store).
+	 */
+	hasConfigApiKey(provider: string): boolean {
+		return this.#customProviderApiKeys.has(provider);
+	}
+
+	/**
+	 * Save an API key for a provider to models.yml.
+	 */
+	async saveProviderApiKey(provider: string, apiKey: string): Promise<void> {
+		const configPath = this.#modelsConfigFile.path();
+		let config: Record<string, unknown> = {};
+		try {
+			const content = await fs.readFile(configPath, "utf-8");
+			config = YAML.parse(content) as Record<string, unknown>;
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+		}
+		const providers = (config.providers ?? {}) as Record<string, Record<string, unknown>>;
+		providers[provider] = { ...providers[provider], apiKey };
+		config.providers = providers;
+		await fs.mkdir(path.dirname(configPath), { recursive: true });
+		await fs.writeFile(configPath, YAML.stringify(config, null, 2));
+		this.#modelsConfigFile.invalidate();
+		this.#reloadStaticModels();
+	}
+
+	/**
+	 * Remove an API key for a provider from models.yml.
+	 */
+	async removeProviderApiKey(provider: string): Promise<void> {
+		const configPath = this.#modelsConfigFile.path();
+		let config: Record<string, unknown> = {};
+		try {
+			const content = await fs.readFile(configPath, "utf-8");
+			config = YAML.parse(content) as Record<string, unknown>;
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+			return;
+		}
+		const providers = (config.providers ?? {}) as Record<string, Record<string, unknown>>;
+		const entry = providers[provider];
+		if (!entry) return;
+		delete entry.apiKey;
+		// Remove provider entry if it has no other meaningful fields
+		if (Object.keys(entry).length === 0) {
+			delete providers[provider];
+		}
+		if (Object.keys(providers).length === 0) {
+			delete config.providers;
+		}
+		await fs.writeFile(configPath, YAML.stringify(config, null, 2));
+		this.#modelsConfigFile.invalidate();
+		this.#reloadStaticModels();
+	}
+
 	async #peekApiKeyForProvider(provider: string): Promise<string | undefined> {
 		if (this.#keylessProviders.has(provider) && !this.authStorage.hasAuth(provider)) {
 			return kNoAuth;
 		}
 		return this.authStorage.peekApiKey(provider);
 	}
-
 	/**
 	 * Check if a model is using OAuth credentials (subscription).
 	 */
@@ -2207,8 +2370,13 @@ export class ModelRegistry {
 			return;
 		}
 
-		if (config.baseUrl || config.headers) {
-			const transportOverride = { baseUrl: config.baseUrl, headers: config.headers };
+		if (config.baseUrl || config.headers || config.apiKey || config.authHeader !== undefined) {
+			const transportOverride = {
+				baseUrl: config.baseUrl,
+				headers: config.headers,
+				apiKey: config.apiKey,
+				authHeader: config.authHeader,
+			};
 			const nextRuntimeOverride = this.#mergeProviderOverride(
 				this.#runtimeProviderOverrides.get(providerName),
 				transportOverride,

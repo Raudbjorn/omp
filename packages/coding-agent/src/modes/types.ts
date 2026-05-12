@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, UsageReport } from "@oh-my-pi/pi-ai";
-import type { Component, Container, Loader, Spacer, Text, TUI } from "@oh-my-pi/pi-tui";
+import type { Component, Container, EditorTheme, Loader, Spacer, Text, TUI } from "@oh-my-pi/pi-tui";
 import type { KeybindingsManager } from "../config/keybindings";
 import type { Settings } from "../config/settings";
 import type {
@@ -24,6 +24,7 @@ import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
 import type { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
+import type { LoopLimitRuntime } from "./loop-limit";
 import type { OAuthManualInputManager } from "./oauth-manual-input";
 import type { Theme } from "./theme/theme";
 
@@ -98,6 +99,7 @@ export interface InteractiveModeContext {
 	planModeEnabled: boolean;
 	loopModeEnabled: boolean;
 	loopPrompt?: string;
+	loopLimit?: LoopLimitRuntime;
 	planModePlanFilePath?: string;
 	hideThinkingBlock: boolean;
 	pendingImages: ImageContent[];
@@ -128,7 +130,7 @@ export interface InteractiveModeContext {
 	lastStatusSpacer: Spacer | undefined;
 	lastStatusText: Text | undefined;
 	fileSlashCommands: Set<string>;
-	skillCommands: Map<string, { filePath: string; isNative: boolean }>;
+	skillCommands: Map<string, SkillCommandBinding>;
 	oauthManualInput: OAuthManualInputManager;
 	todoPhases: TodoPhase[];
 
@@ -142,6 +144,9 @@ export interface InteractiveModeContext {
 	setToolUIContext(uiContext: ExtensionUIContext, hasUI: boolean): void;
 	initializeHookRunner(uiContext: ExtensionUIContext, hasUI: boolean): void;
 	createBackgroundUiContext(): ExtensionUIContext;
+	setEditorComponent(
+		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
+	): void;
 
 	// Event handling
 	handleBackgroundEvent(event: AgentSessionEvent): Promise<void>;
@@ -265,7 +270,7 @@ export interface InteractiveModeContext {
 	openExternalEditor(): void;
 	registerExtensionShortcuts(): void;
 	handlePlanModeCommand(initialPrompt?: string): Promise<void>;
-	handleLoopCommand(): Promise<void>;
+	handleLoopCommand(args?: string): Promise<void>;
 	disableLoopMode(): void;
 	pauseLoop(): void;
 	handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void>;

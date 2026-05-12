@@ -14,6 +14,7 @@ import type {
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import type { Static, TSchema } from "@sinclair/typebox";
+import type { HarmonyAuditEvent } from "./harmony-leak";
 
 /** Stream function - can return sync or Promise for async config lookup */
 export type StreamFn = (
@@ -38,6 +39,16 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * Used by providers that support session-based caching (e.g., OpenAI Codex).
 	 */
 	sessionId?: string;
+
+	/**
+	 * Optional resolver called per LLM request to produce request metadata.
+	 * When set, the agent loop evaluates it **after** `getApiKey` resolves the
+	 * session-sticky credential, ensuring the metadata's `account_uuid` reflects
+	 * the credential actually used for the request (not the credential that was
+	 * current when `AgentLoopConfig` was first constructed). Overrides the static
+	 * `metadata` field when present.
+	 */
+	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 
 	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
@@ -141,6 +152,11 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
 
 	/**
+	 * Called when GPT-5 Harmony protocol leakage is detected and mitigated.
+	 */
+	onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
+
+	/**
 	 * Dynamic tool choice override, resolved per LLM call.
 	 * When set and returns a value, overrides the static `toolChoice`.
 	 */
@@ -191,7 +207,7 @@ export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessag
  * Agent state containing all configuration and conversation data.
  */
 export interface AgentState {
-	systemPrompt: string;
+	systemPrompt: string[];
 	model: Model;
 	thinkingLevel?: Effort;
 	tools: AgentTool<any>[];
@@ -248,6 +264,10 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	hidden?: boolean;
 	/** If true, tool can stage a pending action that requires explicit resolution via the resolve tool. */
 	deferrable?: boolean;
+	/** Built-in tool loading behavior. "essential" loads initially; "discoverable" can be activated by tool search. */
+	loadMode?: "essential" | "discoverable";
+	/** Short one-line summary used for tool discovery indexes. */
+	summary?: string;
 	/** If true, tool execution ignores abort signals (runs to completion) */
 	nonAbortable?: boolean;
 	/**
@@ -283,7 +303,7 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 
 // AgentContext is like Context but uses AgentTool
 export interface AgentContext {
-	systemPrompt: string;
+	systemPrompt: string[];
 	messages: AgentMessage[];
 	tools?: AgentTool<any>[];
 }

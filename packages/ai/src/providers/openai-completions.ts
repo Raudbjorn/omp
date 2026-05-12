@@ -9,6 +9,7 @@ import type {
 	ChatCompletionMessageParam,
 	ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions";
+import packageJson from "../../package.json" with { type: "json" };
 import type { Effort } from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey } from "../stream";
@@ -32,6 +33,7 @@ import {
 	type ToolChoice,
 	type ToolResultMessage,
 } from "../types";
+import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { toFireworksWireModelId } from "../utils/fireworks-model-id";
@@ -53,6 +55,7 @@ import { getKimiCommonHeaders } from "../utils/oauth/kimi";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry, extractHttpStatusFromError } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
+import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
@@ -61,6 +64,7 @@ import {
 } from "./github-copilot-headers";
 import { detectOpenAICompat, type ResolvedOpenAICompat, resolveOpenAICompat } from "./openai-completions-compat";
 import { transformMessages } from "./transform-messages";
+import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
 
 /**
  * Normalize tool call ID for Mistral.
@@ -285,10 +289,18 @@ function getTrailingPartialTag(text: string, tags: readonly string[]): string {
 // Body is restricted to identifier-like chars (with the DeepSeek tokenizer's `▁`),
 // capped at a sane length to avoid swallowing legitimate angle-bracket text.
 const DEEPSEEK_SPECIAL_TOKEN_REGEX = /<(?:｜|\|)[A-Za-z0-9_.｜|▁]{1,64}(?:｜|\|)>/g;
+const DEEPSEEK_SPECIAL_TOKEN_AT_START_REGEX = /^\s*<(?:｜|\|)[A-Za-z0-9_.｜|▁]{1,64}(?:｜|\|)>/;
+const DEEPSEEK_SPECIAL_TOKEN_AT_END_REGEX = /<(?:｜|\|)[A-Za-z0-9_.｜|▁]{1,64}(?:｜|\|)>\s*$/;
 const DEEPSEEK_OPEN_DELIMS = ["<｜", "<|"] as const;
 
 function stripDeepseekSpecialTokens(text: string): string {
-	return text.replace(DEEPSEEK_SPECIAL_TOKEN_REGEX, "");
+	const stripped = text.replace(DEEPSEEK_SPECIAL_TOKEN_REGEX, "");
+	if (stripped === text) return text;
+
+	let normalized = stripped;
+	if (DEEPSEEK_SPECIAL_TOKEN_AT_START_REGEX.test(text)) normalized = normalized.replace(/^\s+/u, "");
+	if (DEEPSEEK_SPECIAL_TOKEN_AT_END_REGEX.test(text)) normalized = normalized.replace(/\s+$/u, "");
+	return normalized;
 }
 
 // Find any trailing partial `<｜...` (or `<|...`) that has not yet been closed by a
@@ -357,7 +369,14 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				requestHeaders,
 				getCapturedErrorResponse: captureErrorResponse,
 				clearCapturedErrorResponse,
-			} = await createClient(model, context, apiKey, options?.headers, options?.initiatorOverride);
+			} = await createClient(
+				model,
+				context,
+				apiKey,
+				options?.headers,
+				options?.initiatorOverride,
+				options?.onSseEvent,
+			);
 			getCapturedErrorResponse = captureErrorResponse;
 			let appliedToolStrictMode: AppliedToolStrictMode = "mixed";
 			const providerSessionState = getOpenAICompletionsProviderSessionState(
@@ -429,10 +448,12 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			stream.push({ type: "start", partial: output });
 
 			const parseMiniMaxThinkTags = model.provider === "minimax-code";
-			// NVIDIA NIM and similar OpenAI-compatible hosts return DeepSeek's chat-template
-			// tool-call markers in `delta.content` even though tool calls are also surfaced
-			// structurally. Strip the leaked markers so users don't see raw `<｜...｜>` tokens.
-			const stripDeepseekChatTemplateTokens = model.provider === "nvidia" && /deepseek/i.test(model.id);
+			// Some OpenAI-compatible DeepSeek hosts (including NVIDIA NIM and DeepSeek's
+			// native API) leak chat-template tool-call markers in `delta.content` even
+			// though tool calls are also surfaced structurally. Strip the leaked markers
+			// so users don't see raw `<｜...｜>` tokens.
+			const stripDeepseekChatTemplateTokens =
+				/deepseek/i.test(model.id) && (model.provider === "nvidia" || model.provider === "deepseek");
 			type OpenAIStreamBlock = TextContent | ThinkingContent | (ToolCall & { partialArgs: string });
 			let currentBlock: OpenAIStreamBlock | undefined;
 			const blockIndex = (block: OpenAIStreamBlock | undefined): number => {
@@ -566,7 +587,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					deepseekStripBuffer = trailing;
 				}
 				const stripped = stripDeepseekSpecialTokens(flushable);
-				if (stripped) appendTextDelta(stripped);
+				if (stripped && (stripped === flushable || stripped.trim().length > 0)) appendTextDelta(stripped);
 			};
 
 			for await (const chunk of iterateWithIdleTimeout(openaiStream, {
@@ -763,6 +784,7 @@ async function createClient(
 	apiKey?: string,
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
+	onSseEvent?: OpenAICompletionsOptions["onSseEvent"],
 ): Promise<{
 	client: OpenAI;
 	copilotPremiumRequests: number | undefined;
@@ -781,10 +803,26 @@ async function createClient(
 	}
 	const rawApiKey = apiKey;
 
-	let headers = { ...(model.headers ?? {}), ...(extraHeaders ?? {}) };
+	let headers = { ...model.headers };
 	if (model.provider === "openrouter") {
-		headers["X-Title"] = "Oh-My-Pi";
+		// App attribution — opts the agent into OpenRouter's public rankings and per-app
+		// analytics. `HTTP-Referer` is the unique app identifier; without it nothing is
+		// tracked. `X-OpenRouter-Title` is the display name (`X-Title` is the legacy
+		// alias kept for back-compat). `X-OpenRouter-Categories` slots us into the
+		// `cli-agent` marketplace category. `User-Agent` overrides the default OpenAI
+		// SDK UA so traffic is identifiable in upstream provider logs.
+		// https://openrouter.ai/docs/app-attribution
+		headers["User-Agent"] = `Oh-My-Pi/${packageJson.version}`;
+		headers["HTTP-Referer"] = "https://github.com/can1357/oh-my-pi";
+		headers["X-OpenRouter-Title"] = "Oh-My-Pi";
+		headers["X-OpenRouter-Categories"] = "cli-agent";
+		// Always-on response caching: identical requests return cached responses for free.
+		// TTL 1h; first call hits the provider, every identical call within the window
+		// replays from OpenRouter's edge cache. https://openrouter.ai/docs/features/response-caching
+		headers["X-OpenRouter-Cache"] = "true";
+		headers["X-OpenRouter-Cache-TTL"] = "3600";
 	}
+	Object.assign(headers, extraHeaders);
 	if (model.provider === "kimi-code") {
 		headers = { ...getKimiCommonHeaders(), ...headers };
 	}
@@ -843,6 +881,7 @@ async function createClient(
 		},
 		{ preconnect: fetch.preconnect },
 	);
+	const debugFetch = onSseEvent ? wrapFetchForSseDebug(wrappedFetch, event => onSseEvent(event, model)) : wrappedFetch;
 	return {
 		client: new OpenAI({
 			apiKey,
@@ -851,7 +890,7 @@ async function createClient(
 			maxRetries: 5,
 			defaultHeaders: headers,
 			defaultQuery: azureDefaultQuery,
-			fetch: wrappedFetch,
+			fetch: debugFetch,
 		}),
 		copilotPremiumRequests,
 		baseUrl,
@@ -967,11 +1006,6 @@ function buildParams(
 				effort: mapReasoningEffort(options.reasoning, compat.reasoningEffortMap),
 			};
 		}
-	} else if (supportsReasoningParams && compat.thinkingFormat === "litellm" && options?.reasoning && model.reasoning) {
-		// LiteLLM proxied endpoints (e.g. UPB AI-Chat) use reasoning: { summary } to surface reasoning tokens.
-		// Without this parameter the proxy strips reasoning_content from responses.
-		const litellmParams = params as typeof params & { reasoning?: { summary?: string } };
-		litellmParams.reasoning = { summary: "detailed" };
 	} else if (
 		supportsReasoningParams &&
 		options?.reasoning &&
@@ -981,6 +1015,14 @@ function buildParams(
 	) {
 		// OpenAI-style reasoning_effort
 		params.reasoning_effort = mapReasoningEffort(options.reasoning, compat.reasoningEffortMap) as Effort;
+	}
+
+	if (compat.disableReasoningOnToolChoice && params.tool_choice !== undefined) {
+		// DeepSeek reasoning models accept tools/tool_choice, but reject that
+		// control field while thinking is enabled. Keep the tool-selection
+		// contract and suppress reasoning for this single request.
+		delete params.reasoning_effort;
+		delete params.reasoning;
 	}
 
 	if (compat.disableReasoningOnForcedToolChoice && isForcedToolChoice(params.tool_choice)) {
@@ -1166,10 +1208,23 @@ export function convertMessages(
 		return generateFallbackToolCallId(seed);
 	};
 
-	if (context.systemPrompt) {
+	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
+	if (systemPrompts.length > 0) {
 		const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
 		const role = useDeveloperRole ? "developer" : "system";
-		params.push({ role: role, content: context.systemPrompt.toWellFormed() });
+		// Default to one block per ordered system prompt so the leading prefix
+		// stays byte-identical between turns and the provider's KV cache can
+		// reuse it. Hosts whose chat templates reject follow-up system messages
+		// (Qwen via vLLM, MiniMax, Alibaba Dashscope, Qwen Portal, …) opt out
+		// via `compat.supportsMultipleSystemMessages = false`; in that mode we
+		// coalesce into a single message joined by `\n\n`.
+		if (compat.supportsMultipleSystemMessages) {
+			for (const systemPrompt of systemPrompts) {
+				params.push({ role, content: systemPrompt });
+			}
+		} else {
+			params.push({ role, content: systemPrompts.join("\n\n") });
+		}
 	}
 
 	let lastRole: string | null = null;
@@ -1200,7 +1255,9 @@ export function convertMessages(
 					content: text,
 				});
 			} else {
+				const supportsImages = model.input.includes("image");
 				const content: ChatCompletionContentPart[] = [];
+				let omittedImages = false;
 				for (const item of msg.content) {
 					if (item.type === "text") {
 						const text = item.text.toWellFormed();
@@ -1209,22 +1266,27 @@ export function convertMessages(
 							type: "text",
 							text,
 						} satisfies ChatCompletionContentPartText);
-					} else {
+					} else if (supportsImages) {
 						content.push({
 							type: "image_url",
 							image_url: {
 								url: `data:${item.mimeType};base64,${item.data}`,
 							},
 						} satisfies ChatCompletionContentPartImage);
+					} else {
+						omittedImages = true;
 					}
 				}
-				const filteredContent = !model.input.includes("image")
-					? content.filter(c => c.type !== "image_url")
-					: content;
-				if (filteredContent.length === 0) continue;
+				if (omittedImages) {
+					content.push({
+						type: "text",
+						text: NON_VISION_IMAGE_PLACEHOLDER,
+					} satisfies ChatCompletionContentPartText);
+				}
+				if (content.length === 0) continue;
 				params.push({
 					role: "user",
-					content: filteredContent,
+					content,
 				});
 			}
 		} else if (msg.role === "assistant") {
@@ -1419,19 +1481,27 @@ export function convertMessages(
 				// Extract text and image content
 				const textResult = toolMsg.content
 					.filter(c => c.type === "text")
-					.map(c => (c as any).text)
+					.map(c => (c as TextContent).text)
 					.join("\n");
+				const supportsImages = model.input.includes("image");
 				const hasImages = toolMsg.content.some(c => c.type === "image");
+				const omittedImages = hasImages && !supportsImages;
 
 				// Always send tool result with text (or placeholder if only images)
 				const hasText = textResult.length > 0;
-				// Some providers (e.g. Mistral) require the 'name' field in tool results
 				const remappedToolCallId = consumeToolCallId(toolMsg.toolCallId);
 				const resolvedToolCallId =
 					remappedToolCallId ?? ensureToolCallId(toolMsg.toolCallId, `${j}:${toolMsg.toolName ?? "tool"}`);
+				const toolResultContent = omittedImages
+					? joinTextWithImagePlaceholder(textResult, true)
+					: hasText
+						? textResult
+						: hasImages
+							? "(see attached image)"
+							: "";
 				const toolResultMsg: ChatCompletionToolMessageParam = {
 					role: "tool",
-					content: (hasText ? textResult : "(see attached image)").toWellFormed(),
+					content: toolResultContent.toWellFormed(),
 					tool_call_id: normalizeMistralToolId(resolvedToolCallId, compat.requiresMistralToolIds),
 				};
 				if (compat.requiresToolResultName && toolMsg.toolName) {
@@ -1439,13 +1509,13 @@ export function convertMessages(
 				}
 				params.push(toolResultMsg);
 
-				if (hasImages && model.input.includes("image")) {
+				if (hasImages && supportsImages) {
 					for (const block of toolMsg.content) {
 						if (block.type === "image") {
 							imageBlocks.push({
 								type: "image_url",
 								image_url: {
-									url: `data:${(block as any).mimeType};base64,${(block as any).data}`,
+									url: `data:${block.mimeType};base64,${block.data}`,
 								},
 							});
 						}

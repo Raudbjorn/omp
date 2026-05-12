@@ -734,7 +734,7 @@ more text`,
 			});
 
 			expect(seenSources).toEqual([invalidSource]);
-			expect(plainLines).toEqual(["```mermaid", "flowchart TD", "  A --", "```"]);
+			expect(plainLines).toEqual(["```mermaid", "  flowchart TD", "    A --", "```"]);
 		});
 	});
 

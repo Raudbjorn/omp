@@ -12,11 +12,23 @@
  * The shared renderer / `ToolExecutionComponent` consult the strategy via
  * the injected `editMode` rather than probing argument shape.
  */
+
+import { sanitizeText } from "@oh-my-pi/pi-natives";
+import {
+	ABORT_MARKER,
+	BEGIN_PATCH_MARKER,
+	computeHashlineDiff,
+	computeHashlineSectionDiff,
+	containsRecognizableHashlineOperations,
+	END_PATCH_MARKER,
+	type HashlineInputSection,
+	splitHashlineInputs,
+} from "../hashline";
 import type { Theme } from "../modes/theme/theme";
+import { replaceTabs, truncateToWidth } from "../tools/render-utils";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { computeEditDiff, type DiffError, type DiffResult } from "./diff";
 import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
-import { computeHashlineDiff } from "./modes/hashline";
 import { computePatchDiff, type PatchEditEntry } from "./modes/patch";
 import type { ReplaceEditEntry } from "./modes/replace";
 
@@ -32,6 +44,7 @@ export interface StreamingDiffContext {
 	signal: AbortSignal;
 	fuzzyThreshold?: number;
 	allowFuzzy?: boolean;
+	hashlineAutoDropPureInsertDuplicates?: boolean;
 }
 
 export interface EditStreamingStrategy<Args = unknown> {
@@ -51,6 +64,52 @@ export interface EditStreamingStrategy<Args = unknown> {
 	 * compute returned `null` because args are still too partial).
 	 */
 	renderStreamingFallback(args: Args, uiTheme: Theme): string;
+}
+
+const STREAMING_FALLBACK_LINES = 12;
+const STREAMING_FALLBACK_WIDTH = 80;
+
+function isHashlineHeaderLine(line: string): boolean {
+	const trimmed = line.trimEnd();
+	return trimmed.startsWith("@") && trimmed.length > 1;
+}
+
+function isHashlineEnvelopeMarkerLine(line: string): boolean {
+	const trimmed = line.trimEnd();
+	return trimmed === BEGIN_PATCH_MARKER || trimmed === END_PATCH_MARKER || trimmed === ABORT_MARKER;
+}
+
+function trimHashlineStreamingSyntax(lines: string[]): string[] {
+	let index = lines.findIndex(line => line.trim().length > 0);
+	if (index === -1) return [];
+
+	if (lines[index].trimEnd() === BEGIN_PATCH_MARKER) {
+		index++;
+		while (index < lines.length && lines[index].trim().length === 0) index++;
+	}
+	if (index < lines.length && isHashlineHeaderLine(lines[index])) {
+		index++;
+	}
+
+	return lines.slice(index).filter(line => !isHashlineEnvelopeMarkerLine(line));
+}
+
+function renderHashlineInputFallback(input: string, uiTheme: Theme): string {
+	const lines = trimHashlineStreamingSyntax(sanitizeText(input).split("\n"));
+	if (!lines.some(line => line.trim().length > 0)) return "";
+
+	const displayLines = lines.slice(-STREAMING_FALLBACK_LINES);
+	const hidden = lines.length - displayLines.length;
+	let text = "\n\n";
+	text += displayLines
+		.map(line => uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(line), STREAMING_FALLBACK_WIDTH)))
+		.join("\n");
+	if (hidden > 0) {
+		text += uiTheme.fg("dim", `\n… (streaming +${hidden} lines)`);
+	} else {
+		text += uiTheme.fg("dim", "\n(streaming)");
+	}
+	return text;
 }
 
 // -----------------------------------------------------------------------------
@@ -222,13 +281,51 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 	async computeDiffPreview(args, ctx) {
 		if (typeof args.input !== "string" || args.input.length === 0) return null;
 		ctx.signal.throwIfAborted();
-		const result = await computeHashlineDiff({ input: args.input, path: args.path }, ctx.cwd);
-		ctx.signal.throwIfAborted();
-		if ("error" in result && !args.path) return [{ path: "", error: result.error }];
-		return [toPerFilePreview(args.path ?? "", result)];
+
+		let sections: HashlineInputSection[];
+		try {
+			sections = splitHashlineInputs(args.input, { cwd: ctx.cwd, path: args.path });
+		} catch {
+			// Single-section fallback keeps the original error rendering for the
+			// "haven't typed `@PATH` yet" case.
+			const result = await computeHashlineDiff({ input: args.input, path: args.path }, ctx.cwd, {
+				autoDropPureInsertDuplicates: ctx.hashlineAutoDropPureInsertDuplicates,
+			});
+			ctx.signal.throwIfAborted();
+			if ("error" in result && !args.path) return [{ path: "", error: result.error }];
+			return [toPerFilePreview(args.path ?? "", result)];
+		}
+		if (sections.length === 0) return null;
+
+		// While the trailing section is still being typed (no operations yet)
+		// skip it so its empty/parse-error result doesn't replace previews of
+		// already-completed sections with an opaque header.
+		const lastIndex = sections.length - 1;
+		const trailingIncomplete =
+			sections.length > 1 && !containsRecognizableHashlineOperations(sections[lastIndex].diff);
+		const sectionsToProcess = trailingIncomplete ? sections.slice(0, -1) : sections;
+		const trailingProcessedIndex = sectionsToProcess.length - 1;
+
+		const previews: PerFileDiffPreview[] = [];
+		for (let i = 0; i < sectionsToProcess.length; i++) {
+			ctx.signal.throwIfAborted();
+			const section = sectionsToProcess[i];
+			const result = await computeHashlineSectionDiff(section, ctx.cwd, {
+				autoDropPureInsertDuplicates: ctx.hashlineAutoDropPureInsertDuplicates,
+			});
+			ctx.signal.throwIfAborted();
+			// In a multi-section preview, ignore parse/apply errors from the
+			// last section: it's still streaming and the partial op may not
+			// parse yet. Earlier sections are stable and stay rendered.
+			if (sectionsToProcess.length > 1 && i === trailingProcessedIndex && "error" in result) {
+				continue;
+			}
+			previews.push(toPerFilePreview(section.path, result));
+		}
+		return previews.length > 0 ? previews : null;
 	},
-	renderStreamingFallback() {
-		return "";
+	renderStreamingFallback(args, uiTheme) {
+		return typeof args.input === "string" ? renderHashlineInputFallback(args.input, uiTheme) : "";
 	},
 };
 

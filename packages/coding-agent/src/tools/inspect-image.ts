@@ -41,6 +41,8 @@ function extractResponseText(message: AssistantMessage): string {
 export class InspectImageTool implements AgentTool<typeof inspectImageSchema, InspectImageToolDetails> {
 	readonly name = "inspect_image";
 	readonly label = "InspectImage";
+	readonly loadMode = "discoverable";
+	readonly summary = "Describe or analyze an image file";
 	readonly description: string;
 	readonly parameters = inspectImageSchema;
 	readonly strict = false;
@@ -127,7 +129,7 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 		const response = await this.completeImageRequest(
 			model,
 			{
-				systemPrompt: prompt.render(inspectImageSystemPromptTemplate),
+				systemPrompt: [prompt.render(inspectImageSystemPromptTemplate)],
 				messages: [
 					{
 						role: "user",

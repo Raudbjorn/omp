@@ -1,0 +1,22 @@
+start: begin_patch hunk+ end_patch
+begin_patch: "*** Begin Patch" LF
+end_patch: "*** End Patch" LF?
+
+hunk: update_hunk
+update_hunk: "@" filename LF line_op*
+
+filename: /(.+)/
+
+line_op: insert_before | insert_after | replace | delete | blank
+insert_before: ("<" | "< ") anchor LF payload+
+insert_after: ("+" | "+ ") anchor LF payload+
+replace: ("=" | "= ") range LF payload*
+delete: ("-" | "- ") range LF
+payload: $HSEP$ /(.*)/ LF
+blank: LF
+
+anchor: LID | "EOF" | "BOF"
+range: LID ".." LID
+LID: /[1-9]\d*$HFMT$/
+
+%import common.LF

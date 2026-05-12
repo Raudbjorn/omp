@@ -137,9 +137,10 @@ export function isReadableUrlPath(value: string): boolean {
 	return /^https?:\/\//i.test(value) || /^www\./i.test(value);
 }
 
-const URL_LINE_RANGE_RE = /^L?(\d+)(?:([-+])L?(\d+))?$/i;
-// Embedded URL selectors (after a `:` in the path) keep the explicit `L` prefix to avoid colliding with ports such as `https://example.com:50`.
-const URL_EMBEDDED_LINE_RANGE_RE = /^L\d+(?:[-+]L?\d+)?$/i;
+// URL line selectors mirror the file form: `:50`, `:50-100`, `:50+150`, `:raw`.
+// If a URL would otherwise look like `host:port`, add a trailing slash before the selector
+// (e.g. `https://example.com/:80` to read line 80 of the document at `https://example.com/`).
+const URL_LINE_RANGE_RE = /^(\d+)(?:([-+])(\d+))?$/;
 
 export interface ParsedReadUrlTarget {
 	path: string;
@@ -148,20 +149,20 @@ export interface ParsedReadUrlTarget {
 	limit?: number;
 }
 
-export function parseReadUrlTarget(readPath: string, sel?: string): ParsedReadUrlTarget | null {
-	const embedded = sel ? undefined : tryExtractEmbeddedUrlSelector(readPath);
+export function parseReadUrlTarget(readPath: string): ParsedReadUrlTarget | null {
+	const embedded = tryExtractEmbeddedUrlSelector(readPath);
 	const urlPath = embedded?.path ?? readPath;
 	if (!isReadableUrlPath(urlPath)) {
 		return null;
 	}
 
-	const selector = sel ?? embedded?.sel;
+	const selector = embedded?.sel;
 	const raw = selector === "raw";
-	const lineMatch = selector ? URL_LINE_RANGE_RE.exec(selector) : null;
+	const lineMatch = selector && selector !== "raw" ? URL_LINE_RANGE_RE.exec(selector) : null;
 	if (lineMatch) {
 		const startLine = Number.parseInt(lineMatch[1]!, 10);
 		if (startLine < 1) {
-			throw new ToolError("sel=0 is invalid; lines are 1-indexed. Use sel=1.");
+			throw new ToolError("URL line selector 0 is invalid; lines are 1-indexed. Use :1.");
 		}
 		const sep = lineMatch[2];
 		const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
@@ -195,13 +196,13 @@ function tryExtractEmbeddedUrlSelector(readPath: string): { path: string; sel?: 
 	}
 
 	const candidateSelector = readPath.slice(lastColonIndex + 1);
-	const isEmbeddedSelector = candidateSelector === "raw" || URL_EMBEDDED_LINE_RANGE_RE.test(candidateSelector);
-	if (!isEmbeddedSelector) {
+	const basePath = readPath.slice(0, lastColonIndex);
+	if (!isReadableUrlPath(basePath)) {
 		return null;
 	}
 
-	const basePath = readPath.slice(0, lastColonIndex);
-	if (!isReadableUrlPath(basePath)) {
+	const isEmbeddedSelector = candidateSelector === "raw" || URL_LINE_RANGE_RE.test(candidateSelector);
+	if (!isEmbeddedSelector) {
 		return null;
 	}
 
@@ -1220,13 +1221,13 @@ function cacheReadUrlEntry(session: ToolSession, requestedUrl: string, raw: bool
 
 async function buildReadUrlCacheEntry(
 	session: ToolSession,
-	params: { path: string; timeout?: number; raw?: boolean },
+	params: { path: string; raw?: boolean },
 	signal?: AbortSignal,
 	options?: { ensureArtifact?: boolean },
 ): Promise<ReadUrlCacheEntry> {
-	const { path: url, timeout: rawTimeout = 20, raw = false } = params;
+	const { path: url, raw = false } = params;
 
-	const effectiveTimeout = clampTimeout("fetch", rawTimeout);
+	const effectiveTimeout = clampTimeout("fetch", 30);
 
 	if (signal?.aborted) {
 		throw new ToolAbortError();
@@ -1254,7 +1255,7 @@ async function buildReadUrlCacheEntry(
 
 export async function loadReadUrlCacheEntry(
 	session: ToolSession,
-	params: { path: string; timeout?: number; raw?: boolean },
+	params: { path: string; raw?: boolean },
 	signal?: AbortSignal,
 	options?: { ensureArtifact?: boolean; preferCached?: boolean },
 ): Promise<ReadUrlCacheEntry> {
@@ -1291,7 +1292,7 @@ function buildUrlReadOutput(result: FetchRenderResult, content: string): string 
 
 export async function executeReadUrl(
 	session: ToolSession,
-	params: { path: string; timeout?: number; raw?: boolean },
+	params: { path: string; raw?: boolean },
 	signal?: AbortSignal,
 ): Promise<AgentToolResult<ReadUrlToolDetails>> {
 	let cacheEntry = await loadReadUrlCacheEntry(session, params, signal, { preferCached: true });
@@ -1345,7 +1346,7 @@ function countNonEmptyLines(text: string): number {
 
 /** Render URL read call (URL preview) */
 export function renderReadUrlCall(
-	args: { path?: string; url?: string; timeout?: number; raw?: boolean },
+	args: { path?: string; url?: string; raw?: boolean },
 	_options: RenderResultOptions,
 	uiTheme: Theme = theme,
 ): Component {
@@ -1355,7 +1356,6 @@ export function renderReadUrlCall(
 	const description = `${domain}${path ? ` ${path}` : ""}`.trim();
 	const meta: string[] = [];
 	if (args.raw) meta.push("raw");
-	if (args.timeout !== undefined) meta.push(`timeout:${args.timeout}s`);
 	const text = renderStatusLine({ icon: "pending", title: "Read", description, meta }, uiTheme);
 	return new Text(text, 0, 0);
 }

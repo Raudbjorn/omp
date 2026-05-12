@@ -16,7 +16,7 @@ import chalk from "chalk";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { parseThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
 import { fuzzyMatch } from "../utils/fuzzy";
-import { MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "./model-registry";
+import { isAuthenticated, MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "./model-registry";
 import type { Settings } from "./settings";
 
 /** Default model IDs for each known provider */
@@ -326,43 +326,49 @@ function tryMatchModel(
 		return exactCanonicalMatch;
 	}
 
-	// Check for provider/modelId format — fuzzy match within provider
+	// Exact ID match (case-insensitive) — this must happen before provider-scoped
+	// fuzzy matching so raw IDs that contain slashes (for example OpenRouter model
+	// IDs like "openai/gpt-4o:extended") still resolve as IDs instead of being
+	// misread as a provider-qualified selector.
+	const exactMatches = availableModels.filter(m => m.id.toLowerCase() === modelPattern.toLowerCase());
+	if (exactMatches.length > 0) {
+		return pickPreferredModel(exactMatches, context);
+	}
+	// Check for provider/modelId format — fuzzy match within provider only.
 	const slashIndex = modelPattern.indexOf("/");
 	if (slashIndex !== -1) {
 		const provider = modelPattern.substring(0, slashIndex);
 		const modelId = modelPattern.substring(slashIndex + 1);
-
 		const providerModels = availableModels.filter(m => m.provider.toLowerCase() === provider.toLowerCase());
-		if (providerModels.length > 0) {
+		if (providerModels.length === 0) {
+			// The prefix is not a known provider in this candidate set, so treat the
+			// slash as part of the raw model ID and continue with generic matching.
+		} else {
 			const scored = providerModels
 				.map(model => ({ model, match: fuzzyMatch(modelId, model.id) }))
 				.filter(entry => entry.match.matches);
-			if (scored.length > 0) {
-				scored.sort((a, b) => {
-					if (a.match.score !== b.match.score) return a.match.score - b.match.score;
-					const aKey = formatModelString(a.model);
-					const bKey = formatModelString(b.model);
-					const aUsage = context.modelUsageRank.get(aKey) ?? Number.POSITIVE_INFINITY;
-					const bUsage = context.modelUsageRank.get(bKey) ?? Number.POSITIVE_INFINITY;
-					if (aUsage !== bUsage) return aUsage - bUsage;
-
-					const aProviderUsage = context.providerUsageRank.get(a.model.provider) ?? Number.POSITIVE_INFINITY;
-					const bProviderUsage = context.providerUsageRank.get(b.model.provider) ?? Number.POSITIVE_INFINITY;
-					if (aProviderUsage !== bProviderUsage) return aProviderUsage - bProviderUsage;
-
-					const aOrder = context.modelOrder.get(aKey) ?? 0;
-					const bOrder = context.modelOrder.get(bKey) ?? 0;
-					return aOrder - bOrder;
-				});
-				return scored[0]?.model;
+			if (scored.length === 0) {
+				return undefined;
 			}
-		}
-	}
 
-	// Exact ID match (case-insensitive) — with ambiguity across providers handled by preference
-	const exactMatches = availableModels.filter(m => m.id.toLowerCase() === modelPattern.toLowerCase());
-	if (exactMatches.length > 0) {
-		return pickPreferredModel(exactMatches, context);
+			scored.sort((a, b) => {
+				if (a.match.score !== b.match.score) return a.match.score - b.match.score;
+				const aKey = formatModelString(a.model);
+				const bKey = formatModelString(b.model);
+				const aUsage = context.modelUsageRank.get(aKey) ?? Number.POSITIVE_INFINITY;
+				const bUsage = context.modelUsageRank.get(bKey) ?? Number.POSITIVE_INFINITY;
+				if (aUsage !== bUsage) return aUsage - bUsage;
+
+				const aProviderUsage = context.providerUsageRank.get(a.model.provider) ?? Number.POSITIVE_INFINITY;
+				const bProviderUsage = context.providerUsageRank.get(b.model.provider) ?? Number.POSITIVE_INFINITY;
+				if (aProviderUsage !== bProviderUsage) return aProviderUsage - bProviderUsage;
+
+				const aOrder = context.modelOrder.get(aKey) ?? 0;
+				const bOrder = context.modelOrder.get(bKey) ?? 0;
+				return aOrder - bOrder;
+			});
+			return scored[0]?.model;
+		}
 	}
 
 	// No exact match - fall back to partial matching
@@ -688,18 +694,18 @@ export function resolveModelFromSettings(options: {
 }): Model<Api> | undefined {
 	const { settings, availableModels, matchPreferences, roleOrder, modelRegistry } = options;
 	const roles = roleOrder ?? MODEL_ROLE_IDS;
+	let sawConfiguredProviderQualifiedRole = false;
 	for (const role of roles) {
 		const configured = settings.getModelRole(role);
 		if (!configured) continue;
-		const resolved = resolveModelFromString(
-			expandRoleAlias(configured, settings),
-			availableModels,
-			matchPreferences,
-			modelRegistry,
-		);
+		const expanded = expandRoleAlias(configured, settings).trim();
+		if (expanded.includes("/")) {
+			sawConfiguredProviderQualifiedRole = true;
+		}
+		const resolved = resolveModelFromString(expanded, availableModels, matchPreferences, modelRegistry);
 		if (resolved) return resolved;
 	}
-	return availableModels[0];
+	return sawConfiguredProviderQualifiedRole ? undefined : availableModels[0];
 }
 
 /**
@@ -724,6 +730,57 @@ export function resolveModelOverride(
 		}
 	}
 	return { explicitThinkingLevel: false };
+}
+
+/**
+ * Resolve a list of override patterns to the first matching model, with an
+ * auth-aware fallback to the parent session's active model.
+ *
+ * If the resolved subagent model has no working credentials (provider has no
+ * usable auth), and the parent's active model resolves with working auth,
+ * use the parent's model instead. This prevents subagent dispatch from
+ * silently routing to a provider the user can't actually call (e.g.
+ * `modelRoles.task` pointing at an unqualified id whose only available
+ * provider variant has no configured credentials — see #985).
+ *
+ * If neither the subagent nor the parent has working auth, returns the
+ * primary resolution unchanged so the existing error path still surfaces
+ * a meaningful failure downstream.
+ */
+export async function resolveModelOverrideWithAuthFallback(
+	modelPatterns: string[],
+	parentActiveModelPattern: string | undefined,
+	modelRegistry: ModelLookupRegistry & Pick<ModelRegistry, "getApiKey">,
+	settings?: Settings,
+): Promise<{
+	model?: Model<Api>;
+	thinkingLevel?: ThinkingLevel;
+	explicitThinkingLevel: boolean;
+	authFallbackUsed: boolean;
+}> {
+	const primary = resolveModelOverride(modelPatterns, modelRegistry, settings);
+	if (!primary.model || !parentActiveModelPattern) {
+		return { ...primary, authFallbackUsed: false };
+	}
+
+	const primaryKey = await modelRegistry.getApiKey(primary.model);
+	if (isAuthenticated(primaryKey)) {
+		return { ...primary, authFallbackUsed: false };
+	}
+
+	const fallback = resolveModelOverride([parentActiveModelPattern], modelRegistry, settings);
+	if (!fallback.model) {
+		return { ...primary, authFallbackUsed: false };
+	}
+	if (modelsAreEqual(fallback.model, primary.model)) {
+		return { ...primary, authFallbackUsed: false };
+	}
+	const fallbackKey = await modelRegistry.getApiKey(fallback.model);
+	if (!isAuthenticated(fallbackKey)) {
+		return { ...primary, authFallbackUsed: false };
+	}
+
+	return { ...fallback, authFallbackUsed: true };
 }
 
 /**

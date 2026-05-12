@@ -2,6 +2,88 @@
 
 ## [Unreleased]
 
+## [14.9.3] - 2026-05-10
+
+### Fixed
+- Anthropic provider now retries generic transient connect failures (`unable to connect`, `fetch failed`, `connection error`, etc.) by falling back to the shared `isRetryableError` allowlist after the provider-specific patterns. Previously these errors bypassed the hand-curated regex in `isProviderRetryableError` and aborted the stream on the first attempt, while the OpenAI SDK and Codex `fetchWithRetry` paths already handled them.
+
+## [14.9.0] - 2026-05-10
+
+### Added
+
+### Fixed
+- Fixed silent forwarding of image content (for example Python plot output rendered in the terminal) to models without vision support, which produced opaque 404 errors from upstream. Image blocks are now stripped and replaced with a `[image omitted: model does not support vision]` placeholder for non-vision models, including tool-result payloads ([#967](https://github.com/can1357/oh-my-pi/issues/967), [#968](https://github.com/can1357/oh-my-pi/issues/968)).
+
+- Added `AuthStorage` `onCredentialDisabled` callback (sync or async) so embedders can react when a credential is automatically disabled (e.g. OAuth refresh fails with `invalid_grant`) — useful for surfacing a banner or auto-launching a re-login flow instead of letting the credential silently disappear. Sync throws and async rejections are both caught and logged so a misbehaving subscriber cannot break the disable path.
+- Added Anthropic OAuth `account.uuid` and `account.email_address` extraction from the `/v1/oauth/token` exchange and refresh responses; both `AnthropicOAuthFlow.exchangeToken()` and `refreshAnthropicToken()` now populate `OAuthCredentials.{accountId, email}` so downstream consumers can attribute requests to the authenticated account without a separate `/api/oauth/profile` round-trip.
+- Added `onSseEvent` stream diagnostics so HTTP SSE providers can expose raw SSE frames without changing parsed model output.
+- Added `streamIdleTimeoutMs` option (and `PI_STREAM_IDLE_TIMEOUT_MS` env override; `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS` remains a backward-compatible alias) for a steady-state inter-event watchdog. Set to `0` to disable.
+- Added a semantic-progress predicate to OpenAI Responses and Codex SSE/WebSocket transports so `response.in_progress`-style keepalives no longer reset the idle deadline on stalled tool calls.
+
+### Changed
+
+- Anthropic streams now enforce a steady-state idle timeout (defaults to 120s, same control as `PI_STREAM_IDLE_TIMEOUT_MS`) in addition to the first-event watchdog. Long-running responses that go fully silent between events will now surface as `Anthropic stream stalled while waiting for the next event` instead of hanging.
+- Fixed `resolveAnthropicMetadataUserId()` to accept JSON-format `user_id` values that match real Claude Code's payload shape (`{ device_id, account_uuid, session_id, ... }` from `services/api/claude.ts:getAPIMetadata`). Previously only the synthetic `user_<hex>_account_<uuid>_session_<uuid>` cloaking format was accepted on OAuth, which caused stable session-keyed metadata supplied by callers to be discarded and replaced with fresh random entropy on every request — defeating session-count attribution on the Claude OAuth path.
+
+## [14.8.0] - 2026-05-09
+
+### Fixed
+- Fixed Gemini 3 Pro thinking metadata so `medium` effort is rejected with the expected error instead of being silently accepted: `ThinkingConfig` now carries an optional explicit `levels` list that survives `expandEffortRange`, letting non-contiguous supported sets (e.g. `[low, high]`) round-trip through enrichment.
+- Fixed Kimi Code OAuth expiry handling to refresh access tokens 5 minutes before server expiry, avoiding daily 401s from using tokens right up to the cutoff.
+- Fixed OpenAI Responses custom tool replay to preserve custom tool call item IDs with the `ctc_` prefix instead of rewriting them as `fc_` function-call IDs ([#977](https://github.com/can1357/oh-my-pi/issues/977)).
+
+## [14.7.6] - 2026-05-07
+
+### Added
+
+- Added `hideThinkingSummary` option to `SimpleStreamOptions`. When true, `streamSimple` requests that the underlying provider omit reasoning/thinking summaries: Anthropic receives `thinking.display = "omitted"` (where supported), and OpenAI Responses / Azure / Codex providers leave `reasoning.summary` unset so the server skips emitting the human-readable summary stream entirely.
+
+### Changed
+
+- Changed OpenAI Responses, Azure OpenAI Responses, and OpenAI Codex providers to omit `reasoning.summary` from requests when `reasoningSummary` is explicitly `null` (previously fell back to `"auto"`).
+## [14.7.5] - 2026-05-07
+
+### Added
+
+- Added `OpenAICompat.supportsMultipleSystemMessages` so chat-completions hosts can opt out of separate leading system blocks. Auto-detected as `true` for OpenAI, Azure, OpenRouter, Cerebras, Together, Fireworks, Groq, DeepSeek, Mistral, xAI, Z.ai, GitHub Copilot, and Zenmux; `false` for MiniMax, Alibaba Dashscope, and Qwen Portal whose chat templates reject follow-up system messages. Unknown OpenAI-compatible hosts (custom vLLM/local) default to `false`; users can opt back in via `compat.supportsMultipleSystemMessages: true`.
+
+### Fixed
+
+- Fixed strict-template OpenAI-compatible hosts (e.g. Qwen 3.5+ via vLLM, MiniMax) rejecting follow-up `system`/`developer` messages by coalescing ordered system prompts into a single block joined by `\n\n` when `compat.supportsMultipleSystemMessages` is false. Canonical hosts continue to receive separate blocks so KV-cache reuse stays effective when only the trailing prompt changes ([#958](https://github.com/can1357/oh-my-pi/issues/958)).
+
+## [14.7.2] - 2026-05-06
+
+### Fixed
+
+- Fixed VLLM model discovery to use `max_model_len` as the context window when the endpoint reports it.
+- Fixed custom Ollama Cloud/local-proxy model aliases (for example `deepseek-v4-pro:cloud`) to inherit bundled cache-pricing metadata when the upstream model is known ([#937](https://github.com/can1357/oh-my-pi/issues/937)).
+- Fixed local Ollama model discovery to apply `/api/show` thinking and vision capabilities in addition to native context windows ([#928](https://github.com/can1357/oh-my-pi/issues/928)).
+
+## [14.7.0] - 2026-05-04
+### Breaking Changes
+
+- Changed `Context.systemPrompt` from a string to `string[]`, so callers must now pass an array of prompts instead of a single string
+- Changed behavior will throw at runtime for non-array system prompts because request builders now normalize system prompts as an array
+
+### Added
+
+- Added support for multiple system prompts by changing `Context.systemPrompt` to an ordered string array and preserving provider-appropriate instruction precedence
+
+### Changed
+
+- Changed request builders for Anthropic, OpenAI, Bedrock, Azure, Cursor, Google, and Ollama to propagate every non-empty system prompt entry without demoting durable instructions into ordinary conversation turns
+
+### Fixed
+
+- Filtered out empty normalized system prompts so blank entries are no longer sent to providers
+- Removed blank system prompt strings from provider payloads to avoid unnecessary empty instruction messages
+
+## [14.6.6] - 2026-05-04
+
+### Added
+
+- Added always-on OpenRouter response caching (1h TTL) by sending `X-OpenRouter-Cache: true` and `X-OpenRouter-Cache-TTL: 3600` on every OpenRouter request — identical requests replay from OpenRouter's edge cache for free. https://openrouter.ai/docs/features/response-caching
+
 ## [14.6.4] - 2026-05-03
 
 ### Fixed

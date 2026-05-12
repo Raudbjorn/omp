@@ -61,7 +61,6 @@ describe("createTools", () => {
 		expect(names).toContain("search");
 		expect(names).toContain("find");
 		expect(names).toContain("lsp");
-		expect(names).toContain("notebook");
 		expect(names).toContain("task");
 		expect(names).toContain("todo_write");
 		expect(names).toContain("web_search");
@@ -212,7 +211,6 @@ describe("createTools", () => {
 				"astEdit.enabled": false,
 				"renderMermaid.enabled": false,
 				"web_search.enabled": false,
-				"notebook.enabled": false,
 				"browser.enabled": false,
 				"inspect_image.enabled": false,
 				"calc.enabled": false,
@@ -227,10 +225,23 @@ describe("createTools", () => {
 		expect(names).not.toContain("ast_edit");
 		expect(names).not.toContain("render_mermaid");
 		expect(names).not.toContain("web_search");
-		expect(names).not.toContain("notebook");
 		expect(names).not.toContain("browser");
 		expect(names).not.toContain("inspect_image");
 		expect(names).not.toContain("calc");
+	});
+
+	it("excludes exit_plan_mode when plan mode is disabled", async () => {
+		const session = createTestSession({
+			settings: createSettingsWithOverrides({
+				"plan.enabled": false,
+			}),
+		});
+
+		const defaultTools = await createTools(session);
+		expect(defaultTools.map(t => t.name)).not.toContain("exit_plan_mode");
+
+		const requestedTools = await createTools(session, ["read", "exit_plan_mode"]);
+		expect(requestedTools.map(t => t.name)).toEqual(["read"]);
 	});
 
 	it("includes search_tool_bm25 when MCP tool discovery is enabled and executable", async () => {

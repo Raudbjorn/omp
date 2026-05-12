@@ -58,6 +58,13 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--list-recent flag", () => {
+		test("parses --list-recent flag", () => {
+			const result = parseArgs(["--list-recent"]);
+			expect(result.listRecent).toBe(true);
+		});
+	});
+
 	describe("--resume flag", () => {
 		test("parses --resume flag", () => {
 			const result = parseArgs(["--resume"]);
@@ -221,16 +228,6 @@ describe("parseArgs", () => {
 		test("lowercases tool names passed to --tools", () => {
 			const result = parseArgs(["--tools", "Read,Search"]);
 			expect(result.tools).toEqual(["read", "search"]);
-		});
-
-		test("parses --tools=value with equals syntax", () => {
-			const result = parseArgs(["--tools=read,bash"]);
-			expect(result.tools).toEqual(["read", "bash"]);
-		});
-
-		test("parses --tools=value with single tool", () => {
-			const result = parseArgs(["--tools=ask"]);
-			expect(result.tools).toEqual(["ask"]);
 		});
 
 		test("parses --tools=value with equals syntax", () => {

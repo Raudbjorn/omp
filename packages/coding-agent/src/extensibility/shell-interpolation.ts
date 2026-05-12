@@ -3,18 +3,6 @@ import { NON_INTERACTIVE_ENV } from "../exec/non-interactive-env";
 
 const SHELL_INTERPOLATION_TIMEOUT_MS = 10_000;
 
-class ShellInterpolationError extends Error {
-	readonly isShellInterpolationError = true as const;
-	constructor(message: string, options?: { cause?: unknown }) {
-		super(message, options);
-		this.name = "ShellInterpolationError";
-	}
-}
-
-function isShellInterpolationError(error: unknown): error is ShellInterpolationError {
-	return error instanceof ShellInterpolationError;
-}
-
 /**
  * Input for the post-render shell interpolation pass.
  *
@@ -56,7 +44,7 @@ export async function interpolateShellExpressions(options: ShellInterpolationOpt
 		if (expressionEnd === -1 || (lineEnd !== -1 && expressionEnd > lineEnd)) {
 			const malformedEnd = lineEnd === -1 ? body.length : lineEnd;
 			const command = body.slice(commandStart, malformedEnd);
-			throw new ShellInterpolationError(
+			throw new Error(
 				`Malformed shell interpolation in ${sourceLabel} for command \`${command}\`: missing closing backtick before end of line`,
 			);
 		}
@@ -92,27 +80,27 @@ async function executeInterpolatedCommand(
 		);
 
 		if (result.timedOut) {
-			throw new ShellInterpolationError(
+			throw new Error(
 				`Shell interpolation failed in ${context.sourceLabel} for command \`${command}\`: command timed out after ${Math.round(SHELL_INTERPOLATION_TIMEOUT_MS / 1000)} seconds`,
 			);
 		}
 		if (result.cancelled) {
-			throw new ShellInterpolationError(
+			throw new Error(
 				`Shell interpolation failed in ${context.sourceLabel} for command \`${command}\`: command was cancelled`,
 			);
 		}
 		if (result.exitCode !== 0) {
-			throw new ShellInterpolationError(
+			throw new Error(
 				`Shell interpolation failed in ${context.sourceLabel} for command \`${command}\`: command exited with code ${result.exitCode}`,
 			);
 		}
 
 		return trimSingleTrailingNewline(output);
 	} catch (error) {
-		if (isShellInterpolationError(error)) {
+		if (error instanceof Error && error.message.includes(context.sourceLabel) && error.message.includes(command)) {
 			throw error;
 		}
-		throw new ShellInterpolationError(
+		throw new Error(
 			`Shell interpolation failed in ${context.sourceLabel} for command \`${command}\`: ${error instanceof Error ? error.message : String(error)}`,
 			{ cause: error },
 		);

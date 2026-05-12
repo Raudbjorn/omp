@@ -21,18 +21,24 @@ import {
 import { type Static, Type } from "@sinclair/typebox";
 import packageJson from "../../package.json" with { type: "json" };
 import { isAuthenticated, type ModelRegistry } from "../config/model-registry";
+import type { Settings } from "../config/settings";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import imageGenDescription from "../prompts/tools/image-gen.md" with { type: "text" };
 import { resolveReadPath } from "./path-utils";
 
 const DEFAULT_MODEL = "gemini-3-pro-image-preview";
-const DEFAULT_OPENROUTER_MODEL = "google/gemini-3-pro-image-preview";
+const DEFAULT_OPENROUTER_MODEL = "openai/gpt-5.4-image-2";
 const DEFAULT_ANTIGRAVITY_MODEL = "gemini-3-pro-image";
 const IMAGE_TIMEOUT = 3 * 60 * 1000; // 3 minutes
 const MAX_IMAGE_SIZE = 35 * 1024 * 1024;
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const OPENAI_IMAGE_OUTPUT_FORMAT = "webp";
 const OPENAI_IMAGE_MIME_TYPE = "image/webp";
+const OPENAI_IMAGE_MIN_PIXELS = 655_360;
+const OPENAI_IMAGE_MAX_PIXELS = 8_294_400;
+const OPENAI_IMAGE_MAX_EDGE = 3840;
+const OPENAI_IMAGE_MAX_ASPECT_RATIO = 3;
+const OPENROUTER_IMAGE_MODEL_SETTING = "providers.imageOpenRouterModel";
 
 const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 const IMAGE_SYSTEM_INSTRUCTION =
@@ -284,6 +290,11 @@ interface OpenAIHostedImageResult {
 	usage?: OpenAIResponsesUsage;
 }
 
+interface OpenAIImageDimensions {
+	width: number;
+	height: number;
+}
+
 interface OpenRouterImageUrl {
 	url: string;
 }
@@ -311,7 +322,10 @@ interface AntigravityRequest {
 	project: string;
 	model: string;
 	request: {
-		contents: Array<{ role: "user"; parts: Array<{ text?: string; inlineData?: InlineImageData }> }>;
+		contents: Array<{
+			role: "user";
+			parts: Array<{ text?: string; inlineData?: InlineImageData }>;
+		}>;
 		systemInstruction?: { parts: Array<{ text: string }> };
 		generationConfig?: {
 			responseModalities?: GeminiResponseModality[];
@@ -371,6 +385,17 @@ function normalizeDataUrl(data: string): { data: string; mimeType?: string } {
 
 function resolveOpenRouterModel(model: string): string {
 	return model.includes("/") ? model : `google/${model}`;
+}
+
+function resolveConfiguredOpenRouterImageModel(settings?: Settings): string {
+	const configured = settings?.get(OPENROUTER_IMAGE_MODEL_SETTING);
+	if (typeof configured === "string") {
+		const trimmed = configured.trim();
+		if (trimmed.length > 0) {
+			return trimmed;
+		}
+	}
+	return DEFAULT_OPENROUTER_MODEL;
 }
 
 function toDataUrl(image: InlineImageData): string {
@@ -650,20 +675,111 @@ function getOpenAIHostedImageProvider(model: Model): ImageProvider {
 	return model.api === "openai-codex-responses" || model.provider === "openai-codex" ? "openai-codex" : "openai";
 }
 
-function resolveOpenAIImageSize(aspectRatio: string | undefined, imageSize: string | undefined): string | undefined {
-	if (imageSize) return imageSize;
-	switch (aspectRatio) {
-		case "1:1":
-			return "1024x1024";
-		case "3:4":
-		case "9:16":
-			return "1024x1536";
-		case "4:3":
-		case "16:9":
-			return "1536x1024";
-		default:
-			return undefined;
+function gcd(a: number, b: number): number {
+	let left = Math.abs(a);
+	let right = Math.abs(b);
+	while (right !== 0) {
+		const remainder = left % right;
+		left = right;
+		right = remainder;
 	}
+	return left;
+}
+
+function lcm(a: number, b: number): number {
+	return Math.abs(a * b) / gcd(a, b);
+}
+
+function parseAspectRatio(aspectRatio: string): OpenAIImageDimensions {
+	const [rawWidth, rawHeight] = aspectRatio.split(":");
+	const width = Number(rawWidth);
+	const height = Number(rawHeight);
+	if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+		throw new Error(`Invalid aspect ratio: ${aspectRatio}`);
+	}
+
+	const divisor = gcd(width, height);
+	return {
+		width: width / divisor,
+		height: height / divisor,
+	};
+}
+
+function getOpenAIImageTargetEdge(imageSize: string): number {
+	switch (imageSize) {
+		case "1K":
+			return 1024;
+		case "2K":
+			return 2048;
+		case "4K":
+			return 3840;
+		case "512":
+			throw new Error('OpenAI-hosted image generation does not support image_size "512". Use "1K" or larger.');
+		default:
+			throw new Error(`Unsupported OpenAI image_size alias: ${imageSize}`);
+	}
+}
+
+function validateOpenAIAspectRatio(ratio: OpenAIImageDimensions, originalAspectRatio: string): void {
+	const longEdgeUnits = Math.max(ratio.width, ratio.height);
+	const shortEdgeUnits = Math.min(ratio.width, ratio.height);
+	if (longEdgeUnits / shortEdgeUnits > OPENAI_IMAGE_MAX_ASPECT_RATIO) {
+		throw new Error(
+			`OpenAI-hosted image generation only supports aspect ratios up to 3:1. Received ${originalAspectRatio}.`,
+		);
+	}
+}
+
+function scaleForMinPixels(baseWidth: number, baseHeight: number): number {
+	return Math.ceil(Math.sqrt(OPENAI_IMAGE_MIN_PIXELS / (baseWidth * baseHeight)));
+}
+
+function scaleForMaxPixels(baseWidth: number, baseHeight: number): number {
+	return Math.floor(Math.sqrt(OPENAI_IMAGE_MAX_PIXELS / (baseWidth * baseHeight)));
+}
+
+function resolveOpenAIImageDimensions(
+	aspectRatio: string | undefined,
+	imageSize: string | undefined,
+): OpenAIImageDimensions | undefined {
+	if (!aspectRatio && !imageSize) return undefined;
+
+	const ratio = parseAspectRatio(aspectRatio ?? "1:1");
+	validateOpenAIAspectRatio(ratio, aspectRatio ?? "1:1");
+
+	const widthStep = 16 / gcd(ratio.width, 16);
+	const heightStep = 16 / gcd(ratio.height, 16);
+	const scaleStep = lcm(widthStep, heightStep);
+	const baseWidth = ratio.width * scaleStep;
+	const baseHeight = ratio.height * scaleStep;
+	const baseLongEdge = Math.max(baseWidth, baseHeight);
+	const minScale = scaleForMinPixels(baseWidth, baseHeight);
+	const maxScale = Math.min(
+		Math.floor(OPENAI_IMAGE_MAX_EDGE / baseLongEdge),
+		scaleForMaxPixels(baseWidth, baseHeight),
+	);
+
+	if (maxScale < minScale) {
+		throw new Error(`OpenAI-hosted image generation cannot satisfy aspect ratio ${aspectRatio ?? "1:1"}.`);
+	}
+
+	let scale = minScale;
+	if (imageSize) {
+		const targetLongEdge = getOpenAIImageTargetEdge(imageSize);
+		scale = Math.max(1, Math.floor(targetLongEdge / baseLongEdge));
+		if (scale < minScale) scale = minScale;
+		if (scale > maxScale) scale = maxScale;
+	}
+
+	return {
+		width: baseWidth * scale,
+		height: baseHeight * scale,
+	};
+}
+
+function resolveOpenAIImageSize(aspectRatio: string | undefined, imageSize: string | undefined): string | undefined {
+	const dimensions = resolveOpenAIImageDimensions(aspectRatio, imageSize);
+	return dimensions ? `${dimensions.width}x${dimensions.height}` : undefined;
 }
 
 function buildOpenAIHostedImageRequest(
@@ -675,7 +791,11 @@ function buildOpenAIHostedImageRequest(
 ): OpenAIHostedImageRequest {
 	const content: OpenAIInputContent[] = [{ type: "input_text", text: promptText }];
 	for (const image of inputImages) {
-		content.push({ type: "input_image", detail: "auto", image_url: toDataUrl(image) });
+		content.push({
+			type: "input_image",
+			detail: "auto",
+			image_url: toDataUrl(image),
+		});
 	}
 
 	const size = resolveOpenAIImageSize(params.aspect_ratio, params.image_size);
@@ -899,9 +1019,18 @@ function buildAntigravityRequest(
 			safetySettings: [
 				{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
 				{ category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
-				{ category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
-				{ category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
-				{ category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_ONLY_HIGH" },
+				{
+					category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+					threshold: "BLOCK_ONLY_HIGH",
+				},
+				{
+					category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+					threshold: "BLOCK_ONLY_HIGH",
+				},
+				{
+					category: "HARM_CATEGORY_CIVIC_INTEGRITY",
+					threshold: "BLOCK_ONLY_HIGH",
+				},
 			],
 		},
 		requestType: "agent",
@@ -973,7 +1102,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 					: provider === "antigravity"
 						? DEFAULT_ANTIGRAVITY_MODEL
 						: provider === "openrouter"
-							? DEFAULT_OPENROUTER_MODEL
+							? resolveConfiguredOpenRouterImageModel(ctx.settings)
 							: DEFAULT_MODEL;
 			const resolvedModel = provider === "openrouter" ? resolveOpenRouterModel(model) : model;
 			const cwd = ctx.sessionManager.getCwd();
@@ -1022,7 +1151,10 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 
 				return {
 					content: [
-						{ type: "text", text: buildResponseSummary(provider, model, imagePaths, parsed.responseText) },
+						{
+							type: "text",
+							text: buildResponseSummary(provider, model, imagePaths, parsed.responseText),
+						},
 					],
 					details: {
 						provider,
@@ -1068,7 +1200,9 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 					const errorText = await response.text();
 					let message = errorText;
 					try {
-						const parsed = JSON.parse(errorText) as { error?: { message?: string } };
+						const parsed = JSON.parse(errorText) as {
+							error?: { message?: string };
+						};
 						message = parsed.error?.message ?? message;
 					} catch {
 						// Keep raw text.
@@ -1098,7 +1232,12 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				const imagePaths = await saveImagesToTemp(parsed.images);
 
 				return {
-					content: [{ type: "text", text: buildResponseSummary(provider, model, imagePaths, responseText) }],
+					content: [
+						{
+							type: "text",
+							text: buildResponseSummary(provider, model, imagePaths, responseText),
+						},
+					],
 					details: {
 						provider,
 						model,
@@ -1115,12 +1254,24 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				const prompt = assemblePrompt(params);
 				const contentParts: OpenRouterContentPart[] = [{ type: "text", text: prompt }];
 				for (const image of resolvedImages) {
-					contentParts.push({ type: "image_url", image_url: { url: toDataUrl(image) } });
+					contentParts.push({
+						type: "image_url",
+						image_url: { url: toDataUrl(image) },
+					});
 				}
 
 				const requestBody = {
 					model: resolvedModel,
+					modalities: ["image", "text"],
 					messages: [{ role: "user" as const, content: contentParts }],
+					...(params.aspect_ratio || params.image_size
+						? {
+								image_config: {
+									...(params.aspect_ratio ? { aspect_ratio: params.aspect_ratio } : {}),
+									...(params.image_size ? { image_size: params.image_size } : {}),
+								},
+							}
+						: {}),
 				};
 
 				const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -1128,7 +1279,9 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 					headers: {
 						"Content-Type": "application/json",
 						Authorization: `Bearer ${apiKey.apiKey}`,
-						"X-Title": "Oh-My-Pi",
+						"HTTP-Referer": "https://github.com/can1357/oh-my-pi",
+						"X-OpenRouter-Title": "Oh-My-Pi",
+						"X-OpenRouter-Categories": "cli-agent",
 					},
 					body: JSON.stringify(requestBody),
 					signal: requestSignal,
@@ -1138,7 +1291,9 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				if (!response.ok) {
 					let message = rawText;
 					try {
-						const parsed = JSON.parse(rawText) as { error?: { message?: string } };
+						const parsed = JSON.parse(rawText) as {
+							error?: { message?: string };
+						};
 						message = parsed.error?.message ?? message;
 					} catch {
 						// Keep raw text.
@@ -1174,7 +1329,10 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 
 				return {
 					content: [
-						{ type: "text", text: buildResponseSummary(provider, resolvedModel, imagePaths, responseText) },
+						{
+							type: "text",
+							text: buildResponseSummary(provider, resolvedModel, imagePaths, responseText),
+						},
 					],
 					details: {
 						provider,
@@ -1187,7 +1345,10 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				};
 			}
 
-			const parts = [] as Array<{ text?: string; inlineData?: InlineImageData }>;
+			const parts = [] as Array<{
+				text?: string;
+				inlineData?: InlineImageData;
+			}>;
 			for (const image of resolvedImages) {
 				parts.push({ inlineData: image });
 			}
@@ -1230,7 +1391,9 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 			if (!response.ok) {
 				let message = rawText;
 				try {
-					const parsed = JSON.parse(rawText) as { error?: { message?: string } };
+					const parsed = JSON.parse(rawText) as {
+						error?: { message?: string };
+					};
 					message = parsed.error?.message ?? message;
 				} catch {
 					// Keep raw text.
@@ -1248,7 +1411,12 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 					? `Blocked: ${data.promptFeedback.blockReason}`
 					: "No image data returned.";
 				return {
-					content: [{ type: "text", text: `${blocked}${responseText ? `\n\n${responseText}` : ""}` }],
+					content: [
+						{
+							type: "text",
+							text: `${blocked}${responseText ? `\n\n${responseText}` : ""}`,
+						},
+					],
 					details: {
 						provider,
 						model,
@@ -1265,7 +1433,12 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 			const imagePaths = await saveImagesToTemp(inlineImages);
 
 			return {
-				content: [{ type: "text", text: buildResponseSummary(provider, model, imagePaths, responseText) }],
+				content: [
+					{
+						type: "text",
+						text: buildResponseSummary(provider, model, imagePaths, responseText),
+					},
+				],
 				details: {
 					provider,
 					model,

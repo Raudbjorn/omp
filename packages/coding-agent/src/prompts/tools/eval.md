@@ -1,27 +1,36 @@
-Run code in a persistent kernel, using a series of codeblocks acting as cells.
+Run code in a persistent kernel using codeblock cells.
 
 <instruction>
-Each cell is introduced by a header line of the form:
+Each cell is wrapped between `*** Begin <LANG>` and `*** End <LANG>`:
 
 ```
-===== <info> =====
+*** Begin PY
+*** Title: optional title
+*** Timeout: 10s
+*** Reset
+print("hi")
+*** End PY
 ```
 
-where each side is at least 5 equal signs. Everything between one header and the next (or end of input) is the cell's code, verbatim. The info is space-separated tokens, all optional, in any order:
-- **Language**: {{#if py}}`py` for Python{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`js` / `ts` for JavaScript{{/if}}.{{#ifAll py js}} Omitted → inherit the previous cell's language (the first cell defaults to Python, falling back to JavaScript when Python is unavailable).{{else}} Omitted → inherit the previous cell's language.{{/ifAll}}
-- **Title shorthand**: `py:"…"`, `js:"…"`, `ts:"…"` set the language and the cell title together.
-- **Attributes**:
-  - `id:"…"` — cell title (when language is unchanged or already set).
-  - `t:<duration>` — per-cell timeout. Duration is digits with optional `ms` / `s` / `m` units (e.g. `t:500ms`, `t:15s`, `t:2m`). Default 30s.
-  - `rst` — wipe **this cell's own language kernel** before running.{{#ifAll py js}} Other languages are untouched.{{/ifAll}}
+- **Language**: {{#if py}}`PY` for Python{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`JS` / `TS` for JavaScript{{/if}}. The opening `<LANG>` and closing `<LANG>` **MUST** match.
+- **Attributes** (optional, in any order, immediately after `*** Begin`):
+  - `*** Title: …` — cell title shown in the UI.
+  - `*** Timeout: <duration>` — per-cell timeout. Digits with optional `ms` / `s` / `m` units (e.g. `500ms`, `15s`, `2m`). Default 30s.
+  - `*** Reset` — wipe this cell's own language kernel before running.{{#ifAll py js}} Other languages are untouched.{{/ifAll}}
+- Anything between the last attribute and `*** End <LANG>` is the cell's code, verbatim.
+- Stack multiple cells back-to-back; blank lines between cells are ignored.
 
-**Work incrementally:** one logical step per cell (imports, define, test, use). Pass multiple small cells in one call. Define small reusable functions you can debug individually. You **MUST** put workflow explanations in the assistant message or cell title — never inside cell code.
-
+**Work incrementally:**
+- One logical step per cell (imports, define, test, use).
+- Pass multiple small cells in one call.
+- Define small reusable functions for individual debugging.
+- Put workflow explanations in the assistant message or cell title — never inside cell code.
+{{#if py}}- Python cells run inside an IPython kernel with a live event loop. Use top-level `await` directly (e.g. `await main()`); `asyncio.run(…)` raises "cannot be called from a running event loop".{{/if}}
 **On failure:** errors identify the failing cell (e.g., "Cell 3 failed"). Resubmit only the fixed cell (or fixed cell + remaining cells).
 </instruction>
 
 <prelude>
-{{#ifAll py js}}The same helpers are available in both runtimes with the same positional argument order. Python takes the trailing options as keyword args; JavaScript takes the same options as a trailing object literal. JavaScript helpers are async and `await`able; Python helpers run synchronously.{{else}}{{#if py}}Helpers run synchronously. Trailing options are passed as keyword arguments.{{/if}}{{#if js}}Helpers are async and `await`able. Trailing options are passed as a final object literal.{{/if}}{{/ifAll}}
+{{#ifAll py js}}Same helpers in both runtimes with the same positional argument order. Python: trailing options as keyword args. JavaScript: trailing options as a trailing object literal. JavaScript helpers are async and `await`able; Python helpers run synchronously.{{else}}{{#if py}}Helpers run synchronously. Trailing options are keyword arguments.{{/if}}{{#if js}}Helpers are async and `await`able. Trailing options are a final object literal.{{/if}}{{/ifAll}}
 ```
 display(value) → None
     Render a value in the current cell output.
@@ -49,26 +58,34 @@ output(*ids, format?="raw", query?=None, offset?=None, limit?=None) → str | di
 {{/if}}</prelude>
 
 <output>
-Cells render like a Jupyter notebook. Pass any value to `display(value)`; non-presentable data is rendered as an interactive JSON tree, and presentable values (figures, images, dataframes, etc.) render with their native representation.
+Cells render like a Jupyter notebook. `display(value)` renders non-presentable data as an interactive JSON tree. Presentable values (figures, images, dataframes, etc.) use their native representation.
 </output>
 
 <caution>
-- In session mode, use `rst` on a cell to wipe its language's kernel before running.{{#ifAll py js}} Reset is per-language: a python cell's `rst` does not touch the JavaScript kernel and vice versa.{{/ifAll}}
+- In session mode, use `*** Reset` on a cell to wipe its language's kernel before running.{{#ifAll py js}} Reset is per-language: a python cell's `*** Reset` does not touch the JavaScript kernel and vice versa.{{/ifAll}}
 {{#if js}}- **js**: the VM exposes a selective `process` subset, Web APIs, `Buffer`, `fs/promises`.
 {{/if}}</caution>
 
 <example>
-{{#if py}}===== py:"imports" t:10s =====
+{{#if py}}*** Begin PY
+*** Title: imports
+*** Timeout: 10s
 import json
 from pathlib import Path
+*** End PY
 
-===== py:"load config" =====
+*** Begin PY
+*** Title: load config
 data = json.loads(read('package.json'))
 display(data)
+*** End PY
 {{/if}}{{#ifAll py js}}
-{{/ifAll}}{{#if js}}===== js:"js summary" rst =====
+{{/ifAll}}{{#if js}}*** Begin JS
+*** Title: js summary
+*** Reset
 const data = JSON.parse(await read('package.json'));
 display(data);
 return data.name;
+*** End JS
 {{/if}}
 </example>

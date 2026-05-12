@@ -2,6 +2,55 @@
 
 ## [Unreleased]
 
+## [14.9.3] - 2026-05-10
+### Added
+
+- Added `onHarmonyLeak` option on `Agent`/loop config to receive GPT-5 Harmony leak audit callbacks
+- Added harmony-leak detection and audit exports to the package index for programmatic leak detection and recovery hooks
+
+### Changed
+
+- Changed OpenAI Codex model runs to detect GPT-5 Harmony protocol leakage during streaming and automatically retry or recover tool calls instead of sending contaminated arguments downstream
+
+### Security
+
+- Hardened tool-call handling against leaked `to=functions.*` protocol tails by truncating or retrying before execution
+- Hardened failure handling so repeated GPT-5 Harmony leak mitigation is retried only up to two times before escalating to an explicit error
+
+## [14.9.0] - 2026-05-10
+### Added
+
+- Added `Agent#metadata` field forwarded to every API request; callers can set arbitrary provider metadata (e.g. `metadata.user_id`) once and have it applied to all subsequent stream calls without modifying per-call options
+- Added `Agent#setMetadataResolver(fn)` for installing a function that resolves request metadata at call time. The `metadata` getter dispatches through the resolver on every read (including the snapshot taken per `prompt()`), so callers reflect mutable external state (e.g. live OAuth account UUID after a token refresh) without manual re-syncs. Plain `agent.metadata = …` continues to set a static value and clears any installed resolver.
+
+### Added
+
+- Added an `onSseEvent` agent option and loop config forwarding path for raw provider SSE diagnostics.
+
+## [14.7.6] - 2026-05-07
+
+### Added
+
+- Added `hideThinkingSummary` option/getter/setter on `Agent` and `AgentLoopConfig`. Forwarded to the underlying stream call so providers can omit reasoning/thinking summaries on demand.
+## [14.7.2] - 2026-05-06
+### Added
+
+- Added `loadMode` option to `AgentTool` to mark built-in tools as `essential` for initial loading or `discoverable` for search activation
+- Added optional `summary` field to `AgentTool` definitions for one-line text used in tool discovery indexes
+
+## [14.7.0] - 2026-05-04
+### Breaking Changes
+
+- Changed `Agent` API types so `systemPrompt` is now a list of prompt strings, requiring callers to pass and update system prompts via string arrays
+
+### Changed
+
+- Removed automatic project-context injection into each model call from loop logic
+
+### Removed
+
+- Removed the `projectPrompt` field from agent state/context and the `setProjectPrompt` mutator
+
 ## [14.6.2] - 2026-05-03
 
 ### Fixed

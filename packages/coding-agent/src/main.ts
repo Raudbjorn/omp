@@ -5,18 +5,26 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
-import { realpathSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { $env, getProjectDir, logger, postmortem, setProjectDir, VERSION } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	getProjectDir,
+	logger,
+	normalizePathForComparison,
+	postmortem,
+	setProjectDir,
+	VERSION,
+} from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import type { Args } from "./cli/args";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { runListModelsCommand } from "./cli/list-models";
+import { runListRecentCommand } from "./cli/list-recent";
 import { selectSession } from "./cli/session-picker";
 import { readSourceHome } from "./cli/update-cli";
 import { findConfigFile } from "./config";
@@ -233,15 +241,6 @@ async function runInteractiveMode(
 	}
 }
 
-function normalizePathForComparison(value: string): string {
-	const resolved = path.resolve(value);
-	let realPath = resolved;
-	try {
-		realPath = realpathSync(resolved);
-	} catch {}
-	return process.platform === "win32" ? realPath.toLowerCase() : realPath;
-}
-
 async function promptForkSession(session: SessionInfo): Promise<boolean> {
 	if (!process.stdin.isTTY) {
 		return false;
@@ -370,10 +369,7 @@ async function maybeAutoChdir(parsed: Args): Promise<void> {
 		return;
 	}
 
-	const normalizePath = (value: string) => {
-		const resolved = realpathSync(path.resolve(value));
-		return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-	};
+	const normalizePath = normalizePathForComparison;
 
 	const cwd = normalizePath(getProjectDir());
 	const normalizedHome = normalizePath(home);
@@ -557,11 +553,11 @@ async function buildSessionOptions(
 
 	// System prompt
 	if (resolvedSystemPrompt && resolvedAppendPrompt) {
-		options.systemPrompt = `${resolvedSystemPrompt}\n\n${resolvedAppendPrompt}`;
+		options.systemPrompt = defaultPrompt => [resolvedSystemPrompt, resolvedAppendPrompt, ...defaultPrompt.slice(1)];
 	} else if (resolvedSystemPrompt) {
-		options.systemPrompt = resolvedSystemPrompt;
+		options.systemPrompt = defaultPrompt => [resolvedSystemPrompt, ...defaultPrompt.slice(1)];
 	} else if (resolvedAppendPrompt) {
-		options.systemPrompt = defaultPrompt => `${defaultPrompt}\n\n${resolvedAppendPrompt}`;
+		options.systemPrompt = defaultPrompt => [...defaultPrompt, resolvedAppendPrompt];
 	}
 
 	// Tools
@@ -620,6 +616,11 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 
 	if (parsedArgs.version) {
 		process.stdout.write(`${VERSION}\n`);
+		process.exit(0);
+	}
+
+	if (parsedArgs.listRecent) {
+		await runListRecentCommand();
 		process.exit(0);
 	}
 
@@ -725,7 +726,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	}
 
 	// Initialize discovery system with settings for provider persistence
-	logger.time("initializeWithSettings", initializeWithSettings, settings, cwd);
+	logger.time("initializeWithSettings", initializeWithSettings, settings);
 
 	// Apply model role overrides from CLI args or env vars (ephemeral, not persisted)
 	const smolModel = parsedArgs.smol ?? $env.PI_SMOL_MODEL;

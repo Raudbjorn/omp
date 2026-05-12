@@ -182,8 +182,11 @@ export function linkOpenAIPromotionTargets(models: ApiModel<Api>[]): void {
 }
 
 /**
- * Returns supported thinking efforts from canonical model rules constrained by
- * explicit model metadata.
+ * Returns the supported thinking efforts declared on the model metadata.
+ *
+ * Catalog enrichment is responsible for normalizing bundled model metadata up front.
+ * Runtime callers must treat explicit `model.thinking` on custom models as authoritative
+ * so proxy-specific overrides from `models.yml` survive request construction.
  *
  * @throws Error when a reasoning-capable model is missing thinking metadata
  */
@@ -194,12 +197,7 @@ export function getSupportedEfforts<TApi extends Api>(model: ApiModel<TApi>): re
 	if (!model.thinking) {
 		throw new Error(`Model ${model.provider}/${model.id} is missing thinking metadata`);
 	}
-	const configuredEfforts = expandEffortRange(model.thinking);
-	const parsedModel = parseKnownModel(model.id);
-	if (parsedModel.family === "unknown") {
-		return configuredEfforts;
-	}
-	return intersectEfforts(configuredEfforts, inferSupportedEfforts(parsedModel, model));
+	return expandEffortRange(model.thinking);
 }
 
 /**
@@ -316,6 +314,19 @@ function applyGeneratedModelPolicy(model: ApiModel<Api>): void {
 		model.maxTokens = copilotLimits.maxTokens;
 	}
 
+	if (
+		model.api === "openai-completions" &&
+		(model.provider === "minimax-code" || model.provider === "minimax-code-cn")
+	) {
+		model.compat = {
+			...model.compat,
+			supportsStore: false,
+			supportsDeveloperRole: false,
+			supportsReasoningEffort: false,
+			reasoningContentField: "reasoning_content",
+		};
+		delete model.compat.thinkingFormat;
+	}
 	const parsedModel = parseKnownModel(model.id);
 	const applyPatchToolType = inferGeneratedApplyPatchToolType(model, parsedModel);
 	if (applyPatchToolType) {
@@ -392,11 +403,19 @@ function inferModelThinking<TApi extends Api>(model: ApiModel<TApi>): ThinkingCo
 	if (!minLevel || !maxLevel) {
 		throw new Error(`Model ${model.provider}/${model.id} resolved to an empty thinking range`);
 	}
-	return {
+	const config: ThinkingConfig = {
 		mode: inferThinkingControlMode(model, parsedModel),
 		minLevel,
 		maxLevel,
 	};
+	// Encode explicit levels only when the inferred set has gaps the min..max range cannot represent.
+	const minIndex = THINKING_EFFORTS.indexOf(minLevel);
+	const maxIndex = THINKING_EFFORTS.indexOf(maxLevel);
+	const expandedRange = THINKING_EFFORTS.slice(minIndex, maxIndex + 1);
+	if (expandedRange.length !== efforts.length) {
+		config.levels = efforts;
+	}
+	return config;
 }
 
 function normalizeThinkingConfig(thinking: ThinkingConfig | undefined): ThinkingConfig | undefined {
@@ -409,20 +428,25 @@ function normalizeThinkingConfig(thinking: ThinkingConfig | undefined): Thinking
 function thinkingsEqual(left: ThinkingConfig | undefined, right: ThinkingConfig | undefined): boolean {
 	if (left === right) return true;
 	if (!left || !right) return false;
-	return left.mode === right.mode && left.minLevel === right.minLevel && left.maxLevel === right.maxLevel;
+	if (left.mode !== right.mode || left.minLevel !== right.minLevel || left.maxLevel !== right.maxLevel) return false;
+	const leftLevels = left.levels;
+	const rightLevels = right.levels;
+	if (leftLevels === rightLevels) return true;
+	if (!leftLevels || !rightLevels) return false;
+	if (leftLevels.length !== rightLevels.length) return false;
+	return leftLevels.every((level, index) => level === rightLevels[index]);
 }
 
 function expandEffortRange(thinking: ThinkingConfig): readonly Effort[] {
+	if (thinking.levels && thinking.levels.length > 0) {
+		return thinking.levels;
+	}
 	const minIndex = THINKING_EFFORTS.indexOf(thinking.minLevel);
 	const maxIndex = THINKING_EFFORTS.indexOf(thinking.maxLevel);
 	if (minIndex === -1 || maxIndex === -1 || minIndex > maxIndex) {
 		return [];
 	}
 	return THINKING_EFFORTS.slice(minIndex, maxIndex + 1);
-}
-
-function intersectEfforts(left: readonly Effort[], right: readonly Effort[]): readonly Effort[] {
-	return left.filter(effort => right.includes(effort));
 }
 
 function inferSupportedEfforts<TApi extends Api>(parsedModel: ParsedModel, model: ApiModel<TApi>): readonly Effort[] {

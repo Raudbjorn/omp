@@ -13,6 +13,7 @@ import {
 	type Context,
 	type MessageAttribution,
 	type Model,
+	type OpenAICompat,
 	type ProviderSessionState,
 	type ServiceTier,
 	type StreamFunction,
@@ -25,6 +26,7 @@ import {
 	createOpenAIResponsesHistoryPayload,
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
+	normalizeSystemPrompts,
 	resolveCacheRetention,
 	sanitizeOpenAIResponsesHistoryItemsForReplay,
 } from "../utils";
@@ -41,6 +43,7 @@ import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses } from "../utils/schema";
+import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
@@ -73,6 +76,13 @@ function getPromptCacheRetention(baseUrl: string, cacheRetention: CacheRetention
 	return undefined;
 }
 
+export function normalizeOpenAIResponsesPromptCacheKey(sessionId: string | undefined): string | undefined {
+	if (!sessionId || sessionId.length === 0) return undefined;
+	const wellFormed = sessionId.toWellFormed();
+	if (wellFormed.length <= 64) return wellFormed;
+	return `pc_${Bun.hash(wellFormed).toString(36)}`;
+}
+
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
 	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -89,6 +99,32 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 const OPENAI_RESPONSES_PROVIDER_SESSION_STATE_PREFIX = "openai-responses:";
 const OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"OpenAI responses stream timed out while waiting for the first event";
+
+const OPENAI_RESPONSES_PROGRESS_EVENT_TYPES = new Set([
+	"response.created",
+	"response.output_item.added",
+	"response.reasoning_summary_part.added",
+	"response.reasoning_summary_text.delta",
+	"response.reasoning_summary_part.done",
+	"response.reasoning_text.delta",
+	"response.content_part.added",
+	"response.output_text.delta",
+	"response.refusal.delta",
+	"response.function_call_arguments.delta",
+	"response.function_call_arguments.done",
+	"response.custom_tool_call_input.delta",
+	"response.custom_tool_call_input.done",
+	"response.output_item.done",
+	"response.completed",
+	"response.failed",
+	"error",
+]);
+
+function isOpenAIResponsesProgressEvent(event: unknown): boolean {
+	if (!event || typeof event !== "object") return false;
+	const type = (event as { type?: unknown }).type;
+	return typeof type === "string" && OPENAI_RESPONSES_PROGRESS_EVENT_TYPES.has(type);
+}
 
 interface OpenAIResponsesProviderSessionState extends ProviderSessionState {
 	nativeHistoryReplayWarmed: boolean;
@@ -183,10 +219,11 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				options?.headers,
 				options?.initiatorOverride,
 				cacheSessionId,
+				options?.onSseEvent,
 			);
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
 			const { params } = buildParams(model, context, options, providerSessionState, baseUrl);
-			const idleTimeoutMs = getOpenAIStreamIdleTimeoutMs();
+			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			options?.onPayload?.(params);
 			rawRequestDump = {
 				provider: model.provider,
@@ -221,6 +258,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					errorMessage: "OpenAI responses stream stalled while waiting for the next event",
 					onIdle: () => requestAbortController.abort(),
 					abortSignal: options?.signal,
+					isProgressItem: isOpenAIResponsesProgressEvent,
 				}),
 				output,
 				stream,
@@ -245,7 +283,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("An unknown error occurred");
+				throw new Error(output.errorMessage ?? "An unknown error occurred");
 			}
 
 			output.providerPayload = createOpenAIResponsesHistoryPayload(model.provider, nativeOutputItems);
@@ -278,6 +316,7 @@ function createClient(
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
 	sessionId?: string,
+	onSseEvent?: OpenAIResponsesOptions["onSseEvent"],
 ): {
 	client: OpenAI;
 	copilotPremiumRequests: number | undefined;
@@ -322,6 +361,7 @@ function createClient(
 			dangerouslyAllowBrowser: true,
 			maxRetries: 5,
 			defaultHeaders: headers,
+			fetch: onSseEvent ? wrapFetchForSseDebug(fetch, event => onSseEvent(event, model)) : fetch,
 		}),
 		copilotPremiumRequests,
 		baseUrl,
@@ -331,7 +371,9 @@ function createClient(
 function getOpenAIResponsesCacheSessionId(
 	options: Pick<OpenAIResponsesOptions, "cacheRetention" | "sessionId"> | undefined,
 ): string | undefined {
-	return resolveCacheRetention(options?.cacheRetention) === "none" ? undefined : options?.sessionId;
+	return resolveCacheRetention(options?.cacheRetention) === "none"
+		? undefined
+		: normalizeOpenAIResponsesPromptCacheKey(options?.sessionId);
 }
 
 function buildParams(
@@ -352,12 +394,11 @@ function buildParams(
 	);
 	const messages: ResponseInput = [...conversationMessages];
 
-	if (context.systemPrompt) {
-		const role = model.reasoning && supportsDeveloperRole(resolvedBaseUrl ?? model) ? "developer" : "system";
-		messages.unshift({
-			role,
-			content: context.systemPrompt.toWellFormed(),
-		});
+	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
+	if (systemPrompts.length > 0) {
+		const role: "developer" | "system" =
+			model.reasoning && supportsDeveloperRole(resolvedBaseUrl ?? model) ? "developer" : "system";
+		messages.unshift(...systemPrompts.map(systemPrompt => ({ role, content: systemPrompt })));
 	}
 
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention);
@@ -420,11 +461,16 @@ function buildParams(
 		// See: https://github.com/can1357/oh-my-pi/issues/41
 		params.include = ["reasoning.encrypted_content"];
 
-		if (options?.reasoning || options?.reasoningSummary) {
-			params.reasoning = {
-				effort: options?.reasoning || "medium",
-				summary: options?.reasoningSummary || "auto",
+		if (options?.reasoning || options?.reasoningSummary !== undefined) {
+			const reasoningParams: NonNullable<typeof params.reasoning> = {
+				effort: mapReasoningEffort(options?.reasoning || "medium", model.compat?.reasoningEffortMap) as NonNullable<
+					OpenAIResponsesSamplingParams["reasoning"]
+				>["effort"],
 			};
+			if (options?.reasoningSummary !== null) {
+				reasoningParams.summary = options?.reasoningSummary || "auto";
+			}
+			params.reasoning = reasoningParams;
 		} else if (model.name.startsWith("gpt-5")) {
 			// Jesus Christ, see https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7
 			messages.push({
@@ -440,6 +486,13 @@ function buildParams(
 	}
 
 	return { conversationMessages, params };
+}
+
+function mapReasoningEffort(
+	effort: NonNullable<OpenAIResponsesOptions["reasoning"]>,
+	reasoningEffortMap: OpenAICompat["reasoningEffortMap"] | undefined,
+): string {
+	return reasoningEffortMap?.[effort] ?? effort;
 }
 
 function isAzureOpenAIBaseUrl(baseUrl: string): boolean {

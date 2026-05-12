@@ -10,7 +10,7 @@ import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import Ajv, { type ValidateFunction } from "ajv";
 import { ModelRegistry } from "../config/model-registry";
-import { resolveModelOverride } from "../config/model-resolver";
+import { resolveModelOverrideWithAuthFallback } from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
@@ -33,6 +33,7 @@ import { jtdToJsonSchema, normalizeSchema } from "../tools/jtd-to-json-schema";
 import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
+import type { WorkspaceTree } from "../workspace-tree";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import {
 	type AgentDefinition,
@@ -138,10 +139,16 @@ export interface ExecutorOptions {
 	agent: AgentDefinition;
 	task: string;
 	assignment?: string;
+	context?: string;
 	description?: string;
 	index: number;
 	id: string;
 	modelOverride?: string | string[];
+	/**
+	 * Active model selector of the parent session, used as an auth-aware fallback
+	 * if the resolved subagent model has no working credentials. See #985.
+	 */
+	parentActiveModelPattern?: string;
 	thinkingLevel?: ThinkingLevel;
 	outputSchema?: unknown;
 	/** Parent task recursion depth (0 = top-level, 1 = first child, etc.) */
@@ -158,6 +165,7 @@ export interface ExecutorOptions {
 	contextFiles?: ContextFileEntry[];
 	skills?: Skill[];
 	promptTemplates?: PromptTemplate[];
+	workspaceTree?: WorkspaceTree;
 	mcpManager?: MCPManager;
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
@@ -273,6 +281,24 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 	let abortedViaYield = false;
 	const hasYield = Array.isArray(yieldItems) && yieldItems.length > 0;
 
+	logger.debug("finalizeSubprocessOutput: yield tracing", {
+		hasYield,
+		yieldCount: yieldItems?.length ?? 0,
+		yieldKeys: hasYield
+			? yieldItems.map((y, i) => ({
+					index: i,
+					status: y.status,
+					dataType: y.data === null ? "null" : y.data === undefined ? "undefined" : typeof y.data,
+					dataKeys:
+						y.data && typeof y.data === "object" && !Array.isArray(y.data) ? Object.keys(y.data) : undefined,
+				}))
+			: undefined,
+		rawOutputPreview: rawOutput.slice(0, 200),
+		exitCode,
+		doneAborted,
+		signalAborted,
+	});
+
 	if (hasYield) {
 		const lastYield = yieldItems[yieldItems.length - 1];
 		if (lastYield?.status === "aborted") {
@@ -305,6 +331,15 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		const { normalized: normalizedSchema, error: schemaError } = normalizeSchema(outputSchema);
 		const hasOutputSchema = normalizedSchema !== undefined && !schemaError;
 		const fallback = allowFallback ? resolveFallbackCompletion(rawOutput, outputSchema) : null;
+		logger.debug("finalizeSubprocessOutput: fallback path", {
+			allowFallback,
+			hasOutputSchema,
+			fallbackHit: !!fallback,
+			fallbackKeys:
+				fallback?.data && typeof fallback.data === "object" && !Array.isArray(fallback.data)
+					? Object.keys(fallback.data)
+					: undefined,
+		});
 		if (fallback) {
 			const completeData = normalizeCompleteData(fallback.data, reportFindings);
 			try {
@@ -932,15 +967,34 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			checkAbort();
 			const authStorage = options.authStorage ?? (await discoverAuthStorage());
 			checkAbort();
+			const registryFromParent = options.modelRegistry !== undefined;
 			const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage);
-			await modelRegistry.refresh();
+			if (!registryFromParent) {
+				await modelRegistry.refresh();
+			} else {
+				logger.debug("runSubagent: reusing parent modelRegistry; skipping refresh");
+			}
 			checkAbort();
 
 			const {
 				model,
 				thinkingLevel: resolvedThinkingLevel,
 				explicitThinkingLevel,
-			} = resolveModelOverride(modelPatterns, modelRegistry, settings);
+				authFallbackUsed,
+			} = await resolveModelOverrideWithAuthFallback(
+				modelPatterns,
+				options.parentActiveModelPattern,
+				modelRegistry,
+				settings,
+			);
+			if (authFallbackUsed && model) {
+				logger.warn("Subagent model has no working credentials; falling back to parent session model", {
+					requested: modelPatterns,
+					parentModel: options.parentActiveModelPattern,
+					resolvedProvider: model.provider,
+					resolvedModel: model.id,
+				});
+			}
 			const effectiveThinkingLevel = explicitThinkingLevel
 				? resolvedThinkingLevel
 				: (thinkingLevel ?? resolvedThinkingLevel);
@@ -967,16 +1021,21 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				contextFiles: options.contextFiles,
 				skills: options.skills,
 				promptTemplates: options.promptTemplates,
-				systemPrompt: defaultPrompt =>
-					prompt.render(subagentSystemPromptTemplate, {
-						base: defaultPrompt,
+				workspaceTree: options.workspaceTree,
+				systemPrompt: defaultPrompt => {
+					const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
 						agent: agent.systemPrompt,
+						context: options.context?.trim() ?? "",
 						worktree: worktree ?? "",
 						outputSchema: normalizedOutputSchema,
 						contextFile: options.contextFile,
 						ircPeers: ircEnabled ? renderIrcPeerRoster(id) : "",
 						ircSelfId: ircEnabled ? id : "",
-					}),
+					});
+					return defaultPrompt.length === 0
+						? [subagentPrompt]
+						: [...defaultPrompt.slice(0, -1), subagentPrompt, defaultPrompt[defaultPrompt.length - 1]];
+				},
 				sessionManager,
 				hasUI: false,
 				spawns: spawnsEnv,
@@ -1016,7 +1075,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			session.sessionManager.appendSessionInit({
-				systemPrompt: session.agent.state.systemPrompt,
+				systemPrompt: session.agent.state.systemPrompt.join("\n\n"),
 				task,
 				tools: session.getActiveToolNames(),
 				outputSchema,
@@ -1112,9 +1171,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						maxRetries: MAX_YIELD_RETRIES,
 					});
 
+					const isFinalRetry = retryCount >= MAX_YIELD_RETRIES;
 					await session.prompt(reminder, {
 						attribution: "agent",
-						...(reminderToolChoice ? { toolChoice: reminderToolChoice } : {}),
+						...(isFinalRetry && reminderToolChoice ? { toolChoice: reminderToolChoice } : {}),
 					});
 					await session.waitForIdle();
 				} catch (err) {

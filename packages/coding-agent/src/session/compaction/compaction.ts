@@ -965,6 +965,7 @@ export interface SummaryOptions {
 	remoteEndpoint?: string;
 	remoteInstructions?: string;
 	initiatorOverride?: MessageAttribution;
+	metadata?: Record<string, unknown>;
 }
 
 export async function generateSummary(
@@ -1019,8 +1020,15 @@ export async function generateSummary(
 
 	const response = await completeSimple(
 		model,
-		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ maxTokens, signal, apiKey, reasoning: Effort.High, initiatorOverride: options?.initiatorOverride },
+		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
+		{
+			maxTokens,
+			signal,
+			apiKey,
+			reasoning: Effort.High,
+			initiatorOverride: options?.initiatorOverride,
+			metadata: options?.metadata,
+		},
 	);
 
 	if (response.stopReason === "error") {
@@ -1066,10 +1074,17 @@ async function generateShortSummary(
 	const response = await completeSimple(
 		model,
 		{
-			systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
+			systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT],
 			messages: [{ role: "user", content: [{ type: "text", text: promptText }], timestamp: Date.now() }],
 		},
-		{ maxTokens, signal, apiKey, reasoning: Effort.High, initiatorOverride: options?.initiatorOverride },
+		{
+			maxTokens,
+			signal,
+			apiKey,
+			reasoning: Effort.High,
+			initiatorOverride: options?.initiatorOverride,
+			metadata: options?.metadata,
+		},
 	);
 
 	if (response.stopReason === "error") {
@@ -1249,6 +1264,7 @@ export async function compact(
 		remoteEndpoint: settings.remoteEnabled === false ? undefined : settings.remoteEndpoint,
 		remoteInstructions: options?.remoteInstructions,
 		initiatorOverride: options?.initiatorOverride,
+		metadata: options?.metadata,
 	};
 
 	let preserveData = withOpenAiRemoteCompactionPreserveData(previousPreserveData, undefined);
@@ -1304,6 +1320,7 @@ export async function compact(
 				apiKey,
 				signal,
 				summaryOptions.initiatorOverride,
+				summaryOptions.metadata,
 			),
 		]);
 		// Merge into single summary
@@ -1339,6 +1356,7 @@ export async function compact(
 			extraContext: options?.extraContext,
 			remoteEndpoint: summaryOptions.remoteEndpoint,
 			initiatorOverride: summaryOptions.initiatorOverride,
+			metadata: summaryOptions.metadata,
 		},
 	);
 
@@ -1370,6 +1388,7 @@ async function generateTurnPrefixSummary(
 	apiKey: string,
 	signal?: AbortSignal,
 	initiatorOverride?: MessageAttribution,
+	metadata?: Record<string, unknown>,
 ): Promise<string> {
 	const maxTokens = Math.floor(0.5 * reserveTokens); // Smaller budget for turn prefix
 
@@ -1386,8 +1405,8 @@ async function generateTurnPrefixSummary(
 
 	const response = await completeSimple(
 		model,
-		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ maxTokens, signal, apiKey, reasoning: Effort.High, initiatorOverride },
+		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
+		{ maxTokens, signal, apiKey, reasoning: Effort.High, initiatorOverride, metadata },
 	);
 
 	if (response.stopReason === "error") {

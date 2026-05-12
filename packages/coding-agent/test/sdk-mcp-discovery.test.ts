@@ -73,8 +73,33 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			customTools: [createMcpCustomTool("mcp__github_create_issue", "github", "create_issue")],
 		});
 
-		expect(session.systemPrompt).not.toContain("### MCP tool discovery");
-		expect(session.systemPrompt).not.toContain("call `search_tool_bm25` before concluding no such tool exists");
+		expect(session.systemPrompt.join("\n")).not.toContain("### MCP tool discovery");
+		expect(session.systemPrompt.join("\n")).not.toContain(
+			"call `search_tool_bm25` before concluding no such tool exists",
+		);
+	});
+
+	it("advertises discovery guidance for builtin-only tools.discoveryMode all sessions", async () => {
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "tools.discoveryMode": "all" }),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+		});
+
+		const prompt = session.systemPrompt.join("\n");
+		const searchTool = session.agent.state.tools.find(tool => tool.name === "search_tool_bm25");
+		expect(session.getActiveToolNames()).not.toContain("find");
+		expect(prompt).toContain("call `search_tool_bm25` before concluding no such tool exists");
+		expect(searchTool?.description).toContain("Total discoverable tools available:");
 	});
 
 	it("preserves explicitly requested MCP tools in discovery mode", async () => {
@@ -100,7 +125,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 
 		expect(session.getActiveToolNames()).toContain("mcp__github_create_issue");
 		expect(session.getSelectedMCPToolNames()).toEqual(["mcp__github_create_issue"]);
-		expect(session.systemPrompt).toContain("mcp__github_create_issue");
+		expect(session.systemPrompt.join("\n")).toContain("mcp__github_create_issue");
 
 		await session.activateDiscoveredMCPTools(["mcp__slack_post_message"]);
 
@@ -163,8 +188,35 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		});
 
 		const searchTool = session.agent.state.tools.find(tool => tool.name === "search_tool_bm25");
-		expect(searchTool?.description).toContain("Total discoverable MCP tools loaded: 1.");
+		expect(searchTool?.description).toContain("Total discoverable tools available: 1.");
 		expect(searchTool?.description).toContain("- `server_name`");
+	});
+
+	it("prunes deactivated builtin discoveries so they can be rediscovered", async () => {
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "tools.discoveryMode": "all" }),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+		});
+
+		expect(await session.activateDiscoveredTools(["find"])).toEqual(["find"]);
+		expect(session.getSelectedDiscoveredToolNames()).toContain("find");
+
+		await session.setActiveToolsByName(["read", "search_tool_bm25"]);
+
+		expect(session.getActiveToolNames()).not.toContain("find");
+		expect(session.getSelectedDiscoveredToolNames()).not.toContain("find");
+		expect(await session.activateDiscoveredTools(["find"])).toEqual(["find"]);
+		expect(session.getActiveToolNames()).toContain("find");
 	});
 	it("restores explicit MCP, thinking, and service-tier entries when resuming without rewriting the session file", async () => {
 		const firstManager = SessionManager.create(tempDir, tempDir);
@@ -234,7 +286,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			expect(resumedSession.getActiveToolNames()).toEqual(
 				expect.arrayContaining(["read", "search_tool_bm25", "mcp__slack_post_message"]),
 			);
-			expect(resumedSession.systemPrompt).toContain("mcp__slack_post_message");
+			expect(resumedSession.systemPrompt.join("\n")).toContain("mcp__slack_post_message");
 			expect(fs.readFileSync(sessionFile!, "utf8")).toBe(persistedBeforeResume);
 			expect(fs.statSync(sessionFile!).mtimeMs).toBe(persistedMtimeBeforeResume);
 		} finally {

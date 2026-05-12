@@ -18,6 +18,7 @@ import type {
 	ThinkingContent,
 	ToolCall,
 } from "../types";
+import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
 import { refreshAntigravityToken } from "../utils/oauth/google-antigravity";
@@ -507,6 +508,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				for await (const chunk of readSseJson<CloudCodeAssistResponseChunk>(
 					activeResponse.body!,
 					options?.signal,
+					event => options?.onSseEvent?.({ event: event.event, data: event.data, raw: [...event.raw] }, model),
 				)) {
 					const responseData = chunk.response;
 					if (!responseData) continue;
@@ -746,7 +748,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("An unknown error occurred");
+				throw new Error(output.errorMessage ?? "An unknown error occurred");
 			}
 
 			output.duration = Date.now() - startTime;
@@ -865,8 +867,8 @@ export function buildRequest(
 	options: GoogleGeminiCliOptions = {},
 	isAntigravity = false,
 ): CloudCodeAssistRequest {
+	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	const contents = convertMessages(model, context);
-
 	const generationConfig: CloudCodeAssistRequest["request"]["generationConfig"] = {};
 	if (options.temperature !== undefined) {
 		generationConfig.temperature = options.temperature;
@@ -913,9 +915,9 @@ export function buildRequest(
 	}
 
 	// System instruction must be object with parts, not plain string
-	if (context.systemPrompt) {
+	if (systemPrompts.length > 0) {
 		request.systemInstruction = {
-			parts: [{ text: context.systemPrompt.toWellFormed() }],
+			parts: systemPrompts.map(text => ({ text })),
 		};
 	}
 

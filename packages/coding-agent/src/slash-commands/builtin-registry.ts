@@ -1,9 +1,4 @@
-import * as os from "node:os";
-import * as path from "node:path";
-
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
-import { getConfigDirName, getPlansDir } from "@oh-my-pi/pi-utils";
-import { invalidate as invalidateFsCache } from "../capability/fs";
 import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
 import { dangerPiBundledBuiltinSlashCommands } from "../danger-pi/slash-commands";
@@ -65,8 +60,8 @@ export interface BuiltinSlashCommandSpec extends BuiltinSlashCommand {
 	handle: (
 		command: ParsedBuiltinSlashCommand,
 		runtime: BuiltinSlashCommandRuntime,
-		// biome-ignore lint/suspicious/noConfusingVoidType: void needed so handlers returning nothing are assignable
-	) => Promise<string | undefined> | string | void;
+		// biome-ignore lint/suspicious/noConfusingVoidType: void needed so async handlers returning nothing are assignable
+	) => Promise<string | void> | string | void;
 }
 
 export interface BuiltinSlashCommandRuntime {
@@ -128,93 +123,10 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 		name: "loop",
 		description:
 			"Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Esc cancels the current iteration; /loop again to disable.",
-		handle: async (_command, runtime) => {
-			await runtime.ctx.handleLoopCommand();
-			runtime.ctx.editor.setText("");
-		},
-	},
-	{
-		name: "plans",
-		description: `List and load saved plans from ${getPlansDir()}`,
-		subcommands: [
-			{ name: "load", description: "Load a saved plan into the editor", usage: "load <n|id>" },
-			{ name: "show", description: "Print a saved plan to the status area", usage: "show <n|id>" },
-			{ name: "delete", description: "Delete a saved plan file", usage: "delete <n|id>" },
-		],
+		inlineHint: "[count|duration]",
 		allowArgs: true,
 		handle: async (command, runtime) => {
-			const warn = (op: string, err: unknown): void => {
-				const message = err instanceof Error ? err.message : String(err);
-				runtime.ctx.showWarning(`Failed to ${op}: ${message}`);
-				runtime.ctx.editor.setText("");
-			};
-
-			const raw = command.args.trim();
-			let plans: Awaited<ReturnType<typeof loadPlans>>;
-			try {
-				plans = await loadPlans();
-			} catch (err) {
-				warn("list plans", err);
-				return;
-			}
-			if (!raw) {
-				runtime.ctx.showStatus(formatPlansList(plans));
-				runtime.ctx.editor.setText("");
-				return;
-			}
-			const spaceIdx = raw.search(/\s/);
-			const sub = (spaceIdx === -1 ? raw : raw.slice(0, spaceIdx)).toLowerCase();
-			const rest = spaceIdx === -1 ? "" : raw.slice(spaceIdx + 1).trim();
-
-			if (sub === "load" || sub === "show" || sub === "delete") {
-				const target = resolvePlanArg(plans, rest);
-				if (!target) {
-					runtime.ctx.showWarning(`No plan matches "${rest}". Run /plans to see the list.`);
-					runtime.ctx.editor.setText("");
-					return;
-				}
-				if (sub === "delete") {
-					try {
-						await deletePlanFile(target);
-					} catch (err) {
-						warn(`delete plan ${target.id}`, err);
-						return;
-					}
-					runtime.ctx.showStatus(`Deleted plan: ${target.title} (${target.id})`);
-					runtime.ctx.editor.setText("");
-					return;
-				}
-				let contents: string;
-				try {
-					contents = await readPlanContents(target);
-				} catch (err) {
-					warn(`read plan ${target.id}`, err);
-					return;
-				}
-				if (sub === "show") {
-					runtime.ctx.showStatus(contents, { dim: false });
-					runtime.ctx.editor.setText("");
-					return;
-				}
-				runtime.ctx.editor.setText(contents);
-				runtime.ctx.ui.requestRender();
-				return;
-			}
-
-			const fallback = resolvePlanArg(plans, raw);
-			if (fallback) {
-				let contents: string;
-				try {
-					contents = await readPlanContents(fallback);
-				} catch (err) {
-					warn(`read plan ${fallback.id}`, err);
-					return;
-				}
-				runtime.ctx.editor.setText(contents);
-				runtime.ctx.ui.requestRender();
-				return;
-			}
-			runtime.ctx.showStatus("Usage: /plans [load|show|delete] <n|id>");
+			await runtime.ctx.handleLoopCommand(command.args);
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -720,6 +632,17 @@ const CORE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec
 			const question = command.text.slice(`/${command.name}`.length).trim();
 			runtime.ctx.editor.setText("");
 			await runtime.ctx.handleBtwCommand(question);
+		},
+	},
+	{
+		name: "retry",
+		description: "Retry the last failed agent turn",
+		handle: async (_command, runtime) => {
+			const didRetry = await runtime.ctx.session.retry();
+			if (!didRetry) {
+				runtime.ctx.showStatus("Nothing to retry");
+			}
+			runtime.ctx.editor.setText("");
 		},
 	},
 	{
@@ -1235,6 +1158,10 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 export function isBatchableBuiltinSlashCommand(name: string): boolean {
 	const command = BUILTIN_SLASH_COMMAND_LOOKUP.get(name);
 	return Boolean(command?.allowBatch);
+}
+
+export function isBuiltinSlashCommandName(name: string): boolean {
+	return BUILTIN_SLASH_COMMAND_LOOKUP.has(name);
 }
 
 /**

@@ -5,6 +5,7 @@
  */
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { dereferenceJsonSchema, sanitizeSchemaForStrictMode } from "@oh-my-pi/pi-ai/utils/schema";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { Static, TSchema } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
@@ -196,12 +197,31 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 subprocessToolRegistry.register<YieldDetails>("yield", {
 	extractData: event => {
 		const details = event.result?.details;
-		if (!details || typeof details !== "object") return undefined;
+		logger.debug("yield extractData: processing yield tool result", {
+			hasDetails: !!details,
+			detailsType: typeof details,
+			toolName: event.toolName,
+			isError: event.isError,
+		});
+		if (!details || typeof details !== "object") {
+			logger.debug("yield extractData: no details or non-object details, returning undefined");
+			return undefined;
+		}
 		const record = details as Record<string, unknown>;
 		const status = record.status;
-		if (status !== "success" && status !== "aborted") return undefined;
+		if (status !== "success" && status !== "aborted") {
+			logger.debug("yield extractData: invalid status, returning undefined", { status });
+			return undefined;
+		}
+		const data = record.data;
+		logger.debug("yield extractData: extracted yield data", {
+			status,
+			dataType: data === null ? "null" : data === undefined ? "undefined" : typeof data,
+			dataKeys: data && typeof data === "object" && !Array.isArray(data) ? Object.keys(data) : undefined,
+			hasError: typeof record.error === "string",
+		});
 		return {
-			data: record.data,
+			data,
 			status,
 			error: typeof record.error === "string" ? record.error : undefined,
 		};

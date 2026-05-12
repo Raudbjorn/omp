@@ -25,6 +25,49 @@ function isHexDigit(cp: number): boolean {
 	return (cp >= 0x30 && cp <= 0x39) || ((cp | 0x20) >= 0x61 && (cp | 0x20) <= 0x66);
 }
 
+function closePartialJson(json: string): string {
+	const closers: string[] = [];
+	let inString = false;
+	let escaping = false;
+
+	for (let i = 0; i < json.length; i++) {
+		const char = json[i];
+
+		if (inString) {
+			if (escaping) {
+				escaping = false;
+				continue;
+			}
+			if (char === "\\") {
+				escaping = true;
+				continue;
+			}
+			if (char === '"') {
+				inString = false;
+			}
+			continue;
+		}
+
+		if (char === '"') {
+			inString = true;
+			continue;
+		}
+		if (char === "{") {
+			closers.push("}");
+			continue;
+		}
+		if (char === "[") {
+			closers.push("]");
+			continue;
+		}
+		if ((char === "}" || char === "]") && closers.at(-1) === char) {
+			closers.pop();
+		}
+	}
+
+	return `${json}${inString ? '"' : ""}${closers.reverse().join("")}`;
+}
+
 export function repairJson(json: string): string {
 	const len = json.length;
 	const parts: string[] = [];
@@ -130,19 +173,31 @@ export function parseJsonWithRepair<T>(json: string): T {
  * @returns Parsed object or empty object if parsing fails
  */
 export function parseStreamingJson<T = Record<string, unknown>>(partialJson: string | undefined): T {
-	partialJson = partialJson?.trimStart();
-	if (!partialJson) {
+	if (!partialJson?.trim()) {
 		return {} as T;
 	}
+
+	// Try standard/repaired parsing first (fastest for complete JSON)
 	try {
-		return JSON.parse(partialJson) as T;
+		return parseJsonWithRepair<T>(partialJson);
 	} catch {
-		partialJson = repairJson(partialJson);
+		try {
+			return parseJsonWithRepair<T>(closePartialJson(partialJson));
+		} catch {
+			// Try partial-json for incomplete JSON
+		}
+
+		// Try partial-json for incomplete JSON
 		try {
 			return (partialParse(partialJson) ?? {}) as T;
 		} catch {
-			// If all parsing fails, return empty object
-			return {} as T;
+			try {
+				const result = partialParse(repairJson(partialJson));
+				return (result ?? {}) as T;
+			} catch {
+				// If all parsing fails, return empty object
+				return {} as T;
+			}
 		}
 	}
 }

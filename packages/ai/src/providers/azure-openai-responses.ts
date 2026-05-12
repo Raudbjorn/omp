@@ -18,6 +18,7 @@ import {
 	type Tool,
 	type ToolChoice,
 } from "../types";
+import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
@@ -27,8 +28,9 @@ import {
 	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
+import { wrapFetchForSseDebug } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
-import { supportsDeveloperRole } from "./openai-responses";
+import { normalizeOpenAIResponsesPromptCacheKey, supportsDeveloperRole } from "./openai-responses";
 import {
 	appendResponsesToolResultMessages,
 	convertResponsesAssistantMessage,
@@ -170,7 +172,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("An unknown error occurred");
+				throw new Error(output.errorMessage ?? "An unknown error occurred");
 			}
 
 			output.duration = Date.now() - startTime;
@@ -257,6 +259,7 @@ function createClient(model: Model<"azure-openai-responses">, apiKey: string, op
 		maxRetries: 5,
 		defaultHeaders: headers,
 		baseURL: baseUrl,
+		fetch: options?.onSseEvent ? wrapFetchForSseDebug(fetch, event => options.onSseEvent?.(event, model)) : fetch,
 	});
 }
 
@@ -273,7 +276,7 @@ function buildParams(
 		model: deploymentName,
 		input: messages,
 		stream: true,
-		prompt_cache_key: options?.sessionId,
+		prompt_cache_key: normalizeOpenAIResponsesPromptCacheKey(options?.sessionId),
 	};
 
 	if (options?.maxTokens) {
@@ -316,11 +319,14 @@ function buildParams(
 		// See: https://github.com/can1357/oh-my-pi/issues/41
 		params.include = ["reasoning.encrypted_content"];
 
-		if (options?.reasoning || options?.reasoningSummary) {
-			params.reasoning = {
+		if (options?.reasoning || options?.reasoningSummary !== undefined) {
+			const reasoningParams: NonNullable<typeof params.reasoning> = {
 				effort: options?.reasoning || "medium",
-				summary: options?.reasoningSummary || "auto",
 			};
+			if (options?.reasoningSummary !== null) {
+				reasoningParams.summary = options?.reasoningSummary || "auto";
+			}
+			params.reasoning = reasoningParams;
 		} else {
 			if (model.name.toLowerCase().startsWith("gpt-5")) {
 				// Jesus Christ, see https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7
@@ -350,12 +356,12 @@ function convertMessages(
 	const transformedMessages = transformMessages(context.messages, model, normalizeResponsesToolCallIdForTransform);
 	const knownCallIds = new Set<string>();
 
-	if (context.systemPrompt) {
+	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
+	if (systemPrompts.length > 0) {
 		const role = model.reasoning && supportsDeveloperRole(resolvedBaseUrl ?? model) ? "developer" : "system";
-		messages.push({
-			role,
-			content: context.systemPrompt.toWellFormed(),
-		});
+		for (const systemPrompt of systemPrompts) {
+			messages.push({ role, content: systemPrompt });
+		}
 	}
 
 	let msgIndex = 0;
