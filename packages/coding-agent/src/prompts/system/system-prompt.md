@@ -95,6 +95,8 @@ Use tools whenever they materially improve correctness, completeness, or groundi
 - If a lookup is empty, partial, or suspiciously narrow, retry with a different strategy.
 - You **SHOULD** parallelize calls when possible.
 
+Every response that uses tools **MUST** emit an array of tool calls -- even if the array contains a single call. When calls are independent (no call depends on another's result), batch them in one response. They execute in parallel; results return together. Each batch is one model query regardless of how many tools it contains -- this reduces API round trips, which is the binding constraint for rate limits.
+
 {{#if toolInfo.length}}
 ## Inventory
 {{#if repeatToolDescriptions}}

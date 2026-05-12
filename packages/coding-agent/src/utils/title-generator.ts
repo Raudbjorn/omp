@@ -2,8 +2,6 @@
  * Generate session titles using a smol, fast model.
  */
 import * as path from "node:path";
-
-import { type Api, completeSimple, type Model } from "@oh-my-pi/pi-ai";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Api, completeSimple, type Model } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
@@ -11,6 +9,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
+import { toReasoningEffort } from "../thinking";
 
 const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
 
@@ -40,7 +39,7 @@ export function getTitleModel(
  *
  * @param firstMessage The first user message
  * @param registry Model registry
- * @param settings Settings used to resolve the smol role
+ * @param settings Settings used to resolve the smol role, including per-role thinking
  * @param sessionId Optional session id for sticky API key selection
  * @param currentModel Current model (used to derive title model)
  * @param metadataResolver Optional resolver evaluated after credential selection
@@ -70,24 +69,21 @@ export async function generateSessionTitle(
 ${truncatedMessage}
 </user-message>`;
 
-	const apiKey = await registry.getApiKey(model, sessionId);
+	const apiKey = await registry.getApiKey(titleResult.model, sessionId);
 	if (!apiKey) {
 		logger.debug("title-generator: no API key for smol model", {
-			provider: model.provider,
-			id: model.id,
+			provider: titleResult.model.provider,
+			id: titleResult.model.id,
 		});
 		return null;
 	}
 	// Resolve metadata after getApiKey so the session-sticky credential for this
 	// request is already recorded; metadataResolver can then return the correct
 	// account_uuid rather than the snapshot-at-call-site value.
-	const metadata = metadataResolver?.(candidate.model.provider);
+	const metadata = metadataResolver?.(titleResult.model.provider);
 
-	// Title generation is a 3-6 word task; force reasoning off so reasoning models
-	// don't burn the entire output budget on internal thinking and return an empty
-	// string. With reasoning disabled, 30 tokens of output is plenty.
 	const request = {
-		model: `${model.provider}/${model.id}`,
+		model: `${titleResult.model.provider}/${titleResult.model.id}`,
 		systemPrompt: TITLE_SYSTEM_PROMPT,
 		userMessage,
 		maxTokens: 30,
@@ -96,7 +92,7 @@ ${truncatedMessage}
 
 	try {
 		const response = await completeSimple(
-			model,
+			titleResult.model,
 			{
 				systemPrompt: [request.systemPrompt],
 				messages: [{ role: "user", content: request.userMessage, timestamp: Date.now() }],
@@ -104,8 +100,8 @@ ${truncatedMessage}
 			{
 				apiKey,
 				maxTokens: 30,
-				disableReasoning: candidate.thinkingLevel === undefined || candidate.thinkingLevel === "Off",
-				reasoning: toReasoningEffort(candidate.thinkingLevel),
+				disableReasoning: titleResult.thinkingLevel === undefined || titleResult.thinkingLevel === "Off",
+				reasoning: toReasoningEffort(titleResult.thinkingLevel),
 				metadata,
 			},
 		);
@@ -165,8 +161,13 @@ function getFallbackTerminalTitle(cwd: string | undefined): string | undefined {
 	return sanitizeTerminalTitlePart(baseName);
 }
 
-export function formatSessionTerminalTitle(sessionName: string | undefined, cwd?: string): string {
-	const label = sanitizeTerminalTitlePart(sessionName) ?? getFallbackTerminalTitle(cwd);
+export function formatSessionTerminalTitle(
+	sessionName: string | undefined,
+	cwd?: string,
+	titleSource?: "auto" | "user" | undefined,
+): string {
+	const label =
+		sanitizeTerminalTitlePart(titleSource === "auto" ? undefined : sessionName) ?? getFallbackTerminalTitle(cwd);
 	return label ? `${DEFAULT_TERMINAL_TITLE}: ${label}` : DEFAULT_TERMINAL_TITLE;
 }
 
@@ -177,8 +178,12 @@ export function setTerminalTitle(title: string): void {
 	process.stdout.write(`\x1b]0;${sanitizeTerminalTitlePart(title) ?? DEFAULT_TERMINAL_TITLE}\x07`);
 }
 
-export function setSessionTerminalTitle(sessionName: string | undefined, cwd?: string): void {
-	setTerminalTitle(formatSessionTerminalTitle(sessionName, cwd));
+export function setSessionTerminalTitle(
+	sessionName: string | undefined,
+	cwd?: string,
+	titleSource?: "auto" | "user" | undefined,
+): void {
+	setTerminalTitle(formatSessionTerminalTitle(sessionName, cwd, titleSource));
 }
 
 /**

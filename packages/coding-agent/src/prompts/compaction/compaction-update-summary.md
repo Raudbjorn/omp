@@ -1,45 +1,61 @@
-You **MUST** incorporate new messages above into the existing handoff summary in <previous-summary> tags, used by another LLM to resume task.
-RULES:
-- **MUST** preserve all information from previous summary
-- **MUST** add new progress, decisions, and context from new messages
-- **MUST** update Progress: move items from "In Progress" to "Done" when completed
-- **MUST** update "Next Steps" based on what was accomplished
-- **MUST** preserve exact file paths, function names, and error messages
-- You **MAY** remove anything no longer relevant
+You **MUST** merge new messages above into the existing handoff summary in <previous-summary> tags. Another LLM resumes from this.
 
-IMPORTANT: If new messages end with unanswered question or request to user, you **MUST** add it to Critical Context (replacing any previous pending question if answered).
+## Output Style: Caveman
 
-You **MUST** use this format (omit sections if not applicable):
+Dense telegraphic shorthand. Drop articles, filler, hedging. Fragments OK. Code/paths/commands unchanged.
+
+## Merge Rules
+- Preserve ALL previous info
+- Add new progress, decisions, context from new messages
+- Move "WIP" → "Done" when completed
+- Update "Next" based on current state
+- Preserve exact file paths, fn names, error messages
+- Add new bugs to "Bugs Fixed" when root cause found + fixed
+- Remove stale/irrelevant items
+
+## Prioritization
+
+|Priority|Content|Action|
+|---|---|---|
+|CRITICAL|Paths, fn names, errors, arch decisions, user constraints|Verbatim|
+|HIGH|Code changes, test results, decision-informing outputs|Detailed|
+|MEDIUM|Exploration, debugging|→ discoveries/final diagnosis only|
+|LOW|Greetings, failed attempts, boilerplate|Omit|
+
+IMPORTANT: If new messages end with unanswered question/request to user, add to Critical section (replace previous pending question if answered).
+
+## Format
 
 ## Goal
-[Preserve existing goals; add new ones if task expanded]
+[Preserve + add new if expanded]
 
-## Constraints & Preferences
-- [Preserve existing; add new ones discovered]
+## Constraints
+- [Preserve + add new]
 
 ## Progress
 
 ### Done
-- [x] [Include previously done and newly completed items]
+- [x] [Previous + newly completed]
 
-### In Progress
-- [ ] [Current work—update based on progress]
+### WIP
+- [ ] [Current work]
 
 ### Blocked
-- [Current blockers—remove if resolved]
+- [Blockers — remove if resolved]
 
-## Key Decisions
-- **[Decision]**: [Brief rationale] (preserve all previous, add new)
+## Decisions
+- **[Decision]**: [Rationale] (preserve all + add new)
 
-## Next Steps
-1. [Update based on current state]
+## Bugs Fixed
+- **[Bug]**: [Root cause → fix] (preserve + add new)
 
-## Critical Context
-- [Preserve important context; add new if needed]
+## Next
+1. [Updated next actions]
 
-## Additional Notes
-[Other important info not fitting above]
+## Critical
+- [Preserve + add new context]
 
-You **MUST** output only the structured summary; you **MUST NOT** include extra text.
+## Notes
+[Other important info]
 
-Sections **MUST** be kept concise. You **MUST** preserve relevant tool outputs/command results. You **MUST** include repository state changes (branch, uncommitted changes) if mentioned.
+You **MUST** output only the structured summary. No extra text. Keep sections concise. Preserve relevant tool outputs/command results. Include git state if mentioned.
