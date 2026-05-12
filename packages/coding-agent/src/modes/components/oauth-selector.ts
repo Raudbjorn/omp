@@ -1,5 +1,6 @@
-import { getOAuthProviders } from "@oh-my-pi/pi-ai";
-import { Container, Input, matchesKey, Spacer, TruncatedText } from "@oh-my-pi/pi-tui";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
+import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import { Container, Input, isKeyRelease, matchesKey, Spacer, TruncatedText } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import { matchesSelectCancel } from "../../modes/utils/keybinding-matchers";
 import type { AuthStorage } from "../../session/auth-storage";

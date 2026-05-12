@@ -17,7 +17,14 @@ import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from ".
 import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
 import { resolveEvalBackends, type ToolSession } from ".";
 import { formatStyledTruncationWarning } from "./output-meta";
-import { formatTitle, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
+import {
+	formatTimeoutLine,
+	formatTitle,
+	replaceTabs,
+	shortenPath,
+	truncateToWidth,
+	wrapBrackets,
+} from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
@@ -549,29 +556,6 @@ interface EvalRenderContext {
 	previewLines?: number;
 	timeout?: number;
 	executionStartMs?: number;
-}
-
-function decodePartialJsonStringFragment(fragment: string): string {
-	let text = fragment.replace(/\\u[0-9a-fA-F]{0,3}$/, "");
-	const trailingBackslashes = text.match(/\\+$/)?.[0].length ?? 0;
-	if (trailingBackslashes % 2 === 1) text = text.slice(0, -1);
-	try {
-		return JSON.parse(`"${text}"`) as string;
-	} catch {
-		return text;
-	}
-}
-
-function extractPartialJsonString(partialJson: string | undefined, key: string): string | undefined {
-	if (!partialJson) return undefined;
-	const pattern = new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)`, "u");
-	const match = pattern.exec(partialJson);
-	if (!match) return undefined;
-	return decodePartialJsonStringFragment(match[1]);
-}
-
-function getRenderInput(args: EvalRenderArgs | undefined): string | undefined {
-	return args?.input ?? extractPartialJsonString(args?.__partialJson, "input");
 }
 
 function decodePartialJsonStringFragment(fragment: string): string {

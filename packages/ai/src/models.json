@@ -18160,7 +18160,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1050000,
-			"maxTokens": 130000,
+			"maxTokens": 128000,
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "low",
@@ -40474,7 +40474,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": 8888
+			"maxTokens": 16384
 		},
 		"mistralai/mistral-saba": {
 			"id": "mistralai/mistral-saba",
