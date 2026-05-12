@@ -94,6 +94,8 @@ export interface SearchResponse {
 	requestId?: string;
 	/** Authentication mode used by the provider (e.g. oauth, api-key) */
 	authMode?: string;
+	/** Wall-clock duration of the search request in milliseconds */
+	durationMs?: number;
 }
 
 /** Provider-specific error with optional HTTP status */

@@ -82,6 +82,7 @@ export interface ToolExecutionHandle {
 		toolCallId?: string,
 	): void;
 	setArgsComplete(toolCallId?: string): void;
+	notifyExecutionStarted(): void;
 	setExpanded(expanded: boolean): void;
 }
 
@@ -123,6 +124,7 @@ export class ToolExecutionComponent extends Container {
 	#spinnerInterval?: NodeJS.Timeout;
 	// Track if args are still being streamed (for edit/write spinner)
 	#argsComplete = false;
+	#executionStartTime: number | undefined;
 	#renderState: {
 		spinnerFrame?: number;
 		expanded: boolean;

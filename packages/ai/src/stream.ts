@@ -41,6 +41,7 @@ import {
 	streamOpenAIResponses,
 } from "./providers/register-builtins";
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
+import { streamWarp, type WarpOptions } from "./providers/warp";
 import type {
 	Api,
 	AssistantMessage,
@@ -146,10 +147,15 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	"cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
 	huggingface: () => $pickenv("HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"),
 	litellm: "LITELLM_API_KEY",
+	upb: "UPB_API_KEY",
 	moonshot: "MOONSHOT_API_KEY",
 	nvidia: "NVIDIA_API_KEY",
 	nanogpt: "NANO_GPT_API_KEY",
 	"lm-studio": "LM_STUDIO_API_KEY",
+	// ipex-llm and openvino typically run unauthenticated local servers; fall back
+	// to a placeholder token so stream() doesn't throw before the request is made.
+	"ipex-llm": () => $env.IPEX_LLM_API_KEY ?? "ipex-llm-local",
+	openvino: () => $env.OPENVINO_API_KEY ?? "openvino-local",
 	ollama: "OLLAMA_API_KEY",
 	"ollama-cloud": "OLLAMA_CLOUD_API_KEY",
 	"llama.cpp": "LLAMA_CPP_API_KEY",
@@ -160,6 +166,9 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	venice: "VENICE_API_KEY",
 	vllm: "VLLM_API_KEY",
 	xiaomi: "XIAOMI_API_KEY",
+	devin: "DEVIN_API_KEY",
+	warp: "WARP_API_KEY",
+	deepseek: "DEEPSEEK_API_KEY",
 };
 
 /**
@@ -204,6 +213,10 @@ export function stream<TApi extends Api>(
 	} else if (model.api === "bedrock-converse-stream") {
 		// Bedrock doesn't have any API keys instead it sources credentials from standard AWS env variables or from given AWS profile.
 		return streamBedrock(model as Model<"bedrock-converse-stream">, context, (options || {}) as BedrockOptions);
+	} else if (model.api === "acp-agent") {
+		// ACP agents authenticate out-of-band (OAuth creds on disk, env vars).
+		// The adapter's probeAuth runs inside streamAcp; no API-key guard here.
+		return streamAcp(model as Model<"acp-agent">, context, (options || {}) as AcpAgentOptions);
 	}
 
 	const apiKey = options?.apiKey || getEnvApiKey(model.provider);
@@ -211,6 +224,14 @@ export function stream<TApi extends Api>(
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
 	const providerOptions = { ...options, apiKey };
+
+	// Apply proxy base URL override for deepseek
+	if (model.provider === "deepseek") {
+		const proxyBaseUrl = $env.DEEPSEEK_BASE_URL;
+		if (proxyBaseUrl) {
+			model = { ...model, baseUrl: proxyBaseUrl };
+		}
+	}
 
 	const api: Api = model.api;
 	switch (api) {
@@ -249,6 +270,12 @@ export function stream<TApi extends Api>(
 
 		case "cursor-agent":
 			return streamCursor(model as Model<"cursor-agent">, context, providerOptions as CursorOptions);
+
+		case "devin-agent":
+			return streamDevin(model as Model<"devin-agent">, context, providerOptions as DevinOptions);
+
+		case "warp-agent":
+			return streamWarp(model as Model<"warp-agent">, context, providerOptions as WarpOptions);
 
 		default:
 			throw new Error(`Unhandled API: ${api}`);

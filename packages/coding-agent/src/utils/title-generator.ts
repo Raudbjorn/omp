@@ -55,11 +55,12 @@ export async function generateSessionTitle(
 	currentModel?: Model<Api>,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
 ): Promise<string | null> {
-	const candidate = getTitleModel(registry, settings, currentModel);
-	if (!candidate) {
+	const titleResult = getTitleModel(registry, settings, currentModel);
+	if (!titleResult) {
 		logger.debug("title-generator: no title model found");
 		return null;
 	}
+	const model = titleResult.model;
 
 	// Truncate message if too long
 	const truncatedMessage =
@@ -68,21 +69,21 @@ export async function generateSessionTitle(
 ${truncatedMessage}
 </user-message>`;
 
-	const apiKey = await registry.getApiKey(candidate.model, sessionId);
+	const apiKey = await registry.getApiKey(titleResult.model, sessionId);
 	if (!apiKey) {
 		logger.debug("title-generator: no API key for smol model", {
-			provider: candidate.model.provider,
-			id: candidate.model.id,
+			provider: titleResult.model.provider,
+			id: titleResult.model.id,
 		});
 		return null;
 	}
 	// Resolve metadata after getApiKey so the session-sticky credential for this
 	// request is already recorded; metadataResolver can then return the correct
 	// account_uuid rather than the snapshot-at-call-site value.
-	const metadata = metadataResolver?.(candidate.model.provider);
+	const metadata = metadataResolver?.(titleResult.model.provider);
 
 	const request = {
-		model: `${candidate.model.provider}/${candidate.model.id}`,
+		model: `${titleResult.model.provider}/${titleResult.model.id}`,
 		systemPrompt: TITLE_SYSTEM_PROMPT,
 		userMessage,
 		maxTokens: 30,
@@ -91,7 +92,7 @@ ${truncatedMessage}
 
 	try {
 		const response = await completeSimple(
-			candidate.model,
+			titleResult.model,
 			{
 				systemPrompt: [request.systemPrompt],
 				messages: [{ role: "user", content: request.userMessage, timestamp: Date.now() }],
@@ -99,8 +100,8 @@ ${truncatedMessage}
 			{
 				apiKey,
 				maxTokens: 30,
-				disableReasoning: candidate.thinkingLevel === undefined || candidate.thinkingLevel === "Off",
-				reasoning: toReasoningEffort(candidate.thinkingLevel),
+				disableReasoning: titleResult.thinkingLevel === undefined || titleResult.thinkingLevel === "Off",
+				reasoning: toReasoningEffort(titleResult.thinkingLevel),
 				metadata,
 			},
 		);

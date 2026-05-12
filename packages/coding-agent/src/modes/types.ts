@@ -137,6 +137,7 @@ export interface InteractiveModeContext {
 	// Lifecycle
 	init(): Promise<void>;
 	shutdown(): Promise<void>;
+	restart(): Promise<void>;
 	checkShutdownRequested(): Promise<void>;
 
 	// Extension UI integration
@@ -217,6 +218,7 @@ export interface InteractiveModeContext {
 	handleForkCommand(): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
+	handleWebTerminalCommand(): Promise<void>;
 	handleMCPCommand(text: string): Promise<void>;
 	handleSSHCommand(text: string): Promise<void>;
 	handleCompactCommand(customInstructions?: string): Promise<void>;

@@ -12,8 +12,9 @@ import { $ } from "bun";
 import chalk from "chalk";
 import { theme } from "../modes/theme/theme";
 
-const REPO = "can1357/oh-my-pi";
-const PACKAGE = "@oh-my-pi/pi-coding-agent";
+const REPO = "Raudbjorn/omp";
+// Upstream repo kept as reference: can1357/oh-my-pi
+const PACKAGE = "@oh-my-pi/pi-coding-agent"; // unused for source installs; kept for bun/binary fallback
 
 interface ReleaseInfo {
 	tag: string;
@@ -94,18 +95,21 @@ function resolveUpdateMethod(ompPath: string, bunBinDir: string | undefined): "b
 export function _resolveUpdateMethodForTest(ompPath: string, bunBinDir: string | undefined): "bun" | "binary" {
 	return resolveUpdateMethod(ompPath, bunBinDir);
 }
+
 async function resolveUpdateTarget(): Promise<UpdateTarget> {
+	// Source install: wrapper contains OMP_HOME — use git-based update
+	const sourceHome = readSourceHome();
+	if (sourceHome) return { method: "source", home: sourceHome };
+
+	// Fallback: bun-global or binary install
 	const bunBinDir = await getBunGlobalBinDir();
 	const ompPath = resolveOmpPath();
-
 	if (ompPath) {
 		const method = resolveUpdateMethod(ompPath, bunBinDir);
 		if (method === "bun") return { method };
-		return { method, path: ompPath };
+		return { method: "binary", path: ompPath };
 	}
-
 	if (bunBinDir) return { method: "bun" };
-
 	throw new Error(`Could not resolve ${APP_NAME} binary path in PATH`);
 }
 
@@ -206,7 +210,7 @@ async function verifyInstalledVersion(
 		const result = await $`${ompPath} --version`.quiet().nothrow();
 		if (result.exitCode !== 0) return { ok: false, path: ompPath };
 		const output = result.text().trim();
-		// Output format: "omp/X.Y.Z"
+		// Output format: "omp/X.Y.Z" (APP_NAME/VERSION);
 		const match = output.match(/\/(\d+\.\d+\.\d+)/);
 		const actual = match?.[1];
 		return { ok: actual === expectedVersion, actual, path: ompPath };
@@ -237,7 +241,7 @@ async function printVerification(expectedVersion: string): Promise<void> {
 	}
 	console.log(
 		chalk.yellow(
-			`You may need to reinstall: curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash`,
+			`You may need to reinstall: curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | sh`,
 		),
 	);
 }
@@ -301,10 +305,66 @@ async function updateViaBinaryAt(targetPath: string, expectedVersion: string): P
 /**
  * Run the update command.
  */
+/**
+ * Update a source install: git pull on OMP_HOME, reinstall deps.
+ */
+async function runSourceUpdate(home: string, opts: { force: boolean; check: boolean }): Promise<void> {
+	console.log(chalk.dim(`Source install at: ${home}`));
+	console.log(chalk.dim(`Checking for updates on ${REPO}@main...`));
+
+	const fetch = await $`git -C ${home} fetch --depth 1 origin main`.nothrow();
+	if (fetch.exitCode !== 0) {
+		console.error(chalk.red("Failed to reach GitHub — check your connection"));
+		process.exit(1);
+	}
+
+	const countOut = await $`git -C ${home} rev-list HEAD..FETCH_HEAD --count`.quiet().nothrow();
+	const newCommits = parseInt(countOut.stdout.toString().trim() || "0", 10);
+
+	if (newCommits === 0 && !opts.force) {
+		console.log(chalk.green(`${theme.status.success} Already up to date`));
+		return;
+	}
+
+	if (newCommits > 0) {
+		console.log(chalk.cyan(`${newCommits} new commit(s) available`));
+	} else {
+		console.log(chalk.yellow("Forcing reinstall"));
+	}
+
+	if (opts.check) return;
+
+	await $`git -C ${home} reset --hard FETCH_HEAD`.quiet();
+
+	console.log(chalk.dim("Installing updated dependencies..."));
+	const install = await $`bun install --cwd ${home}`.nothrow();
+	if (install.exitCode !== 0) {
+		console.error(chalk.red(`bun install failed — retry with: cd ${home} && bun install`));
+		process.exit(1);
+	}
+
+	console.log(chalk.green(`\n${theme.status.success} Updated successfully`));
+	console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
+}
+
 export async function runUpdateCommand(opts: { force: boolean; check: boolean }): Promise<void> {
 	console.log(chalk.dim(`Current version: ${VERSION}`));
 
-	// Check for updates
+	let target: UpdateTarget;
+	try {
+		target = await resolveUpdateTarget();
+	} catch (err) {
+		console.error(chalk.red(`Failed to resolve update target: ${err}`));
+		process.exit(1);
+	}
+
+	// Source installs bypass npm version check — track git commits instead
+	if (target.method === "source") {
+		await runSourceUpdate(target.home, opts);
+		return;
+	}
+
+	// bun/binary path: check npm registry for new version
 	let release: ReleaseInfo;
 	try {
 		release = await getLatestRelease();
@@ -314,26 +374,18 @@ export async function runUpdateCommand(opts: { force: boolean; check: boolean })
 	}
 
 	const comparison = compareVersions(release.version, VERSION);
-
 	if (comparison <= 0 && !opts.force) {
 		console.log(chalk.green(`${theme.status.success} Already up to date`));
 		return;
 	}
-
 	if (comparison > 0) {
 		console.log(chalk.cyan(`New version available: ${release.version}`));
 	} else {
 		console.log(chalk.yellow(`Forcing reinstall of ${release.version}`));
 	}
+	if (opts.check) return;
 
-	if (opts.check) {
-		// Just check, don't install
-		return;
-	}
-
-	// Choose update method based on the prioritized omp binary in PATH
 	try {
-		const target = await resolveUpdateTarget();
 		if (target.method === "bun") {
 			await updateViaBun(release.version);
 		} else {

@@ -17,6 +17,7 @@ export function detectRecordingTools(): string[] {
 	const tools: string[] = [];
 	if ($which("sox")) tools.push("sox");
 	if ($which("ffmpeg")) tools.push("ffmpeg");
+	if (!isWindows && $which("parecord")) tools.push("parecord");
 	if (!isWindows && $which("arecord")) tools.push("arecord");
 	if (isWindows) tools.push("powershell");
 	return tools;
@@ -129,6 +130,22 @@ async function startFFmpegRecording(outputPath: string): Promise<RecordingHandle
 			const killTimer = setTimeout(() => proc.kill(), 3000);
 			await proc.exited;
 			clearTimeout(killTimer);
+		},
+	};
+}
+
+async function startParecordRecording(outputPath: string): Promise<RecordingHandle> {
+	const env = process.env.PULSE_SERVER ? { PULSE_SERVER: process.env.PULSE_SERVER } : undefined;
+	const proc = Bun.spawn(["parecord", "--file-format=wav", "--rate=16000", "--channels=1", outputPath], {
+		stdout: "pipe",
+		stderr: "pipe",
+		env: env ? { ...process.env, ...env } : undefined,
+	});
+	await verifyProcessAlive(proc, "parecord");
+	return {
+		async stop() {
+			proc.kill("SIGTERM");
+			await proc.exited;
 		},
 	};
 }
@@ -312,6 +329,8 @@ export async function startRecording(outputPath: string): Promise<RecordingHandl
 					return await startSoxRecording(outputPath);
 				case "ffmpeg":
 					return await startFFmpegRecording(outputPath);
+				case "parecord":
+					return await startParecordRecording(outputPath);
 				case "arecord":
 					return await startArecordRecording(outputPath);
 				case "powershell":

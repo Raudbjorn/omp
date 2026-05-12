@@ -2,6 +2,7 @@ import {
 	type Component,
 	Container,
 	Input,
+	isKeyRelease,
 	matchesKey,
 	padding,
 	replaceTabs,
@@ -182,6 +183,8 @@ class SessionList implements Component {
 	}
 
 	handleInput(keyData: string): void {
+		// Ignore key-release events to prevent focus-shift ghost input.
+		if (isKeyRelease(keyData)) return;
 		// Delete key - request delete confirmation from parent
 		if (matchesKey(keyData, "delete")) {
 			const selected = this.#filteredSessions[this.#selectedIndex];
@@ -190,7 +193,6 @@ class SessionList implements Component {
 			}
 			return;
 		}
-
 		// Up arrow
 		if (matchesKey(keyData, "up")) {
 			this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);

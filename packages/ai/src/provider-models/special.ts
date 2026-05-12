@@ -1,6 +1,7 @@
 import type { ModelManagerOptions } from "../model-manager";
 import { fetchCodexModels } from "../utils/discovery/codex";
 import { fetchCursorUsableModels } from "../utils/discovery/cursor";
+import { fetchOpenAICompatibleModels } from "../utils/discovery/openai-compatible";
 
 // ---------------------------------------------------------------------------
 // OpenAI Codex
@@ -103,4 +104,34 @@ export interface ZaiModelManagerConfig {}
 
 export function zaiModelManagerOptions(_config: ZaiModelManagerConfig = {}): ModelManagerOptions<"anthropic-messages"> {
 	return { providerId: "zai" };
+}
+
+// ---------------------------------------------------------------------------
+// Xiaomi MiMo Coding Plan
+// ---------------------------------------------------------------------------
+
+export interface MimoCodeModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function mimoCodeModelManagerOptions(
+	config: MimoCodeModelManagerConfig = {},
+): ModelManagerOptions<"openai-completions"> {
+	const { apiKey, baseUrl } = config;
+	return {
+		providerId: "mimo-code",
+		fetchDynamicModels: () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "mimo-code",
+				baseUrl: baseUrl ?? "https://token-plan-ams.xiaomimimo.com/v1",
+				apiKey,
+				mapModel: (_entry, defaults) => ({
+					...defaults,
+					contextWindow: 1_048_576,
+					maxTokens: 131_072,
+				}),
+			}),
+	};
 }

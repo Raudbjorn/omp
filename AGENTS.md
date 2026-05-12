@@ -1,3 +1,7 @@
+# Danger Pi is a fork of Oh-My-Pi
+
+Read @FORK.md. You **MUST** keep this file up to date as you add and remove features from this codebase.
+
 # Development Rules
 
 ## Default Context
@@ -145,6 +149,19 @@ To change an entry, fix the source:
 - **Thinking metadata / generated policies** → `packages/ai/src/model-thinking.ts` (`applyGeneratedModelPolicies`).
 
 Regenerate with `bun --cwd=packages/ai run generate-models` and commit `models.json` alongside the source change. Add a regression test against the **resolver/descriptor**, not the bundled JSON, so it survives upstream metadata shifts.
+
+## Generated Files
+
+**NEVER edit `packages/ai/src/models.json` directly.** It is generated from upstream sources (models.dev, provider catalog discovery, OpenCode docs) by `packages/ai/scripts/generate-models.ts` and the descriptors/resolvers in `packages/ai/src/provider-models/`. Any hand-edit will be overwritten the next time the generator runs.
+
+To change a model entry (api type, baseUrl, cost, context, reasoning metadata, etc.), fix the source instead:
+
+- **Resolution rules / per-id overrides** (e.g. when models.dev mislabels a model's `provider.npm` for an OpenCode-style endpoint) → edit the relevant resolver in `packages/ai/src/provider-models/openai-compat.ts` (e.g. `createOpenCodeApiResolution`'s id-override map).
+- **Provider descriptors** (filtering, transforms, defaults, headers, compat overrides, per-model api resolution) → edit `packages/ai/src/provider-models/descriptors.ts` or the provider-specific descriptor in `packages/ai/src/provider-models/`.
+- **Generator-level fixups** (premium multipliers, codex pricing fallback, fallback models, post-processing) → edit `packages/ai/scripts/generate-models.ts`.
+- **Thinking metadata / generated policies** → edit `packages/ai/src/model-thinking.ts` (`applyGeneratedModelPolicies`).
+
+After fixing the source, regenerate with `bun --cwd=packages/ai run generate-models` and commit the resulting `models.json` alongside the source change. Add a regression test against the resolver / descriptor (not against the bundled JSON) so the fix survives the next regeneration even if upstream metadata shifts.
 
 ## Logging
 

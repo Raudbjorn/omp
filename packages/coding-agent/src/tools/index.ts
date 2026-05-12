@@ -4,6 +4,7 @@ import { $env, $flag, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
+import type { RecallStore } from "../context/recall/store";
 import { EditTool } from "../edit";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import type { Skill } from "../extensibility/skills";
@@ -235,6 +236,22 @@ export interface ToolSession {
 
 	/** Queue a hidden message to be injected at the next agent turn. */
 	queueDeferredMessage?(message: CustomMessage): void;
+
+	/**
+	 * Returns the currently active AgentTool instances for this session.
+	 *
+	 * Lazy getter rather than a static list: tools may be added dynamically
+	 * (e.g. MCP servers activated by a future tool_search tool) after the
+	 * ToolSession is constructed. ScriptTool reads this at execution time so
+	 * that the script bridge always reflects the live tool registry.
+	 */
+	getTools?: () => AgentTool<any>[];
+	/** RecallStore for session history vector search (available when recall infrastructure is initialized). */
+	recallStore?: RecallStore;
+	/** FTS5 tool result store for keyword search over past tool results. */
+	toolResultStore?: import("../context/recall/tool-result-store").ToolResultStore;
+	/** Memex license key for embedding queries (available when recall infrastructure is initialized). */
+	memexLicense?: string;
 }
 
 export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;

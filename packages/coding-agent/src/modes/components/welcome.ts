@@ -99,7 +99,7 @@ export class WelcomeComponent implements Component {
 		const leftCol = showRightColumn ? dualLeftCol : boxWidth - 2;
 		const rightCol = showRightColumn ? dualRightCol : 0;
 
-		// Block-based OMP logo (gradient: magenta → cyan)
+		// Block-based OMP bear logo (radial warm-honey → dark-bark gradient)
 		// biome-ignore format: preserve ASCII art layout
 		const piLogo = [
       "     #▓░▓##       ",

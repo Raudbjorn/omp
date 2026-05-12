@@ -200,6 +200,13 @@ export default function App() {
 					</div>
 				)}
 
+				{activeTab === "costs" && (
+					<div className="space-y-6 animate-fade-in">
+						<CostSummary costSeries={stats.costSeries} />
+						<CostChart costSeries={stats.costSeries} />
+					</div>
+				)}
+
 				{selectedRequest !== null && (
 					<RequestDetail id={selectedRequest} onClose={() => setSelectedRequest(null)} />
 				)}

@@ -1045,6 +1045,8 @@ export interface PtyRunResult {
 
 /** Options for running a command in a PTY session. */
 export interface PtyStartOptions {
+  /** Shell binary used to execute the command (optional). */
+  shell?: string
   /** Command string to execute. */
   command: string
   /** Working directory for command execution. */

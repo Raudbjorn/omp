@@ -128,6 +128,88 @@
 
 - Added Dart support to `astGrep` and `astEdit` through the native tree-sitter Dart grammar ([#748](https://github.com/can1357/oh-my-pi/pull/748) by [@0fflineuser](https://github.com/0fflineuser))
 
+## [14.6.1] - 2026-05-02
+### Changed
+
+- Changed the native package loader from CommonJS analyzer-visible assignments to a template-rendered ESM entry point with explicit named exports
+
+## [14.5.13] - 2026-05-01
+### Changed
+
+- Stopped overriding `CARGO_TARGET_DIR` with an internal `target/napi-build/...` directory during native builds, so Cargo now uses the default or caller-provided target directory
+- Simplified native build profile suffix formatting without changing `local` and `ci` values
+- Changed the native build output behavior to avoid setting an isolated Cargo target directory automatically
+
+### Removed
+
+- Removed the host Zig CPU contract wrapper (`zig-safe-wrapper.ts`) and its `ZIG`/`PI_NATIVE_REAL_ZIG`/`PI_NATIVE_ZIG_TARGET`/`PI_NATIVE_ZIG_CPU` env handling, since the `zlob` Rust dependency that required Zig is gone
+- Removed the `ci-release-verify-natives` script and its AVX-512 marker scan from the release pipeline
+
+## [14.5.12] - 2026-04-30
+### Breaking Changes
+
+- Changed `waitForExit` to accept a single options object instead of a numeric timeout argument
+
+### Added
+
+- Added a `signal` option to `terminate` for cancelling termination while waiting for process shutdown
+- Added abort `signal` support to `waitForExit` via `ProcessWaitOptions`
+- Added a `ProcessWaitOptions` type and updated `waitForExit` to accept an options object
+
+## [14.5.9] - 2026-04-30
+### Fixed
+
+- Fixed shell minimizer output so successful commands whose noise is fully stripped still return `OK` instead of an artifact-only result
+
+## [14.5.6] - 2026-04-29
+
+### Added
+
+- Added shell minimizer support for CMake, CTest, Ninja, GoogleTest binaries, and Bun/Bunx wrappers that run those tools
+
+## [14.5.2] - 2026-04-26
+### Changed
+
+- Changed local native build profile from `dev` to `local` for non-CI builds, updating the profile used by the build and local build output label
+
+## [14.4.2] - 2026-04-26
+
+### Removed
+
+- Removed the `chunk` napi module (`ChunkState`, chunk schema, chunk rendering, chunk edit) and dropped `generate_chunk_schema()` from the build script
+
+## [14.3.0] - 2026-04-25
+### Added
+
+- Added `text` to `MinimizerResult` so consumers can replace rewritten output with the minimized replacement text
+- Added `settingsHash` to `MinimizerOptions` to verify the minimizer `settingsPath` contents against a xxHash64 digest before applying them
+- Added `minimized` output telemetry via `MinimizerResult` on `ShellExecuteResult` and `ShellRunResult`, exposing the applied minimizer filter and original/minimized byte counts when output is rewritten
+- Added a new `minimizer` option to `ShellExecuteOptions` and `ShellOptions` to configure per-command output minimization
+- Added the `MinimizerOptions` API with controls for enabling minimization, overriding settings via `settingsPath`, allow/deny lists (`only`, `except`), and `maxCaptureBytes` capture limits
+
+### Changed
+
+- Changed the shell output minimizer to more aggressively compact successful test runs, git output, large listings, grep/find results, source reads, and dependency manifests
+- Changed compound and piped shell commands to bypass output minimization entirely, keeping minimization limited to eligible whole-command output after the command exits
+
+### Fixed
+
+- Fixed chunk edit batches so later operations can reuse an initially validated checksum after an earlier operation changes that same chunk
+
+### Removed
+
+- Removed `PI_DEV` loader diagnostic env var and associated console logging in the native addon loader
+
+### Security
+
+- Added trust-gated loading for minimizer settings by requiring a matching `settingsHash` before accepting a settings file
+
+## [14.2.0] - 2026-04-23
+
+### Added
+
+- Added Dart support to `astGrep` and `astEdit` through the native tree-sitter Dart grammar ([#748](https://github.com/can1357/oh-my-pi/pull/748) by [@0fflineuser](https://github.com/0fflineuser))
+
 ## [14.1.1] - 2026-04-14
 
 ### Added

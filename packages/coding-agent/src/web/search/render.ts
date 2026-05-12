@@ -6,6 +6,7 @@
 
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import { Settings } from "../../config/settings";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme } from "../../modes/theme/theme";
 import {
@@ -24,6 +25,14 @@ import { renderStatusLine, renderTreeList } from "../../tui";
 import { CachedOutputBlock } from "../../tui/output-block";
 import { getSearchProviderLabel } from "./provider";
 import type { SearchResponse } from "./types";
+
+function getVerboseSetting(): boolean {
+	try {
+		return Settings.instance.get("web_search.verbose");
+	} catch {
+		return false;
+	}
+}
 
 const MAX_COLLAPSED_ANSWER_LINES = PREVIEW_LIMITS.COLLAPSED_LINES;
 const MAX_EXPANDED_ANSWER_LINES = PREVIEW_LIMITS.EXPANDED_LINES;
@@ -92,13 +101,34 @@ export function renderSearchResult(
 		return renderFallbackText(rawText, options.expanded, theme);
 	}
 
+	const searchQueries = Array.isArray(response.searchQueries)
+		? response.searchQueries.filter(item => typeof item === "string")
+		: [];
+
+	const verbose = getVerboseSetting();
+	if (!verbose) {
+		const searches = response.usage?.searchRequests ?? 1;
+		const plural = searches !== 1 ? "es" : "";
+		const dur =
+			response.durationMs !== undefined
+				? response.durationMs >= 1000
+					? `${Math.round(response.durationMs / 1000)}s`
+					: `${Math.round(response.durationMs)}ms`
+				: "";
+		const queryPreview = args?.query
+			? truncateToWidth(args.query, 80)
+			: searchQueries[0]
+				? truncateToWidth(searchQueries[0], 80)
+				: undefined;
+		const header = queryPreview ? `Web Search("${queryPreview}")` : "Web Search";
+		const summary = `  ${theme.tree.last}  Did ${searches} search${plural}${dur ? ` in ${dur}` : ""}`;
+		return new Text(`${theme.fg("text", header)}\n${theme.fg("dim", summary)}`, 0, 0);
+	}
+
 	const sources = Array.isArray(response.sources) ? response.sources : [];
 	const sourceCount = sources.length;
 	const citations = Array.isArray(response.citations) ? response.citations : [];
 	const citationCount = citations.length;
-	const searchQueries = Array.isArray(response.searchQueries)
-		? response.searchQueries.filter(item => typeof item === "string")
-		: [];
 	const provider = response.provider;
 
 	// Get answer text
@@ -288,6 +318,10 @@ export function renderSearchCall(
 	theme: Theme,
 ): Component {
 	const query = truncateToWidth(args.query ?? "", 80);
+	const verbose = getVerboseSetting();
+	if (!verbose) {
+		return new Text(theme.fg("text", `Web Search("${query}")`), 0, 0);
+	}
 	const text = renderStatusLine({ icon: "pending", title: "Web Search", description: query }, theme);
 	return new Text(text, 0, 0);
 }

@@ -249,4 +249,59 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(invalidateSpy).not.toHaveBeenCalled();
 		expect(requestRenderSpy).not.toHaveBeenCalled();
 	});
+
+	it("queues Approved in the current session when that review option is selected", async () => {
+		const planFilePath = "local://PLAN.md";
+		const finalPlanFilePath = "local://CURRENT_SESSION_PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		const resolvedFinalPath = resolveLocalUrlToPath(finalPlanFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Current session plan\n\nship it");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		const submissionSpy = vi.fn();
+		mode.onInputCallback = submissionSpy;
+		vi.spyOn(mode, "showHookSelector").mockImplementation(async (_title, options) => {
+			expect(options).toContain("Approve and execute (current session)");
+			return "Approve and execute (current session)";
+		});
+
+		await mode.handleExitPlanModeTool({
+			planFilePath,
+			planExists: true,
+			title: "CURRENT_SESSION_PLAN",
+			finalPlanFilePath,
+		});
+
+		expect(mode.planModeEnabled).toBe(false);
+		expect(submissionSpy).toHaveBeenCalledTimes(1);
+		expect(submissionSpy.mock.calls[0]?.[0]).toMatchObject({
+			text: "Approved",
+			cancelled: false,
+			started: false,
+		});
+		expect(await Bun.file(resolvedPlanPath).exists()).toBe(false);
+		expect(await Bun.file(resolvedFinalPath).text()).toContain("Current session plan");
+	});
+
+	it("unsubscribes from theme changes on stop", async () => {
+		await mode.init();
+		const invalidateSpy = vi.spyOn(mode.ui, "invalidate");
+		const requestRenderSpy = vi.spyOn(mode.ui, "requestRender");
+
+		mode.stop();
+		invalidateSpy.mockClear();
+		requestRenderSpy.mockClear();
+		_resetSettingsForTest();
+
+		expect(() => setThemeInstance(theme)).not.toThrow();
+		expect(invalidateSpy).not.toHaveBeenCalled();
+		expect(requestRenderSpy).not.toHaveBeenCalled();
+	});
 });

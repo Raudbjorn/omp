@@ -8,6 +8,7 @@ export * from "./model-thinking";
 export * from "./models";
 export * from "./provider-details";
 export * from "./provider-models";
+export * from "./providers/acp";
 export * from "./providers/anthropic";
 export * from "./providers/azure-openai-responses";
 export type * from "./providers/cursor";

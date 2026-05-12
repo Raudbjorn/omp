@@ -208,7 +208,6 @@ try {
 		const stderr = buildResult.stderr?.toString("utf-8") ?? "";
 		throw new Error(`napi build failed${stderr ? `:\n${stderr}` : ""}`);
 	}
-
 	const builtAddonPath = await resolveBuiltAddonPath(buildOutputDir, canonicalAddonFilename);
 	if (builtAddonPath !== canonicalAddonPath) {
 		console.log(`Normalizing native addon filename: ${path.basename(builtAddonPath)} → ${canonicalAddonFilename}`);
