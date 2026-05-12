@@ -67,6 +67,7 @@
 		"lru-cache": "catalog:",
 		"markit-ai": "catalog:",
 		"puppeteer-core": "catalog:",
+		"qrcode-terminal": "catalog:",
 		"turndown": "catalog:",
 		"turndown-plugin-gfm": "catalog:",
 		"zod": "catalog:"

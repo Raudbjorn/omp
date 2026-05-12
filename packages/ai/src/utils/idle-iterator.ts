@@ -37,21 +37,6 @@ export function getOpenAIStreamIdleTimeoutMs(): number | undefined {
 }
 
 /**
- * Returns the idle timeout used for Anthropic streaming between SSE events.
- * Anthropic's SDK has no built-in inter-event watchdog; a silently-dropped TCP
- * connection can cause the for-await loop to hang indefinitely without this guard.
- *
- * Opus with extended thinking on large contexts (160K+) has a natural pause between
- * the last thinking token and the first output token while the server processes the
- * thinking block, so the default is high enough to accommodate that.
- *
- * Set `PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS=0` to disable the watchdog.
- */
-export function getAnthropicStreamIdleTimeoutMs(): number | undefined {
-	return normalizeIdleTimeoutMs($env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS, DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS);
-}
-
-/**
  * Returns the timeout used while waiting for the first stream event.
  * The first token can legitimately take longer than later inter-event gaps,
  * so the default never undershoots the steady-state idle timeout.
@@ -160,10 +145,6 @@ export async function* iterateWithIdleTimeout<T>(
 		(firstItemTimeoutMs === undefined || firstItemTimeoutMs <= 0) &&
 		(options.idleTimeoutMs === undefined || options.idleTimeoutMs <= 0);
 
-	const noTimeoutEnforced =
-		(firstItemTimeoutMs === undefined || firstItemTimeoutMs <= 0) &&
-		(options.idleTimeoutMs === undefined || options.idleTimeoutMs <= 0);
-
 	while (true) {
 		let activeTimeoutMs: number | undefined;
 		if (awaitingFirstItem) {
@@ -228,8 +209,6 @@ export async function* iterateWithIdleTimeout<T>(
 			if (outcome.kind === "error") {
 				throw outcome.error;
 			}
-			watchdog && clearTimeout(watchdog);
-			watchdog = undefined;
 			if (outcome.result.done) {
 				markFirstItemReceived();
 				return;

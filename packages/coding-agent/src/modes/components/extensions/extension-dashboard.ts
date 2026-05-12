@@ -52,6 +52,11 @@ export class ExtensionDashboard extends Container {
 	#mainList!: ExtensionList;
 	#inspector!: InspectorPanel;
 	#refreshToken = 0;
+	#actionMode: any = null;
+	#layoutMode: "vertical" | "horizontal" = "vertical";
+	#lastScrollTime = 0;
+	#lastScrollDirection: any = "";
+	#scrollStartTime: any = 0;
 
 	onClose?: () => void;
 	onRequestRender?: () => void;
@@ -229,6 +234,16 @@ export class ExtensionDashboard extends Container {
 
 		return parts.join("");
 	}
+
+	#handleCategoryToggle(_extensions: any[]): void {
+		void this.#refreshFromState();
+	}
+
+	#handleRestrictionToggle(_ext: any): void {
+		void this.#refreshFromState();
+	}
+
+	onOpenFile?: (path: string) => void;
 
 	#handleProviderToggle(providerId: string): void {
 		toggleProvider(providerId);
