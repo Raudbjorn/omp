@@ -2,6 +2,94 @@
 
 ## [Unreleased]
 
+## [15.2.3] - 2026-05-22
+### Added
+
+- Added `SettingsList#setItems` to replace the entire settings list with a new items array while automatically clamping selection to a valid index
+
+### Changed
+
+- Updated `Loader` to drive renders at ~60fps (16ms tick) while keeping spinner-frame advancement at 80ms so shimmer/animated message colorizers update smoothly without altering spinner cadence
+
+## [15.1.9] - 2026-05-21
+
+### Fixed
+
+- Fixed terminal probe responses (DA1, kitty keyboard, Mode 2031) leaking into the prompt as keystrokes when the response is split across stdin reads. `ProcessTerminal` now reassembles `\x1b[?<digits>...` private CSI fragments and dispatches the complete response through the existing pattern handlers. ([#1238](https://github.com/can1357/oh-my-pi/issues/1238))
+
+## [15.1.4] - 2026-05-19
+
+### Fixed
+
+- Fixed `renderInlineMarkdown` crashing with `TypeError: undefined is not an object (evaluating 'e.replace')` when called with a non-string value during streaming — partial JSON parsing leaves option label fields temporarily unpopulated, causing the ask tool renderer to fail. ([#1176](https://github.com/can1357/oh-my-pi/issues/1176))
+
+## [15.0.2] - 2026-05-15
+
+### Added
+
+- Restored the `Key` runtime helper on `@oh-my-pi/pi-tui` to mirror upstream `@mariozechner/pi-tui`'s surface. `Key.enter`, `Key.escape`, `Key.tab`, … return the canonical key-name strings; modifier methods (`Key.ctrl(k)`, `Key.shift(k)`, `Key.ctrlShift(k)`, etc.) build precisely-typed `KeyId` literals like `"ctrl+c"`. Pure runtime convenience for typed key-id construction — plugins built against the upstream package surface that import `Key` (e.g. `@plannotator/pi-extension`, `@juicesharp/rpiv-ask-user-question`) load again now that the specifier shim remaps them onto this package.
+
+## [15.0.1] - 2026-05-14
+### Breaking Changes
+
+- Increased the minimum required Bun version for the TUI package from >=1.3.7 to >=1.3.14
+- Fixed `TerminalInfo.sendNotification` not delivering desktop notifications on macOS. macOS requires per-app notification permission, which terminal emulators (kitty, ghostty, alacritty, …) almost never have, so OSC 9/99 sequences were silently dropped at the OS layer. `sendNotification` now shells out to `alerter` or `terminal-notifier` when either is on `$PATH` (both register their own LSApplication and ship a "Terminal" / `>_` icon). When neither is installed the dispatch is a deliberate no-op + a single `logger.warn` line on the first miss (subsequent dispatches stay silent) so the user can spot the missing binary in `~/.omp/logs/omp.YYYY-MM-DD.log` and `brew install alerter`. Linux/Windows still go through the OSC/Bell path.
+- Fixed `TerminalInfo.formatNotification` losing OSC 9/99 desktop notifications when running inside tmux. The OSC sequence is now wrapped in tmux's DCS passthrough envelope (`\ePtmux;…\e\\` with embedded ESC bytes doubled) when `TMUX` is set, so notifications reach the parent terminal. `set -g allow-passthrough on` is still required on the tmux side for the wrapped sequence to be forwarded. Bell-only terminals are unchanged.
+- Fixed alerter desktop notifications staying on screen indefinitely. `scripts/mac-alerter.sh` previously passed `--timeout 30` (which makes alerter call `removeDeliveredNotification` after 30 s, also purging the Notification Center entry) and forced Alert-style via `--actions "Open"` (persistent until user click). It now ships Banner-style argv (no `--actions`, no `--timeout`): macOS auto-dismisses the toast after ~10 s and archives the entry to Notification Center for later review. Click-to-focus is preserved through `@CONTENTCLICKED` body clicks. NC archival also requires "Show in Notification Center" enabled for Terminal under macOS System Settings → Notifications.
+- Fixed `composeNotificationSubtitle` showing a stale tmux `pane_title` (typically `π: kitty & tmux` or the cwd prefix written before auto-naming runs) instead of the live OMP session name. The OMP-supplied `fallback` is now consulted first for the pane component; the cached tmux pane title is only used when no session name is available. Window name handling is unchanged.
+- Fixed `sendDesktopNotification` always routing through `alerter` / `terminal-notifier` on darwin, even for terminals (ghostty / iTerm2 / wezterm) that surface OSC 9 / OSC 99 as native notifications through their own bundle. The dispatch now prefers the OSC path on darwin when the terminal advertises native macOS notification capability; the fallback only kicks in for kitty / alacritty / vscode / unknown shells whose host app isn't a notification-capable bundle. This unblocks the user-controlled per-app notification settings flow for ghostty / iTerm2 / wezterm — toast style, NC archival, and click-to-focus all attach to the terminal app's own System Settings entry rather than to `com.apple.Terminal` (which `alerter` would post under).
+- Fixed Korean IME composition leaving a growing horizontal gap between typed jamo and the cursor inside the OMP prompt under tmux + ghostty (and other macOS terminals). `Bun.stringWidth` and the underlying UAX#11 East Asian Width tables classify Hangul Compatibility Jamo (U+3131..U+318E — ㄱ ㄴ ㄷ ㄹ ㅁ ㅂ ㅅ ㅇ ㅈ ㅊ ㅋ ㅌ ㅍ ㅎ + filler) as Wide (2 cells), but every macOS terminal we ship to (Ghostty / Terminal.app / iTerm2) actually renders them as a single cell in monospace fonts. `#extractCursorPosition` was computing `col = visibleWidth(beforeMarker)` and feeding the doubled value to `\x1b[(col+1)G`, placing the hardware cursor (and therefore the IME candidate window) `N_jamo` cells past the visible glyph — exactly the gap the user saw growing as they typed. `visibleWidthRaw` now subtracts 1 cell for each Compatibility Jamo character, returning the column count macOS terminals actually use. Hangul Syllables (U+AC00..U+D7A3, e.g. `안`) stay at 2 cells in both Bun and the terminal — unaffected. Other CJK widths (Chinese / Japanese / Halfwidth Hangul) are unchanged. NOTE: the Rust `pi-natives` width tables (used by `sliceWithWidth` / `truncateToWidth` / `wrapTextWithAnsi`) also count Compatibility Jamo as 2 cells; truncation and word-wrap on jamo-heavy lines will still be slightly aggressive. The defect is invisible in normal use because the AI composes Korean as syllables, not jamo, and users type syllables once IME composition completes. A follow-up will reconcile the Rust side.
+- Fixed a brief black-flash flicker in the TUI when streaming long markdown responses inside tmux (especially noticeable in ghostty with multiple panes open). Root cause: when a markdown fence line above the viewport changed between two streaming tokens (e.g. `` ``` `` → `` ```python ``), `#doRender()` would take the `firstChanged < prevViewportTop` branch and emit `\x1b[2J\x1b[H` (full screen clear + cursor home) wrapped in BSU. The BSU envelope can split across PTY reads, leaving tmux briefly displaying a blank pane before the rest of the buffer arrives — multiplied across panes during repaint. The viewport-above branch now calls a new `viewportRefresh()` helper that does cursor-home + per-line `\x1b[2K` + line content (no `\x1b[2J`), so the visible viewport content is repainted without ever clearing the screen. Scrollback above the viewport may briefly show stale rendering, but only of the SAME lines that just changed — invisible during streaming when the user isn't scrolled up. Other full-redraw paths (resize, first render, etc.) keep the hard `fullRender(true)` behavior unchanged.
+
+## [14.9.8] - 2026-05-12
+
+### Added
+
+- Added `Terminal.setProgress(active)` to emit OSC 9;4 progress sequences with a ~1s keepalive interval so Ghostty does not clear the indicator during long-running work (ports pi-mono `a900d251` + `76bc605a`)
+- Added optional `argumentHint?: string` to `SlashCommand`; rendered before the description in the autocomplete dropdown (ports pi-mono `aa25726e`)
+- Added `VirtualTerminal.waitForRender()` test helper for the throttled render pipeline (ports pi-mono `41377ee8`)
+
+### Changed
+
+- `ProcessTerminal` `columns`/`rows` getters consult `Bun.env.COLUMNS` / `Bun.env.LINES` before falling back to 80×24, so piped/non-TTY runs honour environment-provided dimensions (ports pi-mono `32f7fc6a`)
+- `requestRender()` non-force calls are coalesced to a ~16ms frame budget; `requestRender(true)` still flushes immediately via `process.nextTick` (ports pi-mono `6f5f37f8`)
+- `KNOWN_TERMINALS.base` / `KNOWN_TERMINALS.trueColor` default `hyperlinks: false`; tmux and screen (`TMUX` env or `TERM` starts with `tmux`/`screen`) force `hyperlinks: false` even when the outer terminal would advertise OSC 8 (adapts pi-mono `30a8a41f`)
+- `SlashCommand.getArgumentCompletions()` may return a `Promise`; results are now awaited and non-array returns are ignored (ports pi-mono `a1e10789`)
+- Fuzzy `@` autocomplete now follows symlinked directories via `ScanOptions.follow_links` plumbed through the native walker (ports pi-mono `780d5367`)
+- Plain `@<query>` (no slash) fuzzy matches by basename only, so `@plan` no longer surfaces every file whose ancestor directories contain `plan` (ports pi-mono `968430f6`)
+
+### Fixed
+
+- Fixed editor corruption on Thai Sara Am (U+0E33) and Lao AM (U+0EB3) vowels by normalizing to their compatibility decompositions on the terminal-write path while keeping editor content logically unchanged (ports pi-mono `bc668826` + `338ce3a3` + `20ca45d5`)
+- Fixed cell-size detection (`CSI 6;h;w t` response) to consume only exact replies, so a bare `Escape` keystroke is no longer swallowed while waiting for terminal image metadata (ports pi-mono `49c0d860`)
+- Fixed Kitty CSI-u printable input duplicating on layouts (e.g. Italian) where the terminal also emits the raw character: the immediately-following matching codepoint is now suppressed (ports pi-mono `bdb416cb`)
+- Fixed bracketed-paste CSI-u `Ctrl+<letter>` re-encoding (tmux popup with `extended-keys-format=csi-u`) leaking literal `[<code>;5u` into the editor; control bytes are decoded back to their literal byte before per-char filtering (ports pi-mono `d06db09a`)
+- Fixed xterm `modifyOtherKeys` shifted printable input so uppercase letters inserted via `CSI 27;mod;codepoint~` reach the editor correctly (ports pi-mono `6b55d685`)
+- Fixed `super`-modified Kitty shortcuts (`super+k`, `ctrl+super+enter`, …) to parse and match via the new `KITTY_MOD_SUPER` mask (ports pi-mono `ddb8454c` + `5ed46003`)
+- Fixed `ctrl+alt+<letter>` in tmux falling through to CSI-u / `modifyOtherKeys` when the legacy `ESC<ctrl-char>` form does not match (ports pi-mono `6cf5098f`)
+- Fixed Markdown strikethrough requiring strict `~~text~~` delimiters with non-whitespace boundaries; single tildes no longer render strikethrough (ports pi-mono `db5274b4`)
+
+- Allowed `SlashCommand.getArgumentCompletions` to return asynchronous results by accepting Promise-based completions
+- Added `argumentHint` support to slash command definitions and displayed it in command suggestion descriptions
+- Added support for xterm `modifyOtherKeys` printable key sequences by decoding `CSI 27;mod;key~` into text input
+
+### Changed
+
+- Changed slash-command autocomplete list rendering to combine command hint and description in a single displayed suggestion text
+- Changed render scheduling to throttle `requestRender` calls to roughly 60fps by batching updates
+- Changed terminal input handling to process complete cell-size responses without buffering partial input
+- Changed `KeyId` to accept super-modifier combinations and improve typed key-id validation
+
+### Fixed
+
+- Normalized line output during rendering to correct Thai/Lao AM glyph composition for displayed text
+- Fixed duplicated Kitty key input emissions by dropping the matching unmodified follow-up sequence after a Kitty CSI-u printable-key event
+
+## [14.9.5] - 2026-05-12
+### Fixed
+
+- Fixed rapidly blinking cursor artifact during task execution by consolidating cursor control sequences into the synchronized output buffer ([#992](https://github.com/can1357/oh-my-pi/issues/992))
+
 ## [14.5.7] - 2026-04-29
 
 ### Fixed
