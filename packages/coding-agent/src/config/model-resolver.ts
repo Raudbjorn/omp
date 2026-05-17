@@ -12,6 +12,7 @@ import {
 	type Model,
 	modelsAreEqual,
 } from "@oh-my-pi/pi-ai";
+import { logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { parseThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
@@ -884,7 +885,7 @@ export async function resolveModelScope(
 			});
 
 			if (matchingModels.length === 0) {
-				console.warn(chalk.yellow(`Warning: No models match pattern "${pattern}"`));
+				logger.warn(`No models match pattern "${pattern}"`);
 				continue;
 			}
 
@@ -927,11 +928,11 @@ export async function resolveModelScope(
 		);
 
 		if (warning) {
-			console.warn(chalk.yellow(`Warning: ${warning}`));
+			logger.warn(warning);
 		}
 
 		if (!model) {
-			console.warn(chalk.yellow(`Warning: No models match pattern "${pattern}"`));
+			logger.warn(`No models match pattern "${pattern}"`);
 			continue;
 		}
 
