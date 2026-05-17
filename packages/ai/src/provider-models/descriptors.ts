@@ -36,6 +36,7 @@ import {
 	openvinoModelManagerOptions,
 	qianfanModelManagerOptions,
 	qwenPortalModelManagerOptions,
+	skvaiderModelManagerOptions,
 	syntheticModelManagerOptions,
 	togetherModelManagerOptions,
 	upbModelManagerOptions,
@@ -263,6 +264,13 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 		"gpt-oss-20b",
 		config => vllmModelManagerOptions(config),
 		catalog("vLLM", ["VLLM_API_KEY"], { allowUnauthenticated: true }),
+	),
+	catalogDescriptor(
+		"skvaider",
+		"qwen3.6:27b",
+		config => skvaiderModelManagerOptions(config),
+		catalog("Skvaider (Flying Circus)", ["SKVAIDER_API_KEY"]),
+		{ allowUnauthenticated: true },
 	),
 	catalogDescriptor(
 		"moonshot",
