@@ -2490,6 +2490,42 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 }
 
 // ---------------------------------------------------------------------------
+// 22a. Skvaider (Flying Circus AI gateway)
+// ---------------------------------------------------------------------------
+
+export interface SkvaiderModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function skvaiderModelManagerOptions(
+	config?: SkvaiderModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey ?? Bun.env.SKVAIDER_API_KEY;
+	const baseUrl = config?.baseUrl ?? Bun.env.SKVAIDER_BASE_URL ?? "https://ai.dev.fcio.net/openai/v1";
+	const references = createBundledReferenceMap<"openai-completions">(
+		"skvaider" as Parameters<typeof getBundledModels>[0],
+	);
+	return {
+		providerId: "skvaider",
+		fetchDynamicModels: () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "skvaider",
+				baseUrl,
+				apiKey,
+				mapModel: (entry, defaults) => {
+					const model = mapWithBundledReference(entry, defaults, references.get(defaults.id));
+					return {
+						...model,
+						contextWindow: toPositiveNumber(entry.max_model_len, model.contextWindow),
+					};
+				},
+			}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 23. NanoGPT
 // ---------------------------------------------------------------------------
 
