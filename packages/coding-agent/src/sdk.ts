@@ -1030,7 +1030,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			return undefined;
 		};
 		const toolSession: ToolSession = {
-			cwd,
+			get cwd() {
+				return sessionManager.getCwd();
+			},
 			hasUI: options.hasUI ?? false,
 			enableLsp,
 			get hasEditTool() {
