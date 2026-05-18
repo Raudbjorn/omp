@@ -155,10 +155,18 @@ export class ToolExecutionComponent extends Container {
 		this.#cwd = cwd;
 		this.#args = cloneToolArgs(args);
 
-		this.addChild(new Spacer(1));
+		const noBox = !!tool?.noBox;
+		if (!noBox) {
+			this.addChild(new Spacer(1));
+		}
 
 		// Always create both - contentBox for custom tools/bash/tools with renderers, contentText for other built-ins
-		this.#contentBox = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
+		if (noBox) {
+			// Render directly — no box padding, no background
+			this.#contentBox = new Box(0, 0);
+		} else {
+			this.#contentBox = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
+		}
 		this.#contentText = new Text("", 1, 1, (text: string) => theme.bg("toolPendingBg", text));
 
 		// Use Box for custom tools or built-in tools that have renderers
@@ -390,7 +398,8 @@ export class ToolExecutionComponent extends Container {
 			const mergeCallAndResult = Boolean((tool as { mergeCallAndResult?: boolean }).mergeCallAndResult);
 			// Custom tools use Box for flexible component rendering
 			const inline = Boolean((tool as { inline?: boolean }).inline);
-			this.#contentBox.setBgFn(inline ? undefined : bgFn);
+			const noBox = Boolean((tool as { noBox?: boolean }).noBox);
+			this.#contentBox.setBgFn(inline || noBox ? undefined : bgFn);
 			this.#contentBox.clear();
 
 			// Render call component
