@@ -14,8 +14,7 @@ import type { ExecOptions } from "../../exec/exec";
 import { execCommand } from "../../exec/exec";
 import type { HookUIContext } from "../../extensibility/hooks/types";
 import { getAllPluginToolPaths } from "../../extensibility/plugins/loader";
-// Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
-import * as PiCodingAgent from "../../index";
+import { InternalUrlRouter } from "../../internal-urls";
 import * as typebox from "../typebox";
 import { createNoOpUIContext, resolvePath } from "../utils";
 import type { CustomToolAPI, CustomToolFactory, LoadedCustomTool, ToolLoadError } from "./types";
@@ -110,6 +109,7 @@ export class CustomToolLoader {
 			typebox,
 			zod: z,
 			pi,
+			internalRouter: InternalUrlRouter.instance(),
 			pushPendingAction: action => {
 				if (!pushPendingAction) {
 					throw new Error("Pending action store unavailable for custom tools in this runtime.");

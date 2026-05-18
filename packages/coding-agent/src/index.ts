@@ -26,6 +26,9 @@ export * from "./extensibility/extensions";
 export * from "./extensibility/skills";
 // Slash commands
 export { type FileSlashCommand, loadSlashCommands as discoverSlashCommands } from "./extensibility/slash-commands";
+export * from "./hashline";
+// Internal URL router (shared singleton for custom tools)
+export { InternalUrlRouter } from "./internal-urls";
 export type * from "./lsp";
 // Main entry point
 export * from "./main";
