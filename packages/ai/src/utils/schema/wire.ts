@@ -135,6 +135,28 @@ function walk(node: unknown): void {
 		}
 	}
 
+	// Normalize {} (empty JSON Schema = z.unknown()) to boolean `true` so
+	// grammar-constrained samplers emit any JSON value, not just empty objects.
+	for (const key of SCHEMA_VALUE_KEYS) {
+		if (Object.hasOwn(obj, key) && isEmptyObject(obj[key])) obj[key] = true;
+	}
+	for (const mapKey of SCHEMA_MAP_KEYS) {
+		const map = obj[mapKey];
+		if (map !== null && typeof map === "object" && !Array.isArray(map)) {
+			for (const k in map as Record<string, unknown>) {
+				if (isEmptyObject((map as Record<string, unknown>)[k])) (map as Record<string, unknown>)[k] = true;
+			}
+		}
+	}
+	for (const arrKey of SCHEMA_ARRAY_KEYS) {
+		const arr = obj[arrKey];
+		if (Array.isArray(arr)) {
+			for (let i = 0; i < arr.length; i++) {
+				if (isEmptyObject(arr[i])) arr[i] = true;
+			}
+		}
+	}
+
 	for (const k in obj) walk(obj[k]);
 }
 
