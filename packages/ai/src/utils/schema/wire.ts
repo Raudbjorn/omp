@@ -182,50 +182,6 @@ export function normalizeEmptySchemas(node: unknown): void {
 	for (const k in obj) normalizeEmptySchemas(obj[k]);
 }
 
-/**
- * Normalize `{}` (empty JSON Schema = `z.unknown()` / unconstrained value) to
- * boolean `true` in every schema-valued position. JSON Schema draft 2020-12
- * §4.3.1: `{}` and `true` are semantically equivalent ("any JSON value").
- * Grammar-constrained samplers (llama.cpp, etc.) treat the object form as
- * "generate an empty object" rather than "any JSON value", causing open-typed
- * fields like `extra.title` (from `z.record(z.string(), z.unknown())`) to
- * always emit `{}` instead of the intended string/number/etc. (issue #1179).
- *
- * Mutates in place. Provider-agnostic — applied to every tool wire schema so
- * Anthropic, Google, OpenAI, Ollama, Bedrock, and Cursor all see the
- * normalized form, regardless of whether the source was Zod or TypeBox.
- */
-export function normalizeEmptySchemas(node: unknown): void {
-	if (Array.isArray(node)) {
-		for (const child of node) normalizeEmptySchemas(child);
-		return;
-	}
-	if (!node || typeof node !== "object") return;
-	const obj = node as Record<string, unknown>;
-
-	for (const key of SCHEMA_VALUE_KEYS) {
-		if (Object.hasOwn(obj, key) && isEmptyObject(obj[key])) obj[key] = true;
-	}
-	for (const mapKey of SCHEMA_MAP_KEYS) {
-		const map = obj[mapKey];
-		if (map !== null && typeof map === "object" && !Array.isArray(map)) {
-			for (const k in map as Record<string, unknown>) {
-				if (isEmptyObject((map as Record<string, unknown>)[k])) (map as Record<string, unknown>)[k] = true;
-			}
-		}
-	}
-	for (const arrKey of SCHEMA_ARRAY_KEYS) {
-		const arr = obj[arrKey];
-		if (Array.isArray(arr)) {
-			for (let i = 0; i < arr.length; i++) {
-				if (isEmptyObject(arr[i])) arr[i] = true;
-			}
-		}
-	}
-
-	for (const k in obj) normalizeEmptySchemas(obj[k]);
-}
-
 /** Convert a Zod schema into the JSON Schema shape providers consume. */
 export function zodToWireSchema(schema: ZodType): Record<string, unknown> {
 	return stamp(schema, kZodWireSchema, s => {
