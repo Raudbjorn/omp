@@ -2,6 +2,226 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed DeepSeek V4 direct API requests with tools to keep documented thinking mode instead of dropping reasoning: lower OMP efforts now map to DeepSeek's supported `high`, `tool_choice` is omitted, `thinking: { type: "enabled" }` and `max_tokens` are sent, and partial user `reasoningEffortMap` overrides merge with DeepSeek defaults. ([#1207](https://github.com/can1357/oh-my-pi/issues/1207))
+- Fixed model cache schema v2 databases so offline refreshes preserve cached provider discoveries after upgrading to schema v3 and subsequent online refreshes can overwrite the cache. ([#1219](https://github.com/can1357/oh-my-pi/issues/1219))
+
+## [15.1.7] - 2026-05-19
+### Added
+
+- Added Anthropic realization of `serviceTier: "priority"`. The anthropic-messages provider now sets `speed: "fast"` on the request and appends the `fast-mode-2026-02-01` beta to `Anthropic-Beta` whenever the caller passes `serviceTier: "priority"`. When the server rejects an unsupported model with `invalid_request_error`, the provider transparently retries the same turn without the fast-mode signal (mirroring the strict-tools fallback pattern), persists the disable via a new `providerSessionState.fastModeDisabled` flag so subsequent requests in the session skip the field, and surfaces the action via the new `AssistantMessage.disabledFeatures` array (id `"priority"`) so callers can sync user-facing toggles. A new `clearAnthropicFastModeFallback(providerSessionState)` helper lets callers re-arm priority after the auto-fallback fired.
+- Added scoped `ServiceTier` values: `"openai-only"` (priority on `openai`/`openai-codex`, ignored elsewhere) and `"claude-only"` (priority on direct `anthropic`, ignored on Bedrock/Vertex Claude and elsewhere). A new `resolveServiceTier(serviceTier, provider)` helper computes the effective tier for the provider; existing OpenAI/Anthropic provider code routes through it, so `service_tier` and Anthropic fast-mode emission both respect scope. `getPriorityPremiumRequests` now counts Anthropic+priority as one premium request (previously zero) and continues to ignore providers that drop the field on the wire.
+
+### Fixed
+
+- Fixed Anthropic fast mode (`serviceTier: "priority"`) looping on 429 `rate_limit_error: "Extra usage is required for fast mode."` for accounts without the extra-usage entitlement. `isAnthropicFastModeUnsupportedError` now matches the 429 phrasing in addition to the 400 `invalid_request_error` "does not support the `speed` parameter" case, so the provider drops `speed: "fast"` on the in-turn retry, sets `providerSessionState.fastModeDisabled` for the remainder of the session, and surfaces `disabledFeatures: ["priority"]` to the caller instead of retrying with the same payload until `PROVIDER_MAX_RETRIES` is exhausted.
+- Fixed MiniMax Coding Plan CN streaming `<think>...</think>` reasoning as visible assistant text. The OpenAI-compatible stream parser now enables the existing MiniMax tag parser for both `minimax-code` and `minimax-code-cn`, so CN responses become structured `thinking` blocks instead of raw text. ([#1203](https://github.com/can1357/oh-my-pi/issues/1203))
+
+## [15.1.6] - 2026-05-19
+
+### Fixed
+
+- Fixed `{}` (empty JSON Schema, the wire representation of `z.unknown()`) being passed verbatim to grammar-constrained samplers (llama.cpp, etc.) in `additionalProperties`, `items`, and other schema-valued positions across **every provider** (OpenAI, Anthropic, Google, Ollama, Bedrock, Cursor). Grammar builders treat `{}` as "generate an empty object" rather than "any JSON value", causing open-typed fields (e.g. `extra.title` from `z.record(z.string(), z.unknown())`) to always emit `{}` instead of the intended string/number/etc. `toolWireSchema` now applies a new `normalizeEmptySchemas` pass (exported) to both the Zod and TypeBox/raw-JSON-Schema branches, converting `{}` → `true` (semantically identical per JSON Schema draft 2020-12 §4.3.1) in all schema-valued positions. Strict-mode opt-out is preserved across all providers: OpenAI's `hasUnrepresentableStrictObjectMap` hits the `=== true` branch instead of the `isJsonObject({})` branch (same result); Anthropic's `normalizeAnthropicStrictSchemaNode` opts out via `additionalProperties !== false` (still true for `true`); Google's `normalizeSchemaForGoogle` strips `additionalProperties` regardless (pre-existing). ([#1179](https://github.com/can1357/oh-my-pi/issues/1179))
+- Fixed `pi-ai login <provider>` crashing with `Unknown provider` for providers that only the `auth-storage` `login()` switch knew about (perplexity, alibaba-coding-plan, gitlab-duo, huggingface, opencode-zen/go, lm-studio, ollama, cerebras, fireworks, qianfan, synthetic, venice, litellm, moonshot, together, cloudflare/vercel ai gateways, vllm, qwen-portal, nvidia, xiaomi, and any custom OAuth provider). The CLI now delegates to `SqliteAuthCredentialStore.login()` instead of duplicating a smaller switch, so the auth-broker `omp auth-broker login <provider>` flow works for every registered OAuth provider.
+
+## [15.1.4] - 2026-05-19
+### Changed
+
+- Updated auth-gateway format and pi-native request handling to invalidate the failed API key and retry the provider request with a replacement key when authentication fails
+
+### Fixed
+
+- Fixed OpenAI Responses and Codex tool schema normalization to emit `properties: {}` for no-argument object schemas without rewriting literal payloads. ([#1147](https://github.com/can1357/oh-my-pi/issues/1147))
+- Fixed Anthropic 400 (`unexpected tool_use_id found in tool_result blocks ... Each tool_result block must have a corresponding tool_use block in the previous message`) when handoff/compaction folds an assistant `tool_use` into the handoff summary string but leaves the matching user-side `tool_result` message in the history. `transformMessages` now indexes every `tool_use` id surviving the first pass and drops orphan `tool_result` messages whose originator was compacted away, preserving the text payload as a user-level `<stale-tool-result>` note so the model still sees what the tool returned. The note is emitted with `role: "user"` rather than `role: "developer"` so providers that elevate developer-role messages (Ollama: `developer` → `system`; OpenAI chat-completions reasoning models: `developer` → `developer`) cannot lift stale tool output to an instruction-priority tier above the surrounding user/developer messages.
+- Fixed streaming authentication retry to trigger when a provider emits a 401 `error` event after a `start` event but before any replay-unsafe content is emitted
+- Added `credential_process` support to the Bedrock provider's AWS credential resolver so profiles delegating to external brokers (`aws-vault`, `granted`, in-house tools) resolve instead of falling through to `Unable to resolve AWS credentials`. Parses the AWS SDK `Version: 1` JSON envelope, honors `Expiration` in the per-profile cache, propagates `AbortSignal` to the spawned helper, routes Windows `.cmd`/`.bat` helpers through `cmd.exe /c`, and ships a POSIX-shell-style tokenizer that preserves backslashes inside double quotes so Windows paths survive ([#1142](https://github.com/can1357/oh-my-pi/issues/1142))
+
+## [15.1.3] - 2026-05-17
+### Breaking Changes
+
+- Changed `AuthBrokerClient.fetchSnapshot()` to return status-based results (`200` or `304`) instead of always returning a raw snapshot body, so callers now need to branch on `status`
+- Renamed public schema utilities in `@oh-my-pi/pi-ai/utils/schema` by replacing `sanitizeSchemaForGoogle`, `sanitizeSchemaForCCA`, `prepareSchemaForCCA`, and `sanitizeSchemaForMCP` with `normalizeSchemaForGoogle`, `normalizeSchemaForCCA`, and `normalizeSchemaForMCP`
+- Added MCP schema normalization via `normalizeSchemaForMCP` for compatibility checks
+- Removed the `StringEnum` helper from `@oh-my-pi/pi-ai/utils/schema`. Use `z.enum([...])` directly; Zod's emitted JSON Schema is already wire-compatible with Google and other providers.
+- Renamed the concrete SQLite credential store class from `AuthCredentialStore` to `SqliteAuthCredentialStore`. `AuthCredentialStore` is now the persistence interface implemented by both the SQLite store and the new `RemoteAuthCredentialStore`. Update `new AuthCredentialStore(db)` / `AuthCredentialStore.open(...)` call-sites to `SqliteAuthCredentialStore`; type-position uses (`store: AuthCredentialStore`) continue to work unchanged.
+
+### Added
+
+- Added `onAuthError` to `StreamOptions` and wired `streamSimple()` to retry once with a replacement API key when the first provider response is a 401 before any assistant events are emitted
+- Added generation-aware snapshot metadata (`generation`, `serverNowMs`, `refresher`, and `rotatesInMs`) to auth-broker snapshot responses to support client-side credential-rotation planning
+- Added `transport: "pi-native"` on `Model` and the matching `streamPiNative` client. When `model.transport === "pi-native"`, `streamSimple` short-circuits the per-provider dispatch and POSTs the canonical `Context` to the auth-gateway's `POST /v1/pi/stream` endpoint. The response is SSE-framed `AssistantMessageEvent`s parsed by `readSseJson` and pushed verbatim into the local `AssistantMessageEventStream` — no wire-format translation, no partial-stripping reconstruction. Used by containerized omp installs (robomp slots, swarm extension, etc.) to route every LLM call through a credential-holding sidecar; the slot itself never sees the real provider tokens. Server-controlled fields (`apiKey`, `signal`, `fetch`, lifecycle callbacks, the provider-session map) are stripped from the wire body — `apiKey` rides in the `Authorization` header as the gateway bearer.
+- Added `POST /v1/pi/stream` to the auth-gateway. Same auth + abort + model-resolution + codex-compat + prefix-cache plumbing as the foreign-wire routes; only the wire-format translation is skipped. Request body is `{ modelId, context, options?, stream? }` where `context` is the canonical pi-ai `Context` and `options` is `SimpleStreamOptions` with non-serializable fields stripped. Response is SSE-framed `AssistantMessageEvent` (terminated by `data: [DONE]`) when streaming, or `{ message: AssistantMessage }` JSON when `stream: false`.
+- Added Vertex AI authentication via Google Application Default Credentials from `GOOGLE_APPLICATION_CREDENTIALS`, `~/.config/gcloud/application_default_credentials.json`, or metadata server tokens, with token caching and refresh skew control via `GOOGLE_VERTEX_REFRESH_SKEW_MS`
+- Added support for Anthropic image message parts with `type: "url"` and `type: "file"` sources
+- Added `stopSequences` and `frequencyPenalty` to shared stream options and wired them through to OpenAI request translation
+- Added optional request cancellation support to auth-broker interactions by propagating `AbortSignal` into health, snapshot, usage, and refresh calls
+- Added `AuthStorage.setConfigApiKey` / `removeConfigApiKey` / `clearConfigApiKeys` for config-sourced per-provider bearers (e.g. `models.yml` `providers.<name>.apiKey`). The new tier sits between runtime `--api-key` and stored credentials in `getApiKey`/`peekApiKey` resolution, so a bearer pinned in config now beats the broker's OAuth access token. Also suppresses OAuth `account_uuid` attribution when active, since outbound auth is the explicit config bearer, not OAuth. `describeCredentialSource` reports `"config override (models.yml)"` for visibility.
+- Added per-model `additional_rate_limits` parsing to `openaiCodexUsageProvider`. The Codex `wham/usage` endpoint surfaces a separate `GPT-5.3-Codex-Spark` rate limit (`metered_feature: codex_bengalfox`) on Pro accounts; these now emit dedicated `openai-codex:spark:{primary,secondary}` `UsageLimit` entries with `scope.tier = "spark"`, mirroring how Anthropic exposes `anthropic:7d:sonnet` separately from the umbrella `anthropic:7d` bucket. The osx-widgets client already keyed spark detection off `limit.id.includes("spark")`; this populates that contract end-to-end.
+- Added `GET /v1/usage` to the auth-broker API to expose aggregated usage reports from `AuthStorage.fetchUsageReports`
+- Added auth-broker usage polling response handling that returns normalized usage reports plus generation timestamp for clients (5-min per-credential cache via `AuthStorage`)
+- Added the auth-broker subsystem (`@oh-my-pi/pi-ai/auth-broker`) for sharing OAuth credentials across machines without leaking refresh tokens.
+- `startAuthBroker(...)` boots a `Bun.serve` HTTP server exposing `GET /v1/healthz`, `GET /v1/snapshot`, `POST /v1/credential` (upsert), `POST /v1/credential/:id/refresh`, and `POST /v1/credential/:id/disable`.
+- `AuthBrokerClient` is the matching HTTP client used by remote clients.
+- `RemoteAuthCredentialStore` is a client-side `AuthCredentialStore` that mirrors a broker snapshot in memory; mutating methods (`replace*`, `upsert*`, `delete*ForProvider`) throw because writes are server-side only.
+- `AuthBrokerRefresher` is the background refresh loop that pre-refreshes credentials within `refreshSkewMs` and disables on definitive failure (`invalid_grant` / non-network 401-403).
+- Added `AuthStorage.exportSnapshot()`, `AuthStorage.upsertCredential(provider, credential)`, `AuthStorage.forceRefreshCredentialById(id)`, and `AuthStorage.disableCredentialById(id, cause)` public methods consumed by the auth-broker server.
+- Added `AuthStorageOptions.refreshOAuthCredential` override so a remote-store client can route every OAuth refresh through the broker instead of the local OAuth endpoint.
+- Added `REMOTE_REFRESH_SENTINEL` (`"__remote__"`) — the wire placeholder substituted for OAuth refresh tokens in broker snapshots; clients never see the real refresh token.
+- Exposed the OAuth provider catalog (`getOAuthProviders`, `OAuthProvider`, `OAuthProviderInfo`) and `refreshOAuthToken` through the package barrel so the coding-agent CLI can target them without reaching into `utils/oauth`.
+- Added the auth-gateway subsystem (`@oh-my-pi/pi-ai/auth-gateway`) — a forward-proxy that sits between unauthenticated clients (the macOS usage widget, llm-git, robomp containers, …) and the broker. Clients send standard provider-format requests; the gateway parses them into omp's canonical `Context`, dispatches through pi-ai's `streamSimple()`, and translates the canonical event stream back to the matching wire format. `Authorization` is injected server-side so access tokens never leave the gateway host. Wire surface:
+- `GET  /healthz` — unauth liveness.
+- `GET  /v1/usage` — aggregated provider usage; 5-min per-credential cache via `AuthStorage.fetchUsageReports`.
+- `GET  /v1/models` — model catalog (scoped to providers with credentials).
+- `POST /v1/chat/completions` — OpenAI chat-completions in/out.
+- `POST /v1/messages` — Anthropic messages in/out (text + thinking + tool_use blocks, SSE event taxonomy preserved).
+- `POST /v1/responses` — OpenAI Responses in/out (reasoning items + function_call output items, SSE pass-through).
+- Added exports from `@oh-my-pi/pi-ai/auth-gateway`: `startAuthGateway`, `AuthGatewayServerOptions`, `AuthGatewayBootOptions`, `AuthGatewayServerHandle`, `ModelResolver`, `DEFAULT_AUTH_GATEWAY_BIND`. Per-format `parseRequest` / `encodeResponse` / `encodeStream` triples are reachable via the `./providers/*` subpath as `openai-chat-server`, `anthropic-messages-server`, and `openai-responses-server`.
+- Added `listProvidersWithEnvKey()` to enumerate every provider with an env-var fallback (used by the new migrate command in coding-agent).
+
+### Changed
+
+- Changed `GET /v1/snapshot` to support generation-based polling with `If-None-Match` and `wait` for long-poll updates and to return `304` when no snapshot changes are available
+- Changed Bedrock credential resolution for streaming calls to prefer environment keys, AWS profile/SSO credentials, and IMDSv2 fallback when available
+- Changed auth-gateway parsing for OpenAI chat-completions and Responses to ignore unsupported SDK-only fields instead of rejecting requests
+- Changed auth-gateway protocol handling to include CORS headers on responses and support browser-origin requests
+- Changed prompt-cache handling to resolve cache keys from request metadata and headers and preserve them through protocol translation
+- Changed Anthropic messages parsing to forward request `metadata` through to downstream execution
+- Changed usage report caching to use a 5-minute per-credential TTL with jittered refresh timing to reduce usage endpoint rate-limit collisions
+- Changed usage polling failure handling so transient errors continue serving the last known report instead of returning null and dropping the credential from usage aggregates after cache expiry
+- Changed `sanitizeSchemaForGoogle` to normalize snake_case schema keys (such as `any_of` and `additional_properties`) to camelCase and auto-generate `propertyOrdering` for multi-property objects
+- Changed strict-mode sanitization to resolve `$ref` nodes with sibling keys by inlining and merging referenced local definitions
+- Changed strict-mode sanitization to flatten single-entry `allOf` nodes and remove the `allOf` wrapper
+- Changed Anthropic tool schema normalization to preserve supported metadata keywords such as `$ref`, `$defs`, `$schema`, `enum`, `const`, `default`, `title`, and `nullable` instead of stripping them
+- Changed string schema processing to retain only supported `format` values (`date-time`, `time`, `date`, `duration`, `email`, `hostname`, `uri`, `ipv4`, `ipv6`, `uuid`) and demote unsupported `format` values to `description` hints
+
+### Fixed
+
+- Fixed OAuth credential refresh flow so concurrent manual and background refreshes now share one in-flight attempt per credential, and `RemoteAuthCredentialStore` now re-synchronizes before using near-expiring OAuth credentials
+- Fixed stale-credential handling after auth failures by waiting for updated broker snapshots and refreshing suspect credentials through broker endpoints before continuing
+- Fixed Google Generative AI startup behavior to throw a clear API-key-required error when no key is configured
+- Fixed AWS Bedrock image message serialization to preserve base64 `source.bytes` payloads instead of decoding and rebuilding them
+- Fixed Google provider error handling to extract the API-reported `error.message` from JSON response bodies when available
+- Fixed `RemoteAuthCredentialStore.getUsageReport` to return the matching credential-specific usage report and coalesce parallel callers into one broker `/v1/usage` fetch
+- Fixed auth-broker credential upload validation to reject the remote refresh-token sentinel and prevent storing a non-refresh value
+- Fixed OpenAI Responses streaming output to emit `reasoning_summary_text` events and parse/send `summary_text` reasoning payloads
+- Fixed Anthropic stop-sequence handling by trimming requests to the API limit of four entries before forwarding
+- Fixed prompt caching behavior across protocol translations so cached-token usage is preserved when Anthropic and OpenAI requests are routed through each other
+- Fixed Claude usage fetching to retry transient `429` and `5xx` responses with exponential backoff, respecting `Retry-After` before returning failure
+- Fixed auth-gateway request translation to preserve OpenAI Responses string/system message content, reasoning replay payloads, completed item text in stream item-done events, Anthropic tool-result ordering, and OpenAI Chat/Responses cached-token usage totals
+- Fixed auth-gateway failure handling so unsupported request controls, upstream terminal errors, non-streaming aborts, and already-aborted client requests fail explicitly instead of being accepted, ignored, or encoded as successful HTTP 200 responses
+- Fixed Gemini CLI / Antigravity tool schema normalization to run the full Cloud Code Assist pipeline, matching shared Google schema handling for union/object merging and nullable extraction
+- Fixed stripped validation hints to be preserved as description spill text (`{key: value}` blocks) when `normalizeSchemaForGoogle` and `normalizeSchemaForCCA` drop unsupported schema keywords
+- Fixed `sanitizeSchemaForGoogle` to collapse nullability forms (`type:'null'` and null-bearing `anyOf` variants) into `nullable` while preserving remaining variants
+- Fixed `sanitizeSchemaForGoogle` to inline local `$defs` references instead of dropping `$ref`/`$defs` structure during Google schema sanitization
+- Fixed `normalizeAnthropicToolSchema` to handle self-referential schemas without infinite recursion
+- Fixed object schema normalization so explicit open-map declarations (`additionalProperties: true` and schema-valued `additionalProperties`) are preserved instead of being converted to closed objects
+- Fixed unsupported schema constraints on arrays and strings (`maxItems`, `uniqueItems`, `pattern`, `minLength`, `maxLength`, and `minItems` when greater than 1) by demoting them into `description` rather than dropping them
+
+### Security
+
+- Hardened auth-gateway bearer-token checks with constant-time comparison to avoid timing-side-channel leaks
+
+## [15.1.2] - 2026-05-15
+### Breaking Changes
+
+- Rejected draft-07 tuple and dependency keywords (`items` arrays, `dependencies`, `additionalItems`) in JSON Schema validation
+
+### Added
+
+- Added `responseHeaders`, `responseStatus`, and `responseRequestId` fields to `MockResponse` so mock providers can provide synthetic `ProviderResponseMetadata`
+- Added `onResponse` metadata emission for mocks that sends lowercased headers and a default status of 200 before streaming when response headers are configured
+- Added recursive strict-mode sanitization for array `prefixItems` entries so tuple schemas now enforce object constraints per item
+
+### Changed
+
+- Normalized legacy draft-07 JSON Schema constructs used in tool parameters (`items` arrays, `additionalItems`, `definitions`, `dependencies`) to draft 2020-12 before OpenAI/Google/CCA sanitization, wire conversion, and argument validation
+- Reworked OpenAI response schema adaptation to rewrite `oneOf` into `anyOf` while preserving existing `anyOf` branches
+- Changed tuple array validation to validate per-index schemas from `prefixItems` and apply `items` only to remaining elements
+
+### Fixed
+
+- Fixed validation of plain JSON Schema tool arguments that omitted a `$schema` URI so draft-07-shaped schemas now pass validation instead of being rejected
+- Fixed tuple-array validation for legacy JSON Schema tool schemas to enforce `additionalItems: false` and per-position constraints after automatic draft upgrade
+- Fixed Anthropic tool schema normalization to recurse into `prefixItems` so unsupported constraints inside tuple items are stripped in the generated input schema
+- Fixed Anthropic tool-schema normalization stripping the body of explicit open `additionalProperties` (e.g. Zod's `z.record(z.string(), z.unknown())` compiling to `additionalProperties: {}`) by unconditionally overwriting it with `false`, which closed record-style fields and prevented models from supplying any key. The coding-agent's `resolve` tool exposes plan-approval titles via such a field, so Kimi K2 (and any other Anthropic-shaped provider) could not pass `extra: { title }`, blocking plan mode entirely ([#1104](https://github.com/can1357/oh-my-pi/issues/1104))
+- Fixed Anthropic strict tool planning to leave tools with open `additionalProperties` maps non-strict instead of sending schemas Anthropic rejects.
+
+## [15.1.0] - 2026-05-15
+
+### Breaking Changes
+
+- Removed TypeBox root exports (`Type`, `Static`, and `TSchema`) from the package entrypoint, so callers importing those symbols from `@oh-my-pi/pi-ai` must migrate to `zod` or `@oh-my-pi/pi-ai/types`
+
+### Added
+
+- Added support for defining tool schemas with Zod (`z.object`, `z.string`, etc.) by allowing `Tool.parameters` to be either Zod schemas or legacy JSON Schema objects and converting them to provider wire format automatically
+- Added package-level schema helpers in the `zod/v4` style by exporting `z` and `ZodType` from the root entrypoint
+- Added a `mock` API provider via `createMockModel` to build `Model<"mock">` instances for fully in-memory, deterministic assistant streams in tests
+- Added `streamMock` and `registerMockApi` so mock responses can be consumed through `stream()` and the global custom API registry without an external model backend
+- Added async/sync response scripting with optional context-based handlers, and new `push()`/`reset()` controls to drive multi-turn mock interactions and inspect per-call invocation state
+- Added support in mock responses for simulating tool calls, usage metadata, custom stop reasons, delayed emissions, and terminal error/aborted outcomes
+
+### Changed
+
+- Changed Azure OpenAI Responses tool schema conversion to sanitize tool parameter schemas and rewrite `oneOf` branches as `anyOf` so tool calls remain compatible with Azure's schema expectations
+- Changed `Static<S>` to extract a schema object’s `static` type when present, improving inferred tool argument types for non-Zod parameter definitions
+- Changed `Static` typing behavior so it now infers argument types from Zod schemas and defaults to `unknown` for non-Zod JSON Schema parameter definitions
+- Restored the default steady-state stream idle timeout to 120s (regressed in 15.0.0). 30s was too aggressive for reasoning models, slow proxies, and tool-call planning gaps, surfacing as repeated `Provider stream stalled while waiting for the next event` errors. Existing `PI_STREAM_IDLE_TIMEOUT_MS` / `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS` overrides are unchanged.
+
+### Fixed
+
+- Preserved top-level unknown fields in validated tool-call arguments so extra root properties are retained after schema coercion
+- Fixed coercion for Zod `record` fields by parsing JSON-stringified record arguments into objects
+- Validated legacy draft-07 JSON Schema tool parameters directly instead of converting through Zod, improving support for features like `$ref`, `definitions`, `nullable`, and `uniqueItems`
+- Fixed Cloud Code Assist schema preparation to strip unsupported `propertyNames` and fall back to a minimal tool schema when schema meta-validation detects malformed keywords
+- Fixed OpenAI Completions streaming to avoid treating non-output chunks (including role-only preambles) as progress events so idle-timeout watchdog behavior no longer hangs on no-op streamed chunks
+- Fixed Cloud Code Assist schema compatibility checks by replacing strict AJV meta-schema validation with structural JSON Schema validation to avoid rejecting structurally valid tool schemas
+- Fixed lazy built-in provider streams (`anthropic-messages`, `bedrock-converse-stream`, `cursor-agent`, `google-*`, `ollama-chat`, `openai-*`) prematurely aborting slow first-token responses with `Provider stream stalled while waiting for the next event`. The lazy-stream watchdog wrapper was treating the synthetic `start` event (yielded immediately by every provider before the model emits any tokens) as the first real item, which caused the watchdog to drop from `firstItemTimeoutMs` (100s) to `idleTimeoutMs` (30s) before the upstream model had produced anything. The shared `iterateWithIdleTimeout` now keeps `awaitingFirstItem` true until a real progress item arrives, and the lazy-stream wrapper marks `start` as a non-progress keepalive ([#1073](https://github.com/can1357/oh-my-pi/pull/1073) regression).
+- Heal leaked Kimi K2 chat-template tool-call tokens (`<|tool_calls_section_begin|>` … `<|tool_call_argument_begin|>` … `<|tool_calls_section_end|>`) that some hosts (native `kimi-code` API, OpenRouter, Fireworks, etc.) emit into `delta.content` instead of structured `tool_calls`. The OpenAI-completions stream consumer now strips the markers from visible text, reconstructs the embedded calls as proper `toolCall` content blocks (stream-aware, token-boundary-safe), and promotes `finish_reason: stop` to `toolUse` when calls were healed.
+- Fixed OpenAI-completions Kimi K2 healed-call promotion clobbering non-stop terminal finish reasons (`error`, `length`, `aborted`); promotion now only fires when the prior stop reason is the natural-completion `stop`
+- Fixed OpenAI-completions duplicate Kimi tool calls when a single chunk delivers both leaked markers and a structured `delta.tool_calls`; the healer now strips visible markers but discards its synthesized calls so structured payloads remain the single source of truth
+- Fixed Kimi tool-call healer synthesizing a bogus empty call when assistant text mentions a literal `<|tool_call_end|>` (or `<|tool_call_begin|>` / `<|tool_call_argument_begin|>`) outside an active `<|tool_calls_section_begin|>…<|tool_calls_section_end|>` section; the tokens now survive as text
+- Fixed OpenAI-completions ignoring per-request `StreamOptions.streamFirstEventTimeoutMs` when configuring the underlying OpenAI SDK HTTP timeout, causing slow-before-headers providers to be aborted at the env default before the wrapping watchdog armed
+- Fixed JSON Schema validator silently accepting values that violate `propertyNames`, `patternProperties`, `dependentRequired`, `dependencies`, `if`/`then`/`else`, `contains`, and `prefixItems`; the in-tree validator now enforces these keywords instead of falling through. `unevaluatedProperties`/`unevaluatedItems` remain permissive but log a one-time warning so tool authors are not surprised.
+- Fixed recursive `$ref` schemas being treated as universally valid: the validator previously short-circuited on the second occurrence of any ref it had already seen, so nested values violating the referenced sub-schema passed. Cycle detection now keys on (ref, value-identity) pairs with a depth cap for primitive values, so genuine sub-tree violations are still caught.
+- Fixed JSON Schema meta-validator accepting malformed `if`/`then`/`else` and `dependencies` keywords; each conditional sub-schema is now structurally validated and draft-07 `dependencies` accepts either a schema or a string array of dependent keys.
+- Fixed Zod-emitted wire schemas dropping null-valued unknown root fields before `preserveUnknownRootFields` could snapshot them, so callers like `task.simple` no longer lose a `schema: null` argument and downstream rejection paths fire as intended.
+- Fixed mock provider partial `Usage` to recompute `totalTokens` (and `cost.total` when cost components are supplied) when omitted, instead of reporting 0
+- Fixed mock provider auto-generated tool-call IDs to use a per-instance counter (now reset by `reset()`), so test order no longer affects IDs across `createMockModel()` instances
+
+## [15.0.2] - 2026-05-15
+### Fixed
+
+- Fixed `StreamOptions.fetch` typing to accept fetch-compatible override functions that do not expose `preconnect`, allowing custom fetch implementations to be used without type errors across runtimes
+- Fixed Moonshot Kimi K2.6 forced tool calls to send `thinking: { type: "disabled" }`, avoiding `tool_choice 'specified' is incompatible with thinking enabled` 400s while preserving the requested named tool ([#1077](https://github.com/can1357/oh-my-pi/issues/1077)).
+
+## [15.0.1] - 2026-05-14
+### Breaking Changes
+
+- Increased the minimum Bun runtime version to `>=1.3.14` for the `@aws-?` package
+
+### Added
+
+- Added `installH2Fetch` to patch `globalThis.fetch` so HTTPS requests attempt HTTP/2 over ALPN with automatic HTTP/1.1 fallback when HTTP/2 is unsupported
+- Added priority service-tier traffic to the `premiumRequests` accounting on OpenAI and OpenAI Codex providers. Sending `serviceTier: "priority"` now increments `usage.premiumRequests` by 1 per request, matching the existing GitHub Copilot premium-request budget semantics so downstream consumers (e.g. the `omp stats` "Premium Reqs" card and `/usage`) reflect priority traffic alongside Copilot premium calls.
+
+## [15.0.0] - 2026-05-13
+
+### Added
+
+- Added `AuthStorage.onCredentialDisabled(listener)` — a multi-subscriber `on/off` API for `credential_disabled` events. Returns an unsubscribe function; calling it more than once is a no-op. Multiple subscribers all receive every disable event, with synchronous and async exceptions isolated per-listener so a misbehaving subscriber cannot starve the rest of the chain. Buffer-and-replay semantics are preserved: events emitted while no listener is subscribed are buffered (FIFO, capped at 32) and replayed once to the listener that triggers the empty→non-empty transition. After every subscriber unsubscribes, subsequent disable events buffer again until the next subscribe.
+
+### Fixed
+
+- Fixed OAuth credentials being silently disabled when two omp processes (or any two `AuthStorage` instances sharing a `agent.db`) race on token refresh. Anthropic rotates refresh tokens on every use, so the loser's `invalid_grant` response previously soft-deleted the row that the winner just rotated, forcing the user to `/login` again. `#tryOAuthCredential` now re-reads the row from disk before declaring a definitive failure: if the persisted `refresh` differs from the snapshot it tried, the peer-rotated credential is reloaded and the request retries against the fresh token instead of disabling the live row.
+- Closed a remaining race window in OAuth refresh-failure handling: between re-reading the credential row to check for peer rotation and the subsequent soft-delete, another process could still complete a refresh and rotate the row, leaving us to disable the freshly-rotated credential by `id`. The disable now runs as a single CAS update conditioned on the row's `data` still matching the snapshot we tried to refresh, and on `disabled_cause IS NULL`. If the CAS reports 0 rows changed (peer rotation, or row already disabled by a concurrent failure on the same snapshot), we reload from disk and retry instead of mutating the wrong row or emitting a spurious `credential_disabled` event.
+### Changed
+- Lowered the default steady-state stream idle timeout from 120s to 30s while preserving the existing environment overrides.
+
+### Fixed
+- Lazy built-in provider streams now enforce the shared idle watchdog and abort stalled provider requests, so session auto-retry can continue after transient network drops instead of remaining stuck. Caller aborts still terminate as aborted.
+
 ## [14.9.3] - 2026-05-10
 
 ### Fixed
