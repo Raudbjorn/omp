@@ -73,7 +73,8 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		baseUrl.includes("deepseek.com") ||
 		lowerId.includes("deepseek") ||
 		lowerName.includes("deepseek");
-
+	const isDirectDeepseekApi = provider === "deepseek" || baseUrl.includes("api.deepseek.com");
+	const isDirectDeepseekReasoning = isDirectDeepseekApi && isDeepseekFamily && Boolean(model.reasoning);
 	const isNonStandard =
 		isCerebras ||
 		provider === "xai" ||
@@ -98,7 +99,8 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		provider === "mistral" ||
 		baseUrl.includes("mistral.ai") ||
 		baseUrl.includes("chutes.ai") ||
-		baseUrl.includes("fireworks.ai");
+		baseUrl.includes("fireworks.ai") ||
+		isDirectDeepseekApi;
 	const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
 	const isMistral = provider === "mistral" || baseUrl.includes("mistral.ai");
 
@@ -158,7 +160,13 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 					xhigh: "default",
 				} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
 			: isDeepseekFamily && model.reasoning
-				? { xhigh: "max" }
+				? ({
+						minimal: "high",
+						low: "high",
+						medium: "high",
+						high: "high",
+						xhigh: "max",
+					} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
 				: isFireworks
 					? ({
 							// Fireworks' OpenAI-compatible endpoint rejects OpenAI's
@@ -175,8 +183,8 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		reasoningEffortMap,
 		supportsUsageInStreaming: !isCerebras,
 		disableReasoningOnForcedToolChoice: isKimiModel || isAnthropicModel,
-		disableReasoningOnToolChoice: isDeepseekFamily && Boolean(model.reasoning),
-		supportsToolChoice: true,
+		disableReasoningOnToolChoice: isDeepseekFamily && Boolean(model.reasoning) && !isOpenRouter,
+		supportsToolChoice: !isDirectDeepseekReasoning,
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: isMistral,
 		requiresAssistantAfterToolResult: false,
@@ -205,11 +213,11 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		// DeepSeek V4 rejects synthetic reasoning_content placeholders (".") on tool-call turns.
 		// Kimi and OpenRouter accept them when actual reasoning is unavailable.
 		allowsSyntheticReasoningContentForToolCalls: !isDeepseekFamily || !model.reasoning,
-		requiresAssistantContentForToolCalls: isKimiModel,
+		requiresAssistantContentForToolCalls: isKimiModel || isDirectDeepseekReasoning,
 		openRouterRouting: undefined,
 		vercelGatewayRouting: undefined,
 		supportsStrictMode: detectStrictModeSupport(provider, baseUrl),
-		extraBody: undefined,
+		extraBody: isDirectDeepseekReasoning ? { thinking: { type: "enabled" } } : undefined,
 		toolStrictMode: isCerebras ? "all_strict" : "mixed",
 	};
 }
@@ -236,7 +244,7 @@ export function resolveOpenAICompat(
 		supportsMultipleSystemMessages:
 			model.compat.supportsMultipleSystemMessages ?? detected.supportsMultipleSystemMessages,
 		supportsReasoningEffort: model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
-		reasoningEffortMap: model.compat.reasoningEffortMap ?? detected.reasoningEffortMap,
+		reasoningEffortMap: { ...detected.reasoningEffortMap, ...(model.compat.reasoningEffortMap ?? {}) },
 		supportsUsageInStreaming: model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
 		supportsToolChoice: model.compat.supportsToolChoice ?? detected.supportsToolChoice,
 		maxTokensField: model.compat.maxTokensField ?? detected.maxTokensField,
@@ -260,7 +268,7 @@ export function resolveOpenAICompat(
 		openRouterRouting: model.compat.openRouterRouting ?? detected.openRouterRouting,
 		vercelGatewayRouting: model.compat.vercelGatewayRouting ?? detected.vercelGatewayRouting,
 		supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,
-		extraBody: model.compat.extraBody,
+		extraBody: model.compat.extraBody ?? detected.extraBody,
 		toolStrictMode: model.compat.toolStrictMode ?? detected.toolStrictMode,
 	};
 }
