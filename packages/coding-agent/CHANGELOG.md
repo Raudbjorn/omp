@@ -36,6 +36,201 @@
 
 ### Fixed
 
+- Fixed hashline payload handling in parser and streaming preview to preserve blank lines as actual payload text until the next op, file header, or envelope marker
+
+## [15.2.3] - 2026-05-22
+### Breaking Changes
+
+- Changed PR and task-isolation worktree directory layout to hash-based `~/.omp/wt/<identifier>-<path-hash>` style paths, replacing the previous nested encoded-repo layout
+
+### Added
+
+- Added `omp worktree` command (alias `wt`) to list and manage agent-managed worktrees under `~/.omp/wt`
+- Added `omp worktree clear` to remove orphaned worktree directories, with `--all` to include live PR-checkouts, `--dry-run` for preview, and `--json` reporting
+- Added machine-readable JSON output to `omp worktree list` for scripted inspection
+- Added `display.shimmer` appearance setting with `classic`, `kitt` (Knight Rider K.I.T.T. scanner), and `disabled` modes
+
+### Changed
+
+- Changed the welcome intro animation to a 3-second eased gradient sweep with a diagonal shine highlight across the logo
+- Changed background job completion follow-ups to batch multiple finished jobs into a single `async-result` message, showing each completed job and its result in one place
+- Changed MCP notification follow-ups to combine multiple resource updates into a single consolidated message and suppress duplicate server/uri entries
+- Updated PR checkout to reuse `hashPath`-based worktree roots when creating and scanning worktrees for cleanup
+- Updated `worktree` cleanup logic to gracefully prune parent git metadata after removing worktree directories
+- Reworked working-message shimmer animation for 60fps rendering: ANSI sequences are coalesced per same-tier run instead of emitted per code point, palettes compile once and cache per active theme, and the band position is now fractional so motion is smooth at any frame rate
+- Switched MCP health-check and "Connecting to…" spinners from hard-coded ASCII (`|/-\`) to `theme.spinnerFrames` so they pick up the active symbol preset (braille on unicode/nerd, ASCII when explicitly themed)
+
+### Fixed
+
+- Fixed PR checkout failures when the default worktree path was already registered or occupied by stale leftovers by automatically selecting suffixed alternatives (`-2`, `-3`, etc.)
+- Fixed Memory tab in the settings UI not revealing or hiding the Hindsight-only rows (`Hindsight API URL`, `Hindsight Bank ID`, `Hindsight Scoping`, etc.) when `Memory Backend` was switched via the inline submenu. The selector now rebuilds its item list after every change so condition-gated rows appear/disappear immediately instead of requiring a tab switch
+
+## [15.2.2] - 2026-05-22
+
+### Fixed
+
+- Fixed `RULES.md` not being injected. The documented sticky-rules file at `~/.omp/agent/RULES.md` and `<repo>/.omp/RULES.md` was never read by any discovery provider; only `.omp/rules/*.md` was scanned. The native provider now loads both as always-apply rules so they re-attach every turn as documented ([#1266](https://github.com/can1357/oh-my-pi/issues/1266)).
+
+## [15.2.1] - 2026-05-21
+
+### Fixed
+
+- Fixed compaction routing to the wrong provider when `modelRoles.default` is set to a different model than the active chat. Auto- and manual compaction now prefer the active session's model and only fall back to role-based candidates when the current model has no usable credentials. Previously, an Anthropic chat with `modelRoles.default = openai/gpt-5` would compact through OpenAI (including the remote-compaction endpoint), even though the live conversation never used OpenAI.
+
+### Fixed
+
+- Fixed context overflow not being detected when the session's model (e.g. `hf:zai-org/GLM-5.1` via `synthetic` provider) returns a 400 with the upstream "400 status code (no body)" message wrapped inside a JSON envelope. The `isContextOverflow` check now matches the no-body status phrase anywhere in the error string rather than requiring it at the very start, so auto-compaction fires correctly instead of leaving the session silently stuck ([#1251](https://github.com/can1357/oh-my-pi/issues/1251)).
+- Fixed `formatCapturedHttpError` not extracting the error text from `{"error":"string"}` response bodies (only object-valued `error` fields were previously handled), resulting in raw JSON in error messages instead of the human-readable string.
+
+## [15.2.0] - 2026-05-21
+
+### Changed
+
+- Changed the interactive working loader and slash-command progress bars to use the active theme's accent shimmer instead of static muted text.
+
+### Fixed
+
+- Fixed false-positive hashline `~ TEXT` separator-padding warning firing on YAML, JSON, Python, Markdown, TOML, and other indent-sensitive file edits. The padding check is now skipped entirely for indentation-sensitive extensions (`.py`, `.yml`/`.yaml`, `.md`/`.mdx`, `.json`/`.jsonc`/`.json5`, `.toml`, `.rst`, `.tf`, `.nix`, `.coffee`, `.haml`/`.slim`/`.pug`, `.sass`/`.styl`, `.nim`, `.cr`, `.elm`, `.fs`, …), and tightened on every other extension to flag only the `~ beta` typo shape (exactly one leading space before non-space content) rather than any leading-space payload.
+
+### Fixed
+
+- Fixed goal state machine: `get` now returns paused goals (was returning null for `enabled=false`), `complete` now works on paused goals after interrupts, `create` is allowed after a previous goal reaches `complete` status, and the goal tool is re-added to the active tool set on session reload when a paused goal is persisted. Added `resume` and `drop` ops to the goal tool so the agent can re-engage or discard a paused goal without requiring user slash commands. ([#1249](https://github.com/can1357/oh-my-pi/issues/1249))
+
+## [15.1.9] - 2026-05-21
+
+### Fixed
+
+- Fixed `disabledProviders` still probing local discovery endpoints for Ollama, llama.cpp, and LM Studio during background model refresh. Disabled providers are now excluded before implicit and built-in discovery managers are created. ([#1232](https://github.com/can1357/oh-my-pi/issues/1232))
+
+### Fixed
+
+- Fixed `omp acp` auto-discovering host `.mcp.json` servers in parallel with the ACP client's `session/new.mcpServers`, which shadowed client-supplied MCP tools in `search_tool_bm25` and the session tool registry. The ACP session factory now forces `enableMCP: false`, so MCP ownership stays with `AcpAgent#configureMcpServers`. Non-ACP modes keep on-disk discovery. ([#1234](https://github.com/can1357/oh-my-pi/issues/1234))
+
+### Fixed
+
+- Fixed binary `omp update` rollbacks so a downloaded replacement that fails post-install version verification no longer remains installed over the previous working binary. ([#1240](https://github.com/can1357/oh-my-pi/issues/1240))
+
+### Fixed
+
+- Fixed `/force <tool>` rejecting Ollama/local models before the requested tool could run; Ollama now receives a named forced choice that the provider transport narrows to the selected tool. ([#1236](https://github.com/can1357/oh-my-pi/issues/1236))
+
+### Fixed
+
+- Fixed `web_search` freezing the session when an upstream provider stalled. Bun's WinHTTP backend on Windows can silently drop `AbortSignal` once a TCP/TLS connection hangs (oven-sh/bun#15275, oven-sh/bun#18536), so Esc never reached the in-flight fetch and the only recovery was Ctrl+C + `omp --resume`. Every web-search provider's outbound `fetch` (anthropic, brave, codex, exa, gemini, jina, kagi, kimi, parallel, perplexity, searxng, synthetic, tavily, z.ai) now composes the caller signal with a 60s hard timeout via a shared `withHardTimeout` helper, guaranteeing the request settles within a minute even when Bun's abort fails to propagate. Independently, `executeSearch`'s provider-fallback loop was masking real cancellations as ordinary provider errors and returning "All web search providers failed"; it now re-throws as `ToolAbortError` the moment the caller's signal aborts, so the session sees a clean cancel on every platform. ([#1221](https://github.com/can1357/oh-my-pi/issues/1221))
+
+### Added
+
+- Added OSC 8 terminal hyperlink support for file paths in tool output. When the terminal supports hyperlinks (kitty, Ghostty, WezTerm, iTerm2, Alacritty, VS Code) and the new `tui.hyperlinks` setting is `auto` (default) or `always`, OMP wraps file paths emitted by `read`, `find`, `search`, `edit`, `ast_grep`, and `ast_edit` renderers in `file:///abs/path` hyperlinks. `local://` and other fs-backed internal URLs resolve to their backing path. Set `tui.hyperlinks: off` to disable. ([#1244](https://github.com/can1357/oh-my-pi/issues/1244))
+
+## [15.1.8] - 2026-05-20
+
+### Fixed
+
+- Fixed streaming edit previews for `apply_patch` and `hashline` jittering as the model typed `+added` lines. Two root causes addressed: (1) the trailing partial line of the streaming text input is now trimmed at each tick so a half-typed `+added` line no longer flickers; (2) the preview is rendered in the model's input order during streaming instead of re-deriving a unified diff via `Diff.structuredPatch`, whose coalescing previously reshuffled existing `+added` lines downward each time a new `-removed` line arrived. Existing additions now stay put and the preview only grows at the bottom while streaming. A residual trailing `-removed`/hunk-header block whose matching `+added` companion has not yet arrived is also suppressed until the additions land.
+- Fixed Perplexity web search appearing "logged out" roughly an hour after `omp auth login perplexity`. The search provider's `findOAuthToken` was honoring the bogus `expires = login_time + 1h` written by older logins (Perplexity JWTs typically omit `exp` because sessions are server-side) and silently dropping the credential. The loader now decodes the JWT's `exp` claim directly and only skips when the JWT itself is expired; tokens without an `exp` claim are treated as non-expiring.
+
+### Fixed
+
+- Fixed `legacy-pi-compat` failing to load plugin extensions (e.g. `pi-schedule-prompt@0.3.0`) that import `@mariozechner/pi-ai` when running from a compiled binary. `getResolvedSpecifier` called `Bun.resolveSync` against `import.meta.dir` inside `/$bunfs/root`, where the virtual FS exposes no resolvable `node_modules` tree at runtime; the throw silently dropped the plugin. The fix lets `rewriteLegacyPiImports` fall back gracefully on resolution failure so that `rewriteBareImportsForLegacyExtension` — which already runs immediately after — can resolve the original specifier against the plugin's own installed peer deps instead. The same fallback is applied to `resolveLegacyPiSpecifier` (the Bun plugin shim's `onResolve` handler) for tool/hook files loaded directly via Bun's import system. ([#1215](https://github.com/can1357/oh-my-pi/issues/1215))
+
+## [15.1.7] - 2026-05-19
+
+### Fixed
+
+- Fixed `debug` launch/attach failures so `configurationDone` no longer masks the underlying DAP launch error, early stop-outcome watchers cannot emit unhandled rejections, and directory-valued launch programs are rejected before adapter selection. ([#1187](https://github.com/can1357/oh-my-pi/issues/1187))
+- Fixed hashline edit payloads that use a readability space after `~` by warning on separator-padding-shaped payload blocks and tightening the model prompt. ([#1166](https://github.com/can1357/oh-my-pi/issues/1166))
+- Fixed ACP bash permission requests to include execute tool metadata and command content so clients can render command approval prompts consistently. ([#1189](https://github.com/can1357/oh-my-pi/issues/1189))
+- Fixed the status-line fast-mode indicator (`⚡`) rendering for scoped service tiers (`openai-only`, `claude-only`) even when the active model's provider didn't realize them — e.g. `serviceTier: "openai-only"` would still show the indicator next to a Claude model the wire request couldn't apply fast mode to. The indicator now consults a new `AgentSession.isFastModeActive()` predicate that runs the configured tier through `resolveServiceTier(tier, model.provider)` and only lights up when the result is `"priority"` for the current model. `isFastModeEnabled()` keeps its scope-aware semantics so `/fast on|off|toggle` and `/fast status` continue to reflect the user's configured intent.
+### Fixed
+
+- Fixed status-line context% computation freezing the UI for ~1.1 s every 2 s on long sessions (2,000+ messages). The earlier alignment fix (which uses `computeContextBreakdown` to match the `/context` slash command) was running on every agent event via `updateEditorTopBorder()` (event-controller.ts:163), and `computeContextBreakdown` walks every message through the native `countTokens` tokenizer (~0.5 ms each) — for the user's 2,312-message session this was ~1,120 ms synchronous blocking per cache miss, producing the user-visible "jittery rendering" and "status bar disappearing during streaming". `StatusLineComponent.getCachedContextBreakdown()` now uses an incremental per-message token cache: messages are walked ONCE during warm-up, and subsequent refreshes only compute tokens for the NEW messages appended since last call (typically 0–1 per refresh during streaming). The LAST message is always recomputed because its content may still be growing mid-stream; all prior messages are immutable once a newer message exists. Compaction (messages array shrinks) resets the cache. Non-message tokens (system prompt + tools + skills) are cached separately and invalidated via a cheap identity fingerprint. Result: 2,300-message warm refresh drops from ~1,120 ms to ~0.04 ms — 28,000× faster. Functional parity with the prior `computeContextBreakdown` path is preserved.
+
+### Added
+
+- Added scoped service tier values to the `serviceTier` setting: `priority (OpenAI only)` and `priority (Claude only)`. They let you opt into premium processing on one provider family without paying premium costs on the other when switching models mid-session. `/fast on` continues to set the unscoped `"priority"` (active everywhere supported); `/fast status` and `isFastModeEnabled()` now report `on` for any scoped value too.
+
+### Changed
+
+- Changed `/fast` to be a single provider-agnostic toggle: enabling the command sets `serviceTier: "priority"` for every provider, and the anthropic-messages provider translates `priority` into `speed: "fast"` plus the `fast-mode-2026-02-01` beta. Anthropic fast mode is currently supported on Claude Opus 4.6 and 4.7; the server rejects other models, which triggers the provider's auto-fallback (request retried without the priority signal, `providerSessionState.fastModeDisabled` persisted for the rest of the session). The session listens for the `"priority"` marker in `AssistantMessage.disabledFeatures`, syncs `/fast` off, and emits a warning notice. Re-running `/fast on` clears the per-session disable so the next request actually re-tries priority.
+
+## [15.1.6] - 2026-05-19
+
+### Fixed
+
+- Fixed plan-mode `resolve` looping when grammar-constrained models (e.g. Qwen3.6-35B-MTP via llama.cpp) emit `extra: { title: {} }` instead of a string — the open `Record<string, unknown>` schema for `extra` lets such models drop in an empty object, and the apply guard then hard-threw on every retry. Plan approval now derives the title from `extra.title` when usable, falling back to the plan's first `# Heading`, then the plan filename stem (`local://PLAN.md` → `PLAN`), then the literal `"plan"`. Prompt language relaxed from "MUST" to "SHOULD" for `extra.title`. ([#1179](https://github.com/can1357/oh-my-pi/issues/1179))
+
+## [15.1.5] - 2026-05-19
+
+### Fixed
+
+- Fixed `ast_grep` and `ast_edit` tool details retaining every per-file parse error — a scan over hundreds of files with syntax-error nodes inflated `details.parseErrors` to one entry per file, leaking into traces and the renderer's "X more" overflow. Errors are now capped at `PARSE_ERRORS_LIMIT` (20) at the source, with the original total preserved in a new `parseErrorsTotal` field for accurate count labels.
+
+## [15.1.4] - 2026-05-19
+
+### Fixed
+
+- Fixed `normalizePlanTitle` rejecting plan titles that contain spaces or common punctuation (e.g. "My Feature Plan") — spaces are now converted to hyphens and other invalid characters are dropped, so models that produce natural-language plan titles no longer loop forever trying to call `resolve`. ([#1176](https://github.com/can1357/oh-my-pi/issues/1176))
+- Fixed `ask` tool prompt example showing the legacy `question`/`options` top-level format instead of the current `questions: [{id, question, options}]` array format; models that closely followed the example generated calls that always failed schema validation. ([#1176](https://github.com/can1357/oh-my-pi/issues/1176))
+
+- Fixed ACP command and custom tool-call notifications to carry the original tool arguments in replayed and final updates, so command text is preserved and raw input is no longer wrapped
+- Fixed ACP async-job draining to be scoped by session owner so `getAsyncJobSnapshot` and `drainAsyncJobDeliveriesForAcp` no longer consume or expose jobs from other sessions
+- Fixed async job status reporting to include in-flight completions so queued/delivering indicators remain accurate while callbacks are still running
+- Fixed `deferAgentInitiatedTurns` handling during ACP async-job draining so background completion follow-up turns are delivered even when agent-initiated turns are deferred
+- Fixed ACP ordinary file-editing calls (`edit`, `write`, `ast_edit`) incorrectly requesting `session/request_permission` before every call, while keeping permission prompts for edit operations that delete or move files; permission requests now report the gated tool call as `pending` so clients can render the approval UI instead of returning `Permission request cancelled` without a visible prompt. ([#1134](https://github.com/can1357/oh-my-pi/pull/1134) by [@jiwangyihao](https://github.com/jiwangyihao))
+- Fixed the session tree selector to preserve a readable message column when deeply nested branch gutters would otherwise consume the viewport. ([#1144](https://github.com/can1357/oh-my-pi/issues/1144))
+
+## [15.1.3] - 2026-05-17
+### Breaking Changes
+
+- Renamed the embedded-documentation internal URL scheme from `pi://` to `omp://`. `OmpProtocolHandler` replaces `PiProtocolHandler`; update any external references accordingly.
+- Removed the `StringEnum` re-export from `@oh-my-pi/pi-coding-agent`. Custom tools and extensions should use `z.enum([...])` directly via the injected `pi.zod`.
+- Replaced the `eval` tool's LARK-grammar `input` string with a structured `cells` array. Each cell is `{ language: "py" | "js", code, title?, timeout?, reset? }`. Removed the implicit/sniffed language path, the `*** Cell` / `*** End` / `*** Abort` markers, and the per-cell `t:<duration>` unit suffixes — `timeout` is now seconds (1-600).
+
+### Added
+
+- Added `providers.<name>.transport: "pi-native"` to `models.yml`. When set, every model under that provider routes its streaming dispatch through the auth-gateway's `POST /v1/pi/stream` endpoint instead of the per-provider SDK. The provider's `baseUrl` must point at a compatible `omp auth-gateway` and `apiKey` must carry the gateway bearer. The slot's `models.json` still resolves locally for pricing/capabilities/thinking config; only the wire dispatch is redirected. Use case: containerized omp installs (robomp slots, swarm extension) where the slot must stay credential-free and a sidecar gateway holds the real provider tokens. Also surfaced as `transport` on `ProviderConfigInput` for extension-registered providers.
+- Added optional backend push for the auto-QA grievance database (`dev.autoqaPush.enabled`, `dev.autoqaPush.endpoint`, `dev.autoqaPush.token`; env overrides `PI_AUTO_QA_PUSH`, `PI_AUTO_QA_PUSH_URL`, `PI_AUTO_QA_PUSH_TOKEN`). When enabled, every `report_tool_issue` call schedules a background flush that `POST`s pending rows to the configured endpoint and deletes them on HTTP 2xx. Each push carries a stable per-install UUID (`installId`) generated on first use and persisted at `~/.omp/install-id` via `getInstallId()` (new export from `@oh-my-pi/pi-utils`), so the receiver can dedup retries across host renames and `autoqa.db` wipes. Single-flight, 5s request timeout, 30s in-memory cooldown after failure, and a row-id watermark so rows inserted during an in-flight push survive and ship next time. Tool execution remains non-blocking and never throws.
+- `ModelRegistry` now promotes `models.yml` `providers.<name>.apiKey` entries to `AuthStorage`'s new config-override tier (above OAuth, below `--api-key`). Pinning a bearer in `models.yml` was previously a no-op when the broker had an OAuth credential for the same provider — the OAuth access token won and got sent unmodified to whatever `baseUrl` you redirected to, which an auth-gateway in front of that endpoint rightly rejected with 401. The override is now honored, and is cleared/repopulated atomically on `models.yml` reload (`#reloadStaticModels` calls `clearConfigApiKeys` before re-parsing). Use case: route `anthropic` / `openai-codex` to `http://llm-gateway.internal:4000` with the gateway's own bearer.
+- Added `omp auth-broker` subcommand for running and consuming a hosted credential vault.
+- `serve [--bind=host:port]` — boots a local broker against the SQLite store at `$AGENT_DB_PATH`.
+- `token [--regenerate]` — prints (and rotates) the bearer token stored at `~/.omp/auth-broker.token`.
+- `login <provider> [--via=user@host] [--dry-run]` — drives the OAuth flow locally or via SSH `-L` tunnel into a remote broker (callback ports pinned per provider).
+- `logout <provider>` — disables every credential for the given provider in the local SQLite store.
+- `import <file|dir> [--provider=<id>] [--include-disabled] [--dry-run]` — imports CLIProxyAPI-style JSON credential dumps (`~/.cliproxy/auth/*.json`). When `OMP_AUTH_BROKER_URL` is configured, credentials are uploaded to the remote broker via `POST /v1/credential`; otherwise they go into the local SQLite store. JSON `type` is mapped to omp providers (`claude` → `anthropic`, `codex` → `openai-codex`, `gemini[-cli]` → `google-gemini-cli`, `antigravity` → `google-antigravity`); `--provider` overrides the mapping for unrecognized types.
+- `status` — pings the configured remote broker (`OMP_AUTH_BROKER_URL`).
+- Added remote credential vault support to `discoverAuthStorage`. Configure via env (`OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN`) or by setting `auth.broker.url` and `auth.broker.token` in `~/.omp/agent/config.yml` (hidden from the settings UI; supports `!command` resolution). Falls back to `~/.omp/auth-broker.token` when no token is provided inline. Otherwise behavior is unchanged.
+- Added `omp auth-broker migrate --from-local [--include-env] [--include-oauth] [--dry-run]` — uploads local SQLite credentials (and optionally env-var API keys) to the configured broker. Skips anything already on the broker via identity-key matching. OAuth is skipped by default (handled via `cliproxy` import). Idempotent on re-runs.
+- Added `omp auth-gateway` subcommand for running a forward-proxy that hides access tokens from less-trusted clients:
+- `serve [--bind=…]` — boots the gateway against the configured broker. Listens on `127.0.0.1:4000` by default.
+- `token [--regenerate]` — manages the gateway bearer token at `~/.omp/auth-gateway.token` (separate from the broker bearer).
+- `status` — verifies gateway config and authenticated broker readiness.
+- One wire surface: `POST /v1/chat/completions` (OpenAI chat-completions), `POST /v1/messages` (Anthropic messages), `POST /v1/responses` (OpenAI Responses), `GET /v1/usage` (aggregated, 5-min per-credential cache), `GET /v1/models` (catalog). Model id in the request body selects which omp provider/model services it; the gateway translates wire format ↔ omp canonical `Context` and dispatches through `pi-ai` `streamSimple()`. Container deployments (robomp, etc.) get inference auth without ever holding access tokens or the broker bearer.
+
+### Changed
+
+- Changed TTSR `interruptMode` semantics so a non-interrupting decision on a tool-source match now folds the rule reminder into that specific tool's `toolResult` content instead of queuing a loop-wide deferred follow-up turn. Text/thinking matches keep the previous deferred-injection behavior.
+
+### Fixed
+
+- Fixed streaming API requests to recover from provider auth errors by invalidating stale credentials and retrying with a fresh key
+- Fixed `auth-broker` migration, `auth-gateway` startup, and `discoverAuthStorage` to fail fast with a clear error when the broker snapshot endpoint returns a non-200 response
+- Fixed `omp auth-broker migrate` to skip local placeholder `<authenticated>` API credentials (not real keys) when exporting to a remote broker
+- Fixed `auth-gateway` token initialization to avoid clobbering an existing token when multiple processes initialize it concurrently
+- Fixed `omp auth-gateway` request handling to reject unsupported OpenAI/Anthropic protocol controls with 400 instead of accepting and ignoring them, propagate upstream error/abort terminal states as failures, preserve Responses reasoning and completed text items, accept string/system Responses messages, and keep Anthropic tool-result ordering valid.
+- Fixed gateway usage reporting to include cached-token totals for OpenAI Chat/Responses and to serve the last good cached report during transient upstream usage fetch failures.
+- Fixed auth-gateway request cancellation for requests that are already aborted before dispatch.
+- Fixed `/login` and `/logout` provider selector overflowing tall provider lists off-screen on small terminals. The selector now scrolls a 10-item window centered on the highlighted entry, shows a `(n/total)` indicator when windowed, and accepts PageUp/PageDown for faster navigation.
+
+### Fixed
+
+- Fixed `.env` loading so malformed variable names and NUL-containing values are ignored before they can poison `Bun.env` and break bash/external process execution with `nul byte found in provided data`.
+
+## [15.1.2] - 2026-05-15
+### Fixed
+
+- Fixed SSH host additions/removals made inside a running session not refreshing the live `ssh` tool. `/ssh add` and `/ssh remove` now update the model-visible host list immediately, while `/reload-plugins` and `/move` refresh SSH discovery for external or project-scope config changes without restart.
+- Fixed loose object output schemas in `YieldTool` so non-strict schemas (for example `additionalProperties: true`) are preserved and accepted instead of being forced into strict mode
+- Fixed unconstrained output schema modes (`outputSchema: true` or absent/non-strict schemas) to run in loose mode for successful results
 - Fixed bash tool calls with `pty: true` hanging indefinitely on Windows by falling back to the non-PTY executor instead of entering the ConPTY-backed interactive path. ([#1103](https://github.com/can1357/oh-my-pi/issues/1103))
 ### Added
 
