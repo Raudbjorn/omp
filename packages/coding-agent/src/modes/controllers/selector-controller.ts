@@ -1,5 +1,7 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { getApiKeyLoginProviders, getOAuthProviders, type OAuthProvider } from "@oh-my-pi/pi-ai";
+import { getApiKeyLoginProviders } from "@oh-my-pi/pi-ai/provider-models/descriptors";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
+import type { OAuthProvider } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
