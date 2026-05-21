@@ -5,13 +5,13 @@ You **MUST** merge new messages above into the existing handoff summary in <prev
 Dense telegraphic shorthand. Drop articles, filler, hedging. Fragments OK. Code/paths/commands unchanged.
 
 ## Merge Rules
-- Preserve ALL previous info
+- Preserve all previously captured info unless superseded by newer facts
 - Add new progress, decisions, context from new messages
 - Move "WIP" → "Done" when completed
 - Update "Next" based on current state
 - Preserve exact file paths, fn names, error messages
 - Add new bugs to "Bugs Fixed" when root cause found + fixed
-- Remove stale/irrelevant items
+- Remove items only when explicitly superseded or resolved by new messages
 
 ## Prioritization
 

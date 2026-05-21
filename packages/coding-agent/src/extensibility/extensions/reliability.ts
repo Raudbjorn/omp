@@ -14,10 +14,9 @@ import type { ExtensionAPI, ExtensionContext } from "./types";
  * Running compaction in turn_start (as the old Context Guard did) blocked the
  * agent mid-turn and caused disruptive interruptions.
  */
-const LOOP_HISTORY_MAX = 100;
-
 export default function (pi: ExtensionAPI) {
 	const loopHistory: ToolCallEntry[] = [];
+	const LOOP_HISTORY_MAX = 100;
 	let _loopCount = 0;
 	const _MAX_INTERVENTIONS = 4;
 	let _hasUnverifiedMutations = false;
@@ -35,8 +34,6 @@ export default function (pi: ExtensionAPI) {
 			key = String(args);
 		}
 		loopHistory.push({ tool: event.toolName, key });
-		// Cap history so long sessions can't grow it without bound; detectToolLoop
-		// only inspects a small sliding window, so older entries are unused weight.
 		if (loopHistory.length > LOOP_HISTORY_MAX) {
 			loopHistory.splice(0, loopHistory.length - LOOP_HISTORY_MAX);
 		}

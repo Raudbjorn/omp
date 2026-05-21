@@ -45,13 +45,23 @@ import {
 	refreshState,
 	toggleProvider,
 } from "./state-manager";
-import type { DashboardState } from "./types";
+import type { DashboardState, Extension } from "./types";
+
+type ActionMode =
+	| { type: "confirm"; action: string; ext: Extension; message: string }
+	| { type: "picker"; action: string; ext: Extension; options: MoveTarget[]; selectedIndex: number }
+	| { type: "input"; action: string; ext: Extension; buffer: string; placeholder?: string };
 
 export class ExtensionDashboard extends Container {
 	#state!: DashboardState;
 	#mainList!: ExtensionList;
 	#inspector!: InspectorPanel;
 	#refreshToken = 0;
+	#actionMode: ActionMode | null = null;
+	#layoutMode: "vertical" | "horizontal" = "vertical";
+	#lastScrollTime = 0;
+	#lastScrollDirection: number | "" = "";
+	#scrollStartTime = 0;
 
 	onClose?: () => void;
 	onRequestRender?: () => void;
@@ -229,6 +239,16 @@ export class ExtensionDashboard extends Container {
 
 		return parts.join("");
 	}
+
+	#handleCategoryToggle(_extensions: Extension[]): void {
+		void this.#refreshFromState();
+	}
+
+	#handleRestrictionToggle(_ext: Extension): void {
+		void this.#refreshFromState();
+	}
+
+	onOpenFile?: (path: string) => void;
 
 	#handleProviderToggle(providerId: string): void {
 		toggleProvider(providerId);

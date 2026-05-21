@@ -300,9 +300,6 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 					};
 				case "custom":
 				case "hookMessage": {
-					if (m.role === "custom" && m.customType === MULTI_BLOCK_COMMAND_MESSAGE_TYPE) {
-						return undefined;
-					}
 					const content = typeof m.content === "string" ? [{ type: "text" as const, text: m.content }] : m.content;
 					const role = "user";
 					const attribution = m.attribution;

@@ -30,8 +30,7 @@ _release_tag='v14.6.5-acp.1'
 # Derive pkgver from _release_tag: strip leading 'v' and replace '-' with '.'
 # (Arch's pkgver doesn't allow hyphens — they're reserved for pkgrel).
 #   v14.1.4-acp.5 -> 14.1.4.acp.5
-pkgver="${_release_tag#v}"
-pkgver="${pkgver//-/.}"
+pkgver=14.9.3.r5261.9a4e6c12
 pkgrel=1
 pkgdesc='Coding agent CLI with read, bash, edit, write tools and session management (Raudbjorn fork of oh-my-pi)'
 # x86_64-only: pi-natives is built twice (baseline x86-64-v2 + modern
@@ -52,7 +51,8 @@ makedepends=('bun' 'rustup' 'zig' 'rsync' 'jq')
 # appended as data. !strip preserves the bundle; !debug + !lto avoid
 # makepkg trying to extract debug info or apply LTO post-processing.
 options=('!strip' '!debug' '!lto')
-provides=('omp-coding-agent')
+provides=('omp-coding-agent' 'pi')
+conflicts=('oh-my-pi-git')
 optdepends=(
 	'ollama: local LLM inference (gemma4, qwen, etc.) without network'
 	'sccache: caches Rust compilation artifacts; speeds up rebuilds significantly'
@@ -278,6 +278,9 @@ package() {
 				"${pkgdir}/usr/bin/pi_natives.linux-x64-${_variant}.node"
 		fi
 	done
+
+	# Convenience symlink: upstream convention (pi -> omp).
+	ln -s omp "${pkgdir}/usr/bin/pi"
 
 	install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 	install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"

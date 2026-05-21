@@ -281,22 +281,6 @@ fn completion_exit_code(status: &std::process::ExitStatus) -> i32 {
 	127
 }
 
-fn completion_exit_code(status: &std::process::ExitStatus) -> i32 {
-    if let Some(code) = status.code() {
-        return code;
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt as _;
-        if let Some(signal) = status.signal() {
-            return 128 + signal;
-        }
-    }
-
-    127
-}
-
 /// Represents the result of waiting for an executing process.
 pub enum ProcessWaitResult {
 	/// The process completed.

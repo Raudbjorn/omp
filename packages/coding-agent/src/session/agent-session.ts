@@ -2215,21 +2215,6 @@ export class AgentSession {
 		);
 	}
 
-	#rekeyHindsightMemoryForCurrentSessionId(): void {
-		if (resolveMemoryBackend(this.settings).id !== "hindsight") return;
-		const sid = this.agent.sessionId;
-		if (!sid) return;
-		this.getHindsightSessionState()?.setSessionId(sid);
-	}
-
-	/** New session file: reset auto-recall / retain-threshold counters for the new transcript. */
-	#resetHindsightConversationTrackingIfHindsight(): void {
-		if (resolveMemoryBackend(this.settings).id !== "hindsight") return;
-		const state = this.getHindsightSessionState();
-		if (!state || state.aliasOf) return;
-		state.resetConversationTracking();
-	}
-
 	/**
 	 * Remove all listeners, flush pending writes, and disconnect from agent.
 	 * Call this when completely done with the session.
@@ -2915,20 +2900,6 @@ export class AgentSession {
 	/** All messages including custom types like BashExecutionMessage */
 	get messages(): AgentMessage[] {
 		return this.agent.state.messages;
-	}
-
-	/** Fork-specific: assembler bridge for tool result interception */
-	get assemblerBridge(): ToolResultBridge | undefined {
-		return this.#assemblerBridge;
-	}
-
-	set assemblerBridge(value: ToolResultBridge | undefined) {
-		this.#assemblerBridge = value;
-	}
-
-	/** Fork-specific: returns the last effective prompt snapshot from the assembler */
-	getLastPromptSnapshot(): EffectivePromptSnapshot | null | undefined {
-		return this.#getLastPromptSnapshot?.();
 	}
 
 	buildDisplaySessionContext(): SessionContext {
@@ -6149,10 +6120,10 @@ export class AgentSession {
 
 	#isTransientTransportErrorMessage(errorMessage: string): boolean {
 		// Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504,
-		// service unavailable, network/connection/socket errors, fetch failed, terminated, retry delay exceeded
+		// service unavailable, network/connection/socket errors, fetch failed, upstream errors, terminated, retry delay exceeded
 		return (
 			isUnexpectedSocketCloseMessage(errorMessage) ||
-			/overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay|stream stall|no error details in response/i.test(
+			/overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?(connect|error)|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay|stream stall|no error details in response/i.test(
 				errorMessage,
 			)
 		);
