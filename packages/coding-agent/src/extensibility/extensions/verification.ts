@@ -47,8 +47,16 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		// Check for real verification evidence in this turn
+		// Check for real verification evidence in this turn.
+		// If evidence is present, clear the gate so a single past edit can't keep it
+		// active across subsequent turns. Matches reliability.ts's
+		// `_hasUnverifiedMutations = false` on evidence.
 		const hasEvidence = hasVerificationEvidence(assistantText);
+		if (hasEvidence) {
+			pi.logger.debug("Verification: Evidence detected. Clearing mutation tracking.");
+			mutatedFiles.clear();
+			return;
+		}
 
 		// Check for explicit verification declarations
 		const isVerified = /\b(VERIFIED|VERIFICADO)\b/i.test(assistantText);
@@ -66,7 +74,7 @@ export default function (pi: ExtensionAPI) {
 								text: "[SYSTEM: You declared VERIFIED but there is no verification evidence. Run bun test or bun check and show the REAL output.]",
 							},
 						],
-						display: "none",
+						display: false,
 					},
 					{ triggerTurn: true },
 				);
@@ -99,7 +107,7 @@ export default function (pi: ExtensionAPI) {
 								text: `[SYSTEM: You modified ${mutatedFiles.size} file(s) and declared completion without real verification. Run one of these commands and show the output: ${getVerificationSuggestion()}, or declare NOT_VERIFIED if you did not verify.]`,
 							},
 						],
-						display: "none",
+						display: false,
 					},
 					{ triggerTurn: true },
 				);
