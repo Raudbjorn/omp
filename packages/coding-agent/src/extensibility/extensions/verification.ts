@@ -15,7 +15,6 @@ import type { ExtensionAPI, ExtensionContext } from "./types";
 export default function (pi: ExtensionAPI) {
 	// Track which files have been mutated in this session
 	const mutatedFiles = new Set<string>();
-	let _verificationPending = false;
 	// Tools that can mutate files
 	const MUTATING_TOOLS = new Set(["edit", "write", "ast_edit"]);
 
@@ -45,16 +44,23 @@ export default function (pi: ExtensionAPI) {
 
 		// Skip if no files were mutated this turn
 		if (mutatedFiles.size === 0) {
-			_verificationPending = false;
 			return;
 		}
 
-		// Check for real verification evidence in this turn
+		// Check for real verification evidence in this turn.
+		// If evidence is present, clear the gate so a single past edit can't keep it
+		// active across subsequent turns. Matches reliability.ts's
+		// `_hasUnverifiedMutations = false` on evidence.
 		const hasEvidence = hasVerificationEvidence(assistantText);
+		if (hasEvidence) {
+			pi.logger.debug("Verification: Evidence detected. Clearing mutation tracking.");
+			mutatedFiles.clear();
+			return;
+		}
 
 		// Check for explicit verification declarations
-		const isVerified = /\b(VERIFIED|VERIFICADO)\b/.test(assistantText);
-		const isNoVerified = /\b(NOT_VERIFIED|NO_VERIFICADO)\b/.test(assistantText);
+		const isVerified = /\b(VERIFIED|VERIFICADO)\b/i.test(assistantText);
+		const isNoVerified = /\b(NOT_VERIFIED|NO_VERIFICADO)\b/i.test(assistantText);
 
 		// Handle explicit declarations
 		if (isVerified) {
@@ -68,7 +74,7 @@ export default function (pi: ExtensionAPI) {
 								text: "[SYSTEM: You declared VERIFIED but there is no verification evidence. Run bun test or bun check and show the REAL output.]",
 							},
 						],
-						display: "none",
+						display: false,
 					},
 					{ triggerTurn: true },
 				);
@@ -76,11 +82,11 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
-		// Honest NOT_VERIFIED — let it pass but reset tracking
+		// Honest NOT_VERIFIED — let it pass but keep mutation tracking active
+		// so the next mutation/completion claim still triggers the gate.
+		// Mirrors reliability.ts's `_hasUnverifiedMutations` staying true on NOT_VERIFIED.
 		if (isNoVerified) {
-			pi.logger.debug("Verification: NOT_VERIFIED declared. Resetting mutation tracking.");
-			mutatedFiles.clear();
-			_verificationPending = false;
+			pi.logger.debug("Verification: NOT_VERIFIED declared. Mutations remain unverified.");
 			return;
 		}
 
@@ -101,7 +107,7 @@ export default function (pi: ExtensionAPI) {
 								text: `[SYSTEM: You modified ${mutatedFiles.size} file(s) and declared completion without real verification. Run one of these commands and show the output: ${getVerificationSuggestion()}, or declare NOT_VERIFIED if you did not verify.]`,
 							},
 						],
-						display: "none",
+						display: false,
 					},
 					{ triggerTurn: true },
 				);
@@ -111,13 +117,11 @@ export default function (pi: ExtensionAPI) {
 
 		// Mutation happened but agent is still working — no intervention, just prepare for next turn
 		pi.logger.debug("Verification: Mutations pending verification. Files: %o", Array.from(mutatedFiles));
-		_verificationPending = true;
 	});
 
 	// Reset all state on new agent start
 	pi.on("agent_start", () => {
 		mutatedFiles.clear();
-		_verificationPending = false;
 	});
 
 	// Helper: Extract file path from tool arguments

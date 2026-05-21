@@ -14,6 +14,8 @@ import type { ExtensionAPI, ExtensionContext } from "./types";
  * Running compaction in turn_start (as the old Context Guard did) blocked the
  * agent mid-turn and caused disruptive interruptions.
  */
+const LOOP_HISTORY_MAX = 100;
+
 export default function (pi: ExtensionAPI) {
 	const loopHistory: ToolCallEntry[] = [];
 	let _loopCount = 0;
@@ -33,6 +35,11 @@ export default function (pi: ExtensionAPI) {
 			key = String(args);
 		}
 		loopHistory.push({ tool: event.toolName, key });
+		// Cap history so long sessions can't grow it without bound; detectToolLoop
+		// only inspects a small sliding window, so older entries are unused weight.
+		if (loopHistory.length > LOOP_HISTORY_MAX) {
+			loopHistory.splice(0, loopHistory.length - LOOP_HISTORY_MAX);
+		}
 		if (MUTATING_TOOLS.has(event.toolName)) {
 			_hasUnverifiedMutations = true;
 			pi.logger.debug("Verification Gate: Mutation detected via %s. Flagging as unverified.", event.toolName);
@@ -62,7 +69,7 @@ export default function (pi: ExtensionAPI) {
 				{
 					customType: "system_intervention",
 					content: [{ type: "text", text: strategies[Math.min(_loopCount - 1, strategies.length - 1)] }],
-					display: "none",
+					display: false,
 				},
 				{ triggerTurn: true },
 			);
@@ -79,8 +86,8 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const isVerified = /\b(VERIFIED|VERIFICADO)\b/.test(assistantText);
-		const isNoVerified = /\b(NOT_VERIFIED|NO_VERIFICADO)\b/.test(assistantText);
+		const isVerified = /\b(VERIFIED|VERIFICADO)\b/i.test(assistantText);
+		const isNoVerified = /\b(NOT_VERIFIED|NO_VERIFICADO)\b/i.test(assistantText);
 
 		// Explicit VERIFIED — but where's the evidence?
 		if (isVerified) {
@@ -93,7 +100,7 @@ export default function (pi: ExtensionAPI) {
 							text: "[SYSTEM: You declared VERIFIED but there is no verification evidence (test/diff/build output). Run the corresponding command and show the REAL output.]",
 						},
 					],
-					display: "none",
+					display: false,
 				},
 				{ triggerTurn: true },
 			);
@@ -121,7 +128,7 @@ export default function (pi: ExtensionAPI) {
 							text: "[SYSTEM: You modified files and declared completion without real verification. Run bun test / bun check / git diff and show the REAL output, or declare NOT_VERIFIED if you did not verify.]",
 						},
 					],
-					display: "none",
+					display: false,
 				},
 				{ triggerTurn: true },
 			);

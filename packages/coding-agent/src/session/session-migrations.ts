@@ -24,6 +24,8 @@ function migrateV1ToV2(entries: FileEntry[]): void {
 	const ids = new Set<string>();
 	let prevId: string | null = null;
 
+	// Pass 1: assign IDs and track them in the collision set so all entries
+	// have an id before any compaction lookup runs.
 	for (const entry of entries) {
 		if (entry.type === "session") {
 			entry.version = 2;
@@ -31,19 +33,22 @@ function migrateV1ToV2(entries: FileEntry[]): void {
 		}
 
 		entry.id = generateId(ids);
+		ids.add(entry.id);
 		entry.parentId = prevId;
 		prevId = entry.id;
+	}
 
-		// Convert firstKeptEntryIndex to firstKeptEntryId for compaction
-		if (entry.type === "compaction") {
-			const comp = entry as CompactionEntry & { firstKeptEntryIndex?: number };
-			if (typeof comp.firstKeptEntryIndex === "number") {
-				const targetEntry = entries[comp.firstKeptEntryIndex];
-				if (targetEntry && targetEntry.type !== "session") {
-					comp.firstKeptEntryId = targetEntry.id;
-				}
-				delete comp.firstKeptEntryIndex;
+	// Pass 2: resolve compaction's firstKeptEntryIndex → firstKeptEntryId now
+	// that every target entry has a stable id assigned.
+	for (const entry of entries) {
+		if (entry.type !== "compaction") continue;
+		const comp = entry as CompactionEntry & { firstKeptEntryIndex?: number };
+		if (typeof comp.firstKeptEntryIndex === "number") {
+			const targetEntry = entries[comp.firstKeptEntryIndex];
+			if (targetEntry && targetEntry.type !== "session") {
+				comp.firstKeptEntryId = targetEntry.id;
 			}
+			delete comp.firstKeptEntryIndex;
 		}
 	}
 }
