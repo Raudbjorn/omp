@@ -69,29 +69,42 @@ Loaded via symbolic link.
 
 	afterEach(cleanupTempHome(() => ({ tempDir, tempHomeDir, originalHome })));
 
-	it("should discover skills by default and expose them on session.skills", async () => {
-		const { session } = await createAgentSession({
-			cwd: tempDir,
-			agentDir: tempDir,
-			sessionManager: SessionManager.inMemory(),
-			settings: createIsolatedSkillsSettings(),
-		});
+	// First createAgentSession in the suite warms up the workspace loader; give
+	// discovery tests a more generous budget so they don't flake on the boot cost
+	// when the module graph is cold (observed ~5s on first run, <1s afterward).
+	const DISCOVERY_TIMEOUT_MS = 15_000;
 
-		// Skills should be discovered and exposed on the session
-		expect(session.skills.length).toBeGreaterThan(0);
-		expect(session.skills.some((s: Skill) => s.name === "test-skill")).toBe(true);
-	});
+	it(
+		"should discover skills by default and expose them on session.skills",
+		async () => {
+			const { session } = await createAgentSession({
+				cwd: tempDir,
+				agentDir: tempDir,
+				sessionManager: SessionManager.inMemory(),
+				settings: createIsolatedSkillsSettings(),
+			});
 
-	it("should discover skills when skill directory is a symlink", async () => {
-		const { session } = await createAgentSession({
-			cwd: tempDir,
-			agentDir: tempDir,
-			sessionManager: SessionManager.inMemory(),
-			settings: createIsolatedSkillsSettings(),
-		});
+			// Skills should be discovered and exposed on the session
+			expect(session.skills.length).toBeGreaterThan(0);
+			expect(session.skills.some((s: Skill) => s.name === "test-skill")).toBe(true);
+		},
+		DISCOVERY_TIMEOUT_MS,
+	);
 
-		expect(session.skills.some((s: Skill) => s.name === "symlinked-skill")).toBe(true);
-	});
+	it(
+		"should discover skills when skill directory is a symlink",
+		async () => {
+			const { session } = await createAgentSession({
+				cwd: tempDir,
+				agentDir: tempDir,
+				sessionManager: SessionManager.inMemory(),
+				settings: createIsolatedSkillsSettings(),
+			});
+
+			expect(session.skills.some((s: Skill) => s.name === "symlinked-skill")).toBe(true);
+		},
+		DISCOVERY_TIMEOUT_MS,
+	);
 
 	it("should still discover project skills when user skills directory is missing", async () => {
 		const userAgentDir = path.join(tempHomeDir, ".omp", "agent");

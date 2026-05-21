@@ -560,24 +560,28 @@ REFERENCE_FILES = {
     "PROMPT.md": PROMPT + "\n",
     "main.ts": TS_FIXTURE,
     "main.rs": RUST_FIXTURE,
+    "main.go": GO_FIXTURE,
     "main.py": PYTHON_FIXTURE,
 }
 
 FIXTURES: tuple[tuple[str, str], ...] = (
     ("typescript", "main.ts"),
     ("rust", "main.rs"),
+    ("go", "main.go"),
     ("python", "main.py"),
 )
 
 FIXTURE_DESCRIPTIONS: dict[str, str] = {
     "typescript": "TypeScript/AST",
     "rust": "Rust/AST",
+    "go": "Go/AST",
     "python": "indentation-sensitive",
 }
 
 WORKSPACE_FILES = {
     "main.ts": TS_FIXTURE,
     "main.rs": RUST_FIXTURE,
+    "main.go": GO_FIXTURE,
     "main.py": PYTHON_FIXTURE,
 }
 

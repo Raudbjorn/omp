@@ -1,0 +1,294 @@
+# Maintainer: Sveinbjörn Geirsson <claude@sveinbjorn.dev>
+#
+# Build-and-install PKGBUILD for omp — Raudbjorn's fork of oh-my-pi.
+#
+# Default: fetches the pinned release tarball from
+# github.com/Raudbjorn/omp with sha256 verification. `makepkg -si` from
+# this PKGBUILD alone produces a reproducible build of that release.
+#
+# To build from a local worktree (dev mode), point OMP_REPO at a
+# checkout. This rsyncs your worktree over the extracted tarball:
+#
+#   OMP_REPO=/home/you/dev/omp makepkg -si
+#
+# Build strategy mirrors upstream can1357/oh-my-pi:
+#   1. Build pi-natives via cargo for baseline (x86-64-v2) and modern
+#      (x86-64-v3) CPU contracts; install each .so as a .node file.
+#   2. Run `bun --cwd=packages/coding-agent run build` — this does
+#      embed:native + bun --compile + PI_COMPILED=true.
+#
+# Loader cache invalidation: packages/natives/package.json is bumped to
+# the fork pkgver in build() so ~/.omp/natives/<version>/ is unique to
+# our release and never shadowed by stale upstream caches at
+# ~/.omp/natives/14.1.4/.
+#
+# Use packaging/archlinux/update.sh to bump _release_tag and regenerate
+# checksums when a new fork release is tagged on origin.
+
+pkgname=omp
+_release_tag='v14.6.5-acp.1'
+# Derive pkgver from _release_tag: strip leading 'v' and replace '-' with '.'
+# (Arch's pkgver doesn't allow hyphens — they're reserved for pkgrel).
+#   v14.1.4-acp.5 -> 14.1.4.acp.5
+pkgver=14.9.3.r5261.9a4e6c12
+pkgrel=1
+pkgdesc='Coding agent CLI with read, bash, edit, write tools and session management (Raudbjorn fork of oh-my-pi)'
+# x86_64-only: pi-natives is built twice (baseline x86-64-v2 + modern
+# x86-64-v3) to cover Steam-hardware-survey-class CPUs. Adding aarch64
+# would need its own cargo target and a single-variant loader path.
+arch=('x86_64')
+url='https://github.com/Raudbjorn/omp'
+license=('MIT')
+# The compiled binary bundles the bun runtime, so runtime deps are minimal.
+# icu + zlib are surfaced by transitive Rust crates.
+depends=('gcc-libs' 'glibc' 'icu' 'zlib')
+# bun compiles the standalone binary; rustup provides the pinned nightly
+# from rust-toolchain.toml; zig pins CPU contracts for zlob's host-side
+# build.rs. rsync + jq are only needed for OMP_REPO dev mode and the
+# package.json version bump; harmless for production builds.
+makedepends=('bun' 'rustup' 'zig' 'rsync' 'jq')
+# bun's --compile output is a self-contained binary with the JS bundle
+# appended as data. !strip preserves the bundle; !debug + !lto avoid
+# makepkg trying to extract debug info or apply LTO post-processing.
+options=('!strip' '!debug' '!lto')
+provides=('omp-coding-agent' 'pi')
+conflicts=('oh-my-pi-git')
+optdepends=(
+	'ollama: local LLM inference (gemma4, qwen, etc.) without network'
+	'sccache: caches Rust compilation artifacts; speeds up rebuilds significantly'
+	'mold: faster linker; auto-used during cargo build when present'
+)
+install="${pkgname}.install"
+
+# GitHub names archive-of-tag tarballs <repo>-<tag-without-v>, so for
+# tag v14.1.4-acp.5 the extracted dir is omp-14.1.4-acp.5/. We keep
+# hyphens in the dir name (distinct from pkgver's all-dots form).
+_srcname="${pkgname}-${_release_tag#v}"
+
+# Optional dev-mode override: if OMP_REPO points to a git worktree,
+# prepare() rsyncs it over the extracted tarball. The tarball is still
+# downloaded and integrity-checked first; pass --skipinteg if you need
+# to test against a release tag whose tarball doesn't exist yet.
+_default_repo=''
+_repo="${OMP_REPO:-$_default_repo}"
+
+source=("${_srcname}.tar.gz::${url}/archive/refs/tags/${_release_tag}.tar.gz")
+sha256sums=('SKIP')
+
+pkgver() {
+	# Static pkgver in production. In OMP_REPO mode, derive from the
+	# worktree so every rebuild is strictly increasing.
+	if [[ -n "${_repo}" && -d "${_repo}/.git" ]]; then
+		cd "${_repo}"
+		local base rev sha
+		base="$(jq -r '.version' packages/coding-agent/package.json 2>/dev/null || echo '14.1.4')"
+		rev="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
+		sha="$(git rev-parse --short=8 HEAD 2>/dev/null || echo 00000000)"
+		printf '%s.r%s.%s' "${base}" "${rev}" "${sha}"
+	else
+		printf '%s' "${pkgver}"
+	fi
+}
+
+prepare() {
+	if [[ -n "${_repo}" && -d "${_repo}/.git" ]]; then
+		msg2 "OMP_REPO mode: replacing extracted source with worktree at %s" "${_repo}"
+		rm -rf "${srcdir}/${_srcname}"
+		mkdir -p "${srcdir}/${_srcname}"
+		rsync -a --delete \
+			--exclude='/.git/' \
+			--exclude='/node_modules/' \
+			--exclude='/target/' \
+			--exclude='/dist/' \
+			--exclude='/dist-release/' \
+			--exclude='/packaging/archlinux/src/' \
+			--exclude='/packaging/archlinux/pkg/' \
+			--exclude='/packaging/archlinux/omp-*/' \
+			--exclude='/packaging/archlinux/*.pkg.tar.*' \
+			--exclude='**/node_modules/' \
+			--exclude='**/dist/' \
+			--exclude='**/target/' \
+			--exclude='**/.turbo/' \
+			--exclude='**/tsconfig.tsbuildinfo' \
+			--exclude='**/*.tsbuildinfo' \
+			"${_repo}/" "${srcdir}/${_srcname}/"
+	fi
+}
+
+build() {
+	cd "${srcdir}/${_srcname}"
+
+	# Resolve the pinned nightly toolchain from rust-toolchain.toml.
+	local _toolchain
+	_toolchain="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+	if [[ -z "${_toolchain}" ]]; then
+		error "Could not parse rust-toolchain.toml channel"
+		return 1
+	fi
+
+	# Install the toolchain only if missing — saves seconds on rebuilds.
+	if ! rustup run "${_toolchain}" rustc --version >/dev/null 2>&1; then
+		msg2 "Installing rustup toolchain ${_toolchain}..."
+		rustup toolchain install "${_toolchain}" --profile minimal --no-self-update
+	fi
+
+	local _rust_target='x86_64-unknown-linux-gnu'
+	local _baseline_target="${srcdir}/target-baseline"
+	local _modern_target="${srcdir}/target-modern"
+
+	export PATH="${HOME}/.cargo/bin:${PATH}"
+	export RUSTUP_TOOLCHAIN="${_toolchain}"
+	# Strip host build-flag pollution from /etc/makepkg.conf so the
+	# baseline (v2) / modern (v3) split isn't silently overridden by the
+	# user's -march=native, znver4, etc. We re-set CC/CXX below if sccache
+	# is in PATH.
+	unset CI CC CXX CFLAGS CXXFLAGS LDFLAGS RUSTFLAGS
+
+	# Optional rebuild-acceleration: if sccache is installed, wrap rustc
+	# and the C compiler so cargo's per-crate hits are cached on disk.
+	# CARGO_INCREMENTAL=0 because incremental compilation conflicts with
+	# rustc-wrapper caching (cargo issue #6489). No-op without sccache.
+	local _sccache_status='unavailable'
+	if command -v sccache >/dev/null 2>&1; then
+		export RUSTC_WRAPPER=sccache
+		export CARGO_INCREMENTAL=0
+		# Wrap C compiler too — pi-natives' transitive deps (tree-sitter
+		# grammars, libwebp-sys, libmimalloc-sys, …) build C/C++ code
+		# through cc-rs which respects CC/CXX.
+		export CC="sccache cc"
+		export CXX="sccache c++"
+		_sccache_status='enabled'
+	fi
+	msg2 "sccache: %s" "${_sccache_status}"
+
+	# Optional faster linker: append mold to the inline RUSTFLAGS for
+	# each cargo invocation (below) if mold is on PATH. We don't set
+	# RUSTFLAGS at module scope because each cargo build needs its own
+	# `-C target-cpu=...` and inline assignment overrides exported env.
+	local _link_rustflags=''
+	local _mold_status='unavailable'
+	if command -v mold >/dev/null 2>&1; then
+		_link_rustflags='-C link-arg=-fuse-ld=mold'
+		_mold_status='enabled'
+	fi
+	msg2 "mold linker: %s" "${_mold_status}"
+
+	# bun telemetry is already off via bunfig.toml; this is belt-and-braces.
+	export DO_NOT_TRACK=1
+	# Skip puppeteer/playwright browser downloads during `bun install`.
+	# omp resolves browsers lazily at runtime (~/.omp/puppeteer/) so the
+	# install-time download is wasted bytes and a frequent failure point
+	# behind firewalls or in containers without network.
+	export PUPPETEER_SKIP_DOWNLOAD=1
+	export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+	# Note: no --frozen-lockfile. Matches upstream's permissive posture
+	# (a stale ~/.bun/install/cache entry from an old upstream install
+	# can otherwise fail catalog resolution under bunfig.toml's
+	# `linker = "isolated"`). Tarball-extract gives a clean source tree
+	# every run, so the lockfile/package.json on disk match the tagged
+	# release; bun install converges to that state without mutation in
+	# the normal case. If you need stricter reproducibility, add
+	# `--frozen-lockfile --cache-dir=${srcdir}/.bun-cache` here.
+	bun install
+
+	# Bump pi-natives package.json version to the fork pkgver so the
+	# runtime loader's versionedDir (~/.omp/natives/<version>/) is unique
+	# to this release. Without this, prior-installed upstream caches at
+	# ~/.omp/natives/14.1.4/ shadow our addons (the loader checks
+	# versionedDir before execDir when isCompiledBinary is true and
+	# returns existing files without overwriting). Done after `bun
+	# install` because the catalog reference resolves against the on-disk
+	# version field; bumping before install would fail resolution.
+	jq --arg v "${pkgver}" '.version = $v' \
+		packages/natives/package.json > packages/natives/package.json.new
+	mv packages/natives/package.json.new packages/natives/package.json
+	msg2 "Set @oh-my-pi/pi-natives version to %s for cache-key uniqueness" "${pkgver}"
+
+	# Wipe both target dirs every build for deterministic output. Cargo's
+	# incremental compilation has known cross-crate staleness issues, and
+	# we already gate sccache above for the actual rebuild speedup —
+	# sccache caches the rustc invocations themselves, so warm rebuilds
+	# stay fast despite the rm -rf. If you're rebuilding repeatedly
+	# without sccache and want to keep cargo's deps cache, comment this
+	# out (you'll trade speed for the small risk of stale incremental
+	# state).
+	rm -rf "${_baseline_target}" "${_modern_target}"
+
+	CARGO_TARGET_DIR="${_baseline_target}" RUSTFLAGS="-C target-cpu=x86-64-v2 ${_link_rustflags}" \
+		cargo build --release --target "${_rust_target}" -p pi-natives
+	install -Dm755 "${_baseline_target}/${_rust_target}/release/libpi_natives.so" \
+		"packages/natives/native/pi_natives.linux-x64-baseline.node"
+
+	CARGO_TARGET_DIR="${_modern_target}" RUSTFLAGS="-C target-cpu=x86-64-v3 ${_link_rustflags}" \
+		cargo build --release --target "${_rust_target}" -p pi-natives
+	install -Dm755 "${_modern_target}/${_rust_target}/release/libpi_natives.so" \
+		"packages/natives/native/pi_natives.linux-x64-modern.node"
+
+	# embed:native + bun build --compile --define PI_COMPILED=true.
+	bun --cwd=packages/coding-agent run build
+}
+
+check() {
+	cd "${srcdir}/${_srcname}/packages/coding-agent/dist"
+
+	# Loader's execDir fallback looks for .node files next to the binary.
+	# embed:native bakes them in, but if extraction to ~/.omp/natives/
+	# fails (e.g., HOME unwritable in a chroot), the loader falls back to
+	# execDir; copy the on-disk addons here so check() exercises both
+	# paths regardless of $HOME.
+	local _variant
+	for _variant in baseline modern; do
+		local _addon="${srcdir}/${_srcname}/packages/natives/native/pi_natives.linux-x64-${_variant}.node"
+		if [[ -f "${_addon}" ]]; then
+			install -m755 "${_addon}" "./pi_natives.linux-x64-${_variant}.node"
+		fi
+	done
+
+	# Regression guard: 10s timeout on --version. Catches gross
+	# event-loop-stuck-on-exit in the compiled binary. Does NOT catch
+	# the MCP-child-cleanup hang (that needs a session with stdio MCP
+	# servers connected, which --version doesn't trigger).
+	msg2 "Verifying --version exits cleanly..."
+	if ! timeout --signal=KILL 10 ./omp --version >/dev/null; then
+		error "omp --version hung (>10s) — exit-handler regression"
+		return 1
+	fi
+	msg2 "omp --version returned and exited cleanly."
+}
+
+package() {
+	cd "${srcdir}/${_srcname}"
+
+	# Flat layout (matches upstream can1357/oh-my-pi): binary and both
+	# native variants live under /usr/bin/. The loader's execDir
+	# resolution (path.dirname(process.execPath)) lands in /usr/bin/
+	# and finds the addons there. Tradeoff: namcap may warn about
+	# non-executable .node files in /usr/bin/. We accept the lint noise
+	# for parity with upstream — the .node files are deliberately
+	# colocated so execDir works regardless of symlink hops, which a
+	# /usr/lib/omp/ layout would require working through.
+	install -Dm755 packages/coding-agent/dist/omp "${pkgdir}/usr/bin/omp"
+
+	local _variant
+	for _variant in baseline modern; do
+		local _addon="packages/natives/native/pi_natives.linux-x64-${_variant}.node"
+		if [[ -f "${_addon}" ]]; then
+			install -Dm755 "${_addon}" \
+				"${pkgdir}/usr/bin/pi_natives.linux-x64-${_variant}.node"
+		fi
+	done
+
+	# Convenience symlink: upstream convention (pi -> omp).
+	ln -s omp "${pkgdir}/usr/bin/pi"
+
+	install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+	install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+
+	local doc
+	for doc in AGENTS.md STAGES.md; do
+		if [[ -f "${doc}" ]]; then
+			install -Dm644 "${doc}" "${pkgdir}/usr/share/doc/${pkgname}/${doc}"
+		fi
+	done
+}

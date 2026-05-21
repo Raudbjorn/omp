@@ -1,7 +1,9 @@
 import { $which, logger } from "@oh-my-pi/pi-utils";
 import transcribeScript from "./transcribe.py" with { type: "text" };
+import transcribeFasterScript from "./transcribe-faster.py" with { type: "text" };
 
 export interface TranscribeOptions {
+	backend?: string;
 	modelName?: string;
 	language?: string;
 	signal?: AbortSignal;
@@ -13,17 +15,18 @@ const TRANSCRIBE_TIMEOUT_MS = 120_000;
  * Find a usable Python command.
  */
 export function resolvePython(): string | null {
-	for (const cmd of ["python", "py", "python3"]) {
+	for (const cmd of ["python3", "python", "py"]) {
 		if ($which(cmd)) return cmd;
 	}
 	return null;
 }
 
 /**
- * Transcribe a WAV file using Python openai-whisper.
+ * Transcribe a WAV file using Python whisper (openai-whisper or faster-whisper).
  *
  * Reads the WAV via Python's built-in `wave` module (no ffmpeg needed),
  * resamples to 16 kHz mono, and passes the numpy array directly to whisper.
+ * Backend selection is controlled by the `backend` option.
  */
 export async function transcribe(audioPath: string, options?: TranscribeOptions): Promise<string> {
 	const audioFile = Bun.file(audioPath);
@@ -39,9 +42,16 @@ export async function transcribe(audioPath: string, options?: TranscribeOptions)
 	const modelName = options?.modelName ?? "base.en";
 	const language = options?.language ?? "en";
 
-	logger.debug("Transcribing with Python whisper", { pythonCmd, audioPath, modelName, language });
+	logger.debug("Transcribing audio", {
+		backend: options?.backend ?? "openai-whisper",
+		pythonCmd,
+		audioPath,
+		modelName,
+		language,
+	});
 
-	const proc = Bun.spawn([pythonCmd, "-c", transcribeScript, audioPath, modelName, language], {
+	const script = options?.backend === "faster-whisper" ? transcribeFasterScript : transcribeScript;
+	const proc = Bun.spawn([pythonCmd, "-c", script, audioPath, modelName, language], {
 		stdout: "pipe",
 		stderr: "pipe",
 	});
@@ -79,6 +89,9 @@ export async function transcribe(audioPath: string, options?: TranscribeOptions)
 		logger.error("Python whisper transcription failed", { exitCode, stderr: stderr.trim() });
 		if (stderr.includes("No module named 'whisper'")) {
 			throw new Error("openai-whisper not installed. Run: pip install openai-whisper");
+		}
+		if (stderr.includes("No module named 'faster_whisper'")) {
+			throw new Error("faster-whisper not installed. Run: pip install faster-whisper");
 		}
 		// Show last line of stderr (the actual error, not the full traceback)
 		const lastLine = stderr.trim().split("\n").pop() ?? "";

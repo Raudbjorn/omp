@@ -1149,6 +1149,10 @@ export function isBuiltinSlashCommandName(name: string): boolean {
  * the input entirely. Returns a `string` when the command was handled but remaining
  * text should be sent as a prompt.
  */
+export function isBuiltinSlashCommandName(name: string): boolean {
+	return BUILTIN_SLASH_COMMAND_LOOKUP.has(name);
+}
+
 export async function executeBuiltinSlashCommand(
 	text: string,
 	runtime: BuiltinSlashCommandRuntime,

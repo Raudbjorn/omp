@@ -572,7 +572,7 @@ function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: st
 		}
 	}
 	if (model.provider === "anthropic") {
-		return normalizeAnthropicBaseUrl(model.baseUrl) ?? "https://api.anthropic.com";
+		return normalizeAnthropicBaseUrl($env.ANTHROPIC_BASE_URL) ?? normalizeAnthropicBaseUrl(model.baseUrl) ?? "https://api.anthropic.com";
 	}
 	return normalizeAnthropicBaseUrl(model.baseUrl);
 }
@@ -1858,10 +1858,17 @@ function buildParams(
 		params.system = systemBlocks;
 	}
 	disableThinkingIfToolChoiceForced(params);
-	ensureMaxTokensForThinking(params, model);
-	applyPromptCaching(params, cacheControl);
-	enforceCacheControlLimit(params, 4);
-	normalizeCacheControlTtlOrdering(params);
+	// GitHub Copilot's Anthropic proxy does not support prompt caching or thinking.
+	// Both cause a misleading model_not_supported 400. Strip all unsupported fields.
+	if (model.provider === "github-copilot") {
+		delete params.thinking;
+		delete params.output_config;
+	} else {
+		ensureMaxTokensForThinking(params, model);
+		applyPromptCaching(params, cacheControl);
+		enforceCacheControlLimit(params, 4);
+		normalizeCacheControlTtlOrdering(params);
+	}
 
 	return params;
 }

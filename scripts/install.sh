@@ -1,17 +1,21 @@
 #!/bin/sh
 set -e
 
-# OMP Coding Agent Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/can1357/oh-my-pi/main/scripts/install.sh | sh
+# OMP Coding Agent Installer (Raudbjorn fork)
+# Usage: curl -fsSL https://raw.githubusercontent.com/Raudbjorn/omp/main/scripts/install.sh | sh
 #
 # Options:
-#   --source       Install via bun (installs bun if needed)
-#   --binary       Always install prebuilt binary
-#   --ref <ref>    Install specific tag/commit/branch
+#   --source       Install via bun by cloning this repo and running `bun install -g`
+#   --binary       Always install prebuilt binary from GitHub Releases
+#   --ref <ref>    Install specific tag/commit/branch (default: repo HEAD)
 #   -r <ref>       Shorthand for --ref
+#
+# Environment:
+#   PI_INSTALL_REPO   Override the source repo (default: Raudbjorn/omp)
+#   PI_INSTALL_DIR    Override install dir for --binary (default: ~/.local/bin)
 
-REPO="can1357/oh-my-pi"
-PACKAGE="@oh-my-pi/pi-coding-agent"
+REPO="Raudbjorn/omp"
+PACKAGE="@oh-my-pi/pi-coding-agent"  # unused for fork; source install always clones REPO
 INSTALL_DIR="${PI_INSTALL_DIR:-$HOME/.local/bin}"
 MIN_BUN_VERSION="1.3.7"
 
@@ -64,6 +68,10 @@ done
 # If a ref is provided, default to source install
 if [ -n "$REF" ] && [ -z "$MODE" ]; then
     MODE="source"
+fi
+# Fork: source without --ref defaults to main branch (no npm package for this fork)
+if [ "$MODE" = "source" ] && [ -z "$REF" ]; then
+    REF="main"
 fi
 
 # Check if bun is available
@@ -139,47 +147,194 @@ has_git_lfs() {
     command -v git-lfs >/dev/null 2>&1
 }
 
-# Install via bun
+# Add INSTALL_DIR to shell rc files if not already present
+setup_path() {
+    case ":$PATH:" in
+        *":$INSTALL_DIR:"*) return 0 ;;
+    esac
+    LINE="export PATH=\"$INSTALL_DIR:\$PATH\""
+    for RC in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+        [ -f "$RC" ] || continue
+        grep -qF "$INSTALL_DIR" "$RC" 2>/dev/null && continue
+        printf '\n# omp\n%s\n' "$LINE" >> "$RC"
+        echo "  Added $INSTALL_DIR to PATH in $RC"
+    done
+    echo "  Run: . ~/.bashrc  (or open a new terminal)"
+}
+
+# Download precompiled native addons. The .node files are Rust build
+# artifacts not committed to git; building them requires the full Rust
+# toolchain, so we pull prebuilt binaries from an existing release.
+#
+# This fork does not publish its own native-addon assets, so we default to
+# upstream's releases. Override with PI_NATIVES_REPO if you later publish
+# fork-specific native binaries.
+install_natives() {
+    OS="$(uname -s)"
+    ARCH="$(uname -m)"
+    case "$OS" in
+        Linux)  PLATFORM="linux" ;;
+        Darwin) PLATFORM="darwin" ;;
+        *) echo "  Skipping natives: unsupported OS $OS"; return 0 ;;
+    esac
+    case "$ARCH" in
+        x86_64|amd64)  ARCH_NAME="x64" ;;
+        arm64|aarch64) ARCH_NAME="arm64" ;;
+        *) echo "  Skipping natives: unsupported arch $ARCH"; return 0 ;;
+    esac
+
+    UPSTREAM="${PI_NATIVES_REPO:-can1357/oh-my-pi}"
+    echo "Fetching latest upstream release tag for native addons..."
+    LATEST=$(curl -fsSL "https://api.github.com/repos/${UPSTREAM}/releases/latest" \
+        | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ -z "$LATEST" ]; then
+        echo "  Warning: could not determine upstream release tag; skipping natives"
+        return 0
+    fi
+    echo "  Upstream release: $LATEST"
+
+    NATIVE_DIR="$OMP_HOME/packages/natives/native"
+    mkdir -p "$NATIVE_DIR"
+
+    # x64 ships two CPU-dispatch variants; arm64 and darwin-arm64 ship one file.
+    if [ "$ARCH_NAME" = "x64" ]; then
+        NATIVES="pi_natives.${PLATFORM}-${ARCH_NAME}-modern.node pi_natives.${PLATFORM}-${ARCH_NAME}-baseline.node"
+    else
+        NATIVES="pi_natives.${PLATFORM}-${ARCH_NAME}.node"
+    fi
+
+    for NATIVE in $NATIVES; do
+        URL="https://github.com/${UPSTREAM}/releases/download/${LATEST}/${NATIVE}"
+        DEST="$NATIVE_DIR/$NATIVE"
+        if [ -f "$DEST" ]; then
+            echo "  $NATIVE already present, skipping"
+            continue
+        fi
+        printf "  Downloading %s..." "$NATIVE"
+        if curl -fsSL "$URL" -o "$DEST" 2>/dev/null; then
+            echo " done"
+        else
+            echo " failed (non-fatal)"
+            rm -f "$DEST"
+        fi
+    done
+}
+
+
+# Install via bun — source mode only (fork is a monorepo; not published to npm)
 install_via_bun() {
     echo "Installing via bun..."
     if [ -n "$REF" ]; then
         if ! has_git; then
-            echo "git is required for --ref when installing from source"
+            echo "git is required for source installs"
             exit 1
         fi
 
-        TMP_DIR="$(mktemp -d)"
-        trap 'rm -rf "$TMP_DIR"' EXIT
+        OMP_HOME="${OMP_HOME:-$HOME/.local/share/omp}"
+        OMP_TMP="${OMP_HOME}.tmp.$$"
 
-        if git clone --depth 1 --branch "$REF" "https://github.com/${REPO}.git" "$TMP_DIR" >/dev/null 2>&1; then
-            :
-        else
-            git clone "https://github.com/${REPO}.git" "$TMP_DIR"
-            (cd "$TMP_DIR" && git checkout "$REF")
+        # Ensure temp dir is removed if we exit early (failure, Ctrl-C, etc.)
+        _cleanup() { rm -rf "$OMP_TMP"; }
+        trap '_cleanup' EXIT INT TERM
+
+        # ── Incremental update path (fast) ───────────────────────────────────────
+        # If a valid git repo already lives at OMP_HOME, try to update in-place.
+        # This avoids a full re-clone on re-install or interrupted dep install.
+        NEED_CLONE=1
+        if [ -d "$OMP_HOME/.git" ]; then
+            echo "Existing install found at $OMP_HOME, checking for updates..."
+            if (cd "$OMP_HOME" \
+                && git fetch --depth 1 origin "$REF" >/dev/null 2>&1 \
+                && git reset --hard FETCH_HEAD >/dev/null 2>&1); then
+                NEED_CLONE=0
+                echo "  Updated to latest $REF"
+            else
+                echo "  In-place update failed — will reinstall from scratch"
+            fi
         fi
 
-        # Pull LFS files
-        if has_git_lfs; then
-            (cd "$TMP_DIR" && git lfs pull)
+        # ── Full clone path (first install or recovery) ───────────────────────────
+        if [ "$NEED_CLONE" = "1" ]; then
+            # Clone into a temp dir so the existing install (if any) stays intact
+            # until the new one is fully ready. Atomic: rm old + mv new.
+            rm -rf "$OMP_TMP"
+            echo "Cloning $REPO@$REF..."
+            if git clone --depth 1 --branch "$REF" \
+               "https://github.com/${REPO}.git" "$OMP_TMP" >/dev/null 2>&1; then
+                :
+            else
+                # Shallow clone may fail for non-branch refs (commit SHAs, etc.)
+                git clone "https://github.com/${REPO}.git" "$OMP_TMP"
+                (cd "$OMP_TMP" && git checkout "$REF")
+            fi
+
+            if has_git_lfs; then
+                (cd "$OMP_TMP" && git lfs pull 2>/dev/null || true)
+            fi
+
+            if [ ! -d "$OMP_TMP/packages/coding-agent" ]; then
+                echo "Clone succeeded but packages/coding-agent not found — wrong repo?"
+                exit 1
+            fi
+
+            # Atomically replace. From this point a failure leaves OMP_HOME intact.
+            rm -rf "$OMP_HOME"
+            mv "$OMP_TMP" "$OMP_HOME"
+            trap - EXIT INT TERM  # tmp is gone; nothing left to clean up
         fi
 
-        if [ ! -d "$TMP_DIR/packages/coding-agent" ]; then
-            echo "Expected package at ${TMP_DIR}/packages/coding-agent"
-            exit 1
-        fi
-
-        bun install -g "$TMP_DIR/packages/coding-agent" || {
-            echo "Failed to install from source"
+        # ── Dependency install ────────────────────────────────────────────────────
+        # Must run from monorepo root so all workspace siblings are resolved.
+        # bun install is idempotent; safe to re-run on retry.
+        echo "Installing workspace dependencies..."
+        (cd "$OMP_HOME" && bun install) || {
+            echo ""
+            echo "bun install failed. To retry:"
+            echo "  cd $OMP_HOME && bun install"
             exit 1
         }
+
+        # ── Native addons ───────────────────────────────────────────────────────────
+        install_natives
+
+        # ── Wrapper script ──────────────────────────────────────────────────────────
+        # Runs cli.ts via bun so node_modules resolution walks up to
+        # $OMP_HOME/node_modules and finds all workspace siblings.
+        # Handles bun not in PATH by probing known install locations.
+        mkdir -p "$INSTALL_DIR"
+        WRAPPER="$INSTALL_DIR/omp"
+        WRAPPER_TMP="${WRAPPER}.tmp.$$"
+        # Write atomically via tmp so a half-written wrapper is never executed
+        {
+            echo '#!/usr/bin/env sh'
+            echo '# omp — generated by install.sh; do not edit'
+            printf 'OMP_HOME="%s"\n' "$OMP_HOME"
+            cat << 'WRAPPER_BODY'
+if command -v bun >/dev/null 2>&1; then
+    _BUN=bun
+elif [ -x "$HOME/.bun/bin/bun" ]; then
+    _BUN="$HOME/.bun/bin/bun"
+else
+    echo "omp: bun not found — install bun: curl -fsSL https://bun.sh/install | sh" >&2
+    exit 1
+fi
+exec "$_BUN" \
+    --preload "$OMP_HOME/packages/coding-agent/src/ipv4-preload.ts" \
+    "$OMP_HOME/packages/coding-agent/src/cli.ts" \
+    "$@"
+WRAPPER_BODY
+        } > "$WRAPPER_TMP"
+        chmod +x "$WRAPPER_TMP"
+        mv "$WRAPPER_TMP" "$WRAPPER"
+
     else
-        bun install -g "$PACKAGE" || {
-            echo "Failed to install $PACKAGE"
-            exit 1
-        }
+        echo "This fork is not published to npm; --source requires a ref (a default of 'main' is applied automatically)."
+        exit 1
     fi
+
     echo ""
-    echo "✓ Installed omp via bun"
+    echo "✓ Installed omp to $INSTALL_DIR/omp"
+    setup_path
     echo "Run 'omp' to get started!"
 }
 

@@ -64,11 +64,14 @@ With most FS/bash-like tools, static references to them will automatically resol
 - `mcp://<uri>`: MCP resource
 - `pi://`: Harness documentation; do **NOT** read unless user mentions the harness itself
 
+Skills:
 {{#if skills.length}}
 # Skills
 {{#each skills}}
 - {{name}}: {{description}}
 {{/each}}
+{{else}}
+- None
 {{/if}}
 
 {{#if alwaysApplyRules.length}}
@@ -91,6 +94,8 @@ Use tools whenever they materially improve correctness, completeness, or groundi
 - You **MUST NOT** stop at the first plausible answer if a subsequent call would reduce uncertainty.
 - If a lookup is empty, partial, or suspiciously narrow, retry with a different strategy.
 - You **SHOULD** parallelize calls when possible.
+
+Every response that uses tools **MUST** emit an array of tool calls -- even if the array contains a single call. When calls are independent (no call depends on another's result), batch them in one response. They execute in parallel; results return together. Each batch is one model query regardless of how many tools it contains -- this reduces API round trips, which is the binding constraint for rate limits.
 
 {{#if toolInfo.length}}
 ## Inventory
@@ -117,6 +122,12 @@ Use tools whenever they materially improve correctness, completeness, or groundi
 {{#if secretsEnabled}}
 ## Redacted Content
 Some values in tool output are intentionally redacted as `#XXXX#` tokens. Treat them as opaque strings.
+{{/if}}
+
+{{#if intentTracing}}
+<intent-field>
+Most tools have a `{{intentField}}` parameter. Fill it with a concise intent in present participle form, 2-6 words, no period.
+</intent-field>
 {{/if}}
 
 {{#if mcpDiscoveryMode}}

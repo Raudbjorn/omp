@@ -199,3 +199,13 @@ function sanitizeAsiValue(value: unknown): ASIValue | undefined {
 	}
 	return undefined;
 }
+
+export function collectLoggedRunNumbers(results: readonly { runNumber: number | null }[]): Set<number> {
+	const runNumbers = new Set<number>();
+	for (const result of results) {
+		if (result.runNumber !== null) {
+			runNumbers.add(result.runNumber);
+		}
+	}
+	return runNumbers;
+}

@@ -1,0 +1,1148 @@
+/**
+ *
+ * Flat locator + verb edit mode backed by hashline anchors. Each entry carries
+ * one shared `loc` selector plus one or more verbs (`pre`, `splice`, `post`, `sed`).
+ * The runtime resolves those verbs into internal anchor-scoped edits and still
+ * reuses hashline's staleness scheme (`computeLineHash`) verbatim.
+ *
+ * External shapes (one entry):
+ *   { path, loc: "5th",      splice:  ["..."] }                          // line replace
+ *   { path, loc: "(5th)",    splice:  ["..."] }                          // block body replace
+ *   { path, loc: "[5th]",    splice:  ["..."] }                          // whole node replace
+ *   { path, loc: "[5th",     splice:  ["..."] }                          // anchor (incl) → closer-1
+ *   { path, loc: "5th]",     splice:  ["..."] }                          // opener+1 → anchor (incl)
+ *   { path, loc: "5th",      pre: [...], splice: [...], post: [...] }    // line verbs combinable
+ *   { path, loc: "$",        pre: [...] | post: [...] | sed: {...} }    // file-scoped
+ *
+ * `splice: []` deletes; `splice: [""]` replaces with a single blank line. These
+ * apply uniformly to single-line and bracketed (region) locators.
+ *
+ * Bracket forms in `loc` are reserved for `splice` (region replacement). `pre`,
+ * `post`, and `sed` reject bracketed locators — they are line-only.
+ *
+ * For deleting or moving files, the agent should use bash.
+ */
+
+import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { type Static, Type } from "@sinclair/typebox";
+import type { WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
+import type { ToolSession } from "../../tools";
+import { assertEditableFileContent } from "../../tools/auto-generated-guard";
+import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
+import { outputMeta } from "../../tools/output-meta";
+import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
+import { checkBodyBraceBalance, type DelimiterKind, findEnclosingBlock } from "../block";
+import { generateDiffString } from "../diff";
+import { applyIndent, detectIndentStyle, stripCommonIndent } from "../indent";
+import { computeLineHash, HASHLINE_BIGRAM_RE_SRC, HASHLINE_CONTENT_SEPARATOR } from "../line-hash";
+import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "../normalize";
+import type { EditToolDetails, LspBatchRequest } from "../renderer";
+import {
+	ANCHOR_REBASE_WINDOW,
+	type Anchor,
+	buildCompactHashlineDiffPreview,
+	formatFullAnchorRequirement,
+	HashlineMismatchError,
+	type HashMismatch,
+	hashlineParseText,
+	parseTag,
+	tryRebaseAnchor,
+} from "./hashline";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Schema
+// ═══════════════════════════════════════════════════════════════════════════
+const textSchema = Type.Array(Type.String());
+
+/**
+ * Flat entry shape with shared locator fields and verb-specific payloads.
+ * The runtime validator (`resolveAtomToolEdit`) enforces legal locator/verb
+ * combinations. Keeping the schema flat reduces tool-definition size and gives
+ * weaker models fewer branching shapes to sample from.
+ */
+export const atomEditSchema = Type.Object(
+	{
+		loc: Type.String({
+			description: "edit location",
+			examples: ["1ab", "$", "src/foo.ts:1ab"],
+		}),
+		splice: Type.Optional(textSchema),
+		pre: Type.Optional(textSchema),
+		post: Type.Optional(textSchema),
+		sed: Type.Optional(
+			Type.Object(
+				{
+					pat: Type.String({ description: "regex" }),
+					rep: Type.String({ description: "expression to replace with" }),
+					g: Type.Optional(Type.Boolean({ description: "global flag", default: false })),
+				},
+				{
+					additionalProperties: false,
+				},
+			),
+		),
+	},
+	{ additionalProperties: false },
+);
+
+export const atomEditParamsSchema = Type.Object(
+	{
+		path: Type.Optional(Type.String({ description: "default file path for edits" })),
+		edits: Type.Array(atomEditSchema, { description: "edit ops" }),
+	},
+	{ additionalProperties: false },
+);
+
+export type AtomToolEdit = Static<typeof atomEditSchema>;
+export type AtomParams = Static<typeof atomEditParamsSchema>;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Internal resolved op shapes
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type AtomEdit =
+	| { op: "splice"; pos: Anchor; lines: string[] }
+	| { op: "pre"; pos: Anchor; lines: string[] }
+	| { op: "post"; pos: Anchor; lines: string[] }
+	| { op: "del"; pos: Anchor }
+	| { op: "append_file"; lines: string[] }
+	| { op: "prepend_file"; lines: string[] }
+	| { op: "sed"; pos: Anchor; spec: SedSpec; expression: string }
+	| { op: "sed_file"; spec: SedSpec; expression: string }
+	| { op: "splice_block"; pos: Anchor; spec: SpliceBlockSpec; bracket: BracketShape };
+
+export interface SedSpec {
+	pattern: string;
+	replacement: string;
+	global: boolean;
+}
+
+export interface SpliceBlockSpec {
+	body: string[];
+	kind: DelimiterKind;
+}
+
+type BracketShape = "none" | "body" | "node" | "left_incl" | "left_excl" | "right_incl" | "right_excl";
+
+// File-extension lookup for the block delimiter family used when `loc`
+// has bracket forms. Most languages are brace-family; lisp-family uses `(`.
+// Anything not listed defaults to `{` (covers the long tail of brace-style
+// languages without enumerating every extension).
+const LISP_EXTENSIONS = new Set(["clj", "cljs", "cljc", "edn", "lisp", "lsp", "el", "scm", "ss", "rkt", "fnl"]);
+
+function fileExtension(path: string | undefined): string | undefined {
+	if (!path) return undefined;
+	const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+	const base = slash >= 0 ? path.slice(slash + 1) : path;
+	const dot = base.lastIndexOf(".");
+	if (dot <= 0) return undefined;
+	return base.slice(dot + 1).toLowerCase();
+}
+
+function resolveBlockDelimiterForPath(path: string | undefined): DelimiterKind {
+	const ext = fileExtension(path);
+	if (ext && LISP_EXTENSIONS.has(ext)) return "(";
+	return "{";
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Param guards
+// ═══════════════════════════════════════════════════════════════════════════
+
+const ATOM_VERB_KEYS = ["splice", "pre", "post", "sed"] as const;
+type AtomOptionalKey = "loc" | (typeof ATOM_VERB_KEYS)[number];
+const ATOM_OPTIONAL_KEYS = ["loc", ...ATOM_VERB_KEYS] as const satisfies readonly AtomOptionalKey[];
+
+// Matches just the LINE+BIGRAM prefix of an anchor reference. Used to detect
+// optional `|content` suffixes (e.g. `82zu|  for (...)`) so the suffix can be
+// captured as a content hint for anchor disambiguation.
+const ANCHOR_PREFIX_RE = new RegExp(`^\\s*[>+-]*\\s*\\d+${HASHLINE_BIGRAM_RE_SRC}`);
+
+// Splits `path:loc` references where the right side starts with a valid anchor
+// (single `\d+<bigram>` or `<anchor>-<anchor>` range, optionally followed by a
+// content suffix using `|` or `:`). The non-greedy `(.+?)` picks the leftmost
+// colon whose RHS is a real anchor, so colons inside the loc's content suffix
+// (TS type annotations, etc.) don't break the split. Drive-letter prefixes like
+// `C:\path\a.ts:160sr` still resolve correctly because the first colon's RHS
+// fails the anchor pattern.
+const ANCHOR_TAG_RE_SRC = `\\s*[>+-]*\\s*\\d+${HASHLINE_BIGRAM_RE_SRC}`;
+const PATH_LOC_SPLIT_RE = new RegExp(
+	`^(.+?):([\\[(]?${ANCHOR_TAG_RE_SRC}(?:-${ANCHOR_TAG_RE_SRC})?(?:[|:].*)?[\\])]?)$`,
+);
+
+function stripNullAtomFields(edit: AtomToolEdit): AtomToolEdit {
+	let next: Record<string, unknown> | undefined;
+	const fields = edit as Record<string, unknown>;
+	for (const key of ATOM_OPTIONAL_KEYS) {
+		if (fields[key] !== null) continue;
+		next ??= { ...fields };
+		delete next[key];
+	}
+	return (next ?? fields) as AtomToolEdit;
+}
+
+type ParsedAtomLoc = { kind: "anchor"; pos: Anchor; bracket: BracketShape } | { kind: "file" };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Resolution
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Parse an anchor reference like `"5th"`.
+ *
+ * Tolerant: on a malformed reference we still try to extract a 1-indexed line
+ * number from the leading digits so the validator can surface the *correct*
+ * `LINEHASH|content` for the user. The bogus hash is preserved in the returned
+ * anchor so the validator emits a content-rich mismatch error.
+ *
+ * If we cannot recover even a line number, throw a usage-style error with the
+ * raw reference quoted.
+ */
+function parseAnchor(raw: string, opName: string): Anchor {
+	if (typeof raw !== "string" || raw.length === 0) {
+		throw new Error(`${opName} requires ${formatFullAnchorRequirement()}.`);
+	}
+	try {
+		return parseTag(raw);
+	} catch {
+		const lineMatch = /^\s*[>+-]*\s*(\d+)/.exec(raw);
+		if (lineMatch) {
+			const line = Number.parseInt(lineMatch[1], 10);
+			if (line >= 1) {
+				// Sentinel hash that will never match a real line, forcing the validator
+				// to report a mismatch with the actual hash + line content.
+				return { line, hash: "??" };
+			}
+		}
+		throw new Error(
+			`${opName} requires ${formatFullAnchorRequirement(raw)} Could not find a line number in the anchor.`,
+		);
+	}
+}
+
+function tryParseAtomTag(raw: string): Anchor | undefined {
+	try {
+		return parseTag(raw);
+	} catch {
+		return undefined;
+	}
+}
+
+function resolveAtomEntryPath(
+	edit: AtomToolEdit,
+	topLevelPath: string | undefined,
+	editIndex: number,
+): AtomToolEdit & { path: string } {
+	const entry = stripNullAtomFields(edit);
+	let loc = entry.loc;
+	let pathOverride: string | undefined;
+	if (typeof loc === "string") {
+		const split = loc.match(PATH_LOC_SPLIT_RE);
+		if (split) {
+			pathOverride = split[1];
+			loc = split[2]!;
+		}
+	}
+	const path = pathOverride || topLevelPath;
+	if (!path) {
+		throw new Error(
+			`Edit ${editIndex}: missing path. Provide a top-level path or prefix loc with a file path (for example "a.ts:160sr").`,
+		);
+	}
+	return { ...entry, path, ...(loc !== entry.loc ? { loc } : {}) };
+}
+
+export function resolveAtomEntryPaths(
+	edits: readonly AtomToolEdit[],
+	topLevelPath: string | undefined,
+): (AtomToolEdit & { path: string })[] {
+	return edits.map((edit, i) => resolveAtomEntryPath(edit, topLevelPath, i));
+}
+
+function parseLoc(raw: string, editIndex: number): ParsedAtomLoc {
+	const trimmed = raw.trim();
+	if (trimmed === "$") return { kind: "file" };
+
+	const leading = trimmed[0];
+	const trailing = trimmed[trimmed.length - 1];
+	const hasLeading = leading === "[" || leading === "(";
+	const hasTrailing = trailing === "]" || trailing === ")";
+	if ((leading === "(" && trailing === "]") || (leading === "[" && trailing === ")")) {
+		throw new Error(
+			`Edit ${editIndex}: mixed bracket inclusivity in loc is ambiguous; use [anchor, (anchor, anchor], anchor), [anchor], or a bare anchor.`,
+		);
+	}
+
+	let inner = trimmed;
+	if (hasLeading) inner = inner.slice(1);
+	if (hasTrailing) inner = inner.slice(0, -1);
+
+	// Detect range syntax explicitly: "<anchor>-<anchor>". A bare `-` inside the
+	// loc (e.g. line content like `i--`) should not trigger the range error.
+	const dash = inner.indexOf("-");
+	if (dash > 0) {
+		const left = inner.slice(0, dash);
+		const right = inner.slice(dash + 1);
+		if (tryParseAtomTag(left) !== undefined && tryParseAtomTag(right) !== undefined) {
+			throw new Error(
+				`Edit ${editIndex}: atom loc does not support line ranges. Use a single anchor like "160sr" or "$".`,
+			);
+		}
+	}
+	const pos = parseAnchor(inner, "loc");
+	// Capture an optional content suffix after the anchor: `82zu|  for (...)`.
+	// The suffix acts as a hint for anchor disambiguation when the model's hash
+	// is wrong but the content reveals the intended line.
+	const hint = extractAnchorContentHint(inner);
+	if (hint !== undefined) {
+		pos.contentHint = hint;
+	}
+
+	let bracket: BracketShape = "none";
+	if (leading === "[" && trailing === "]") bracket = "node";
+	else if (leading === "[") bracket = "left_incl";
+	else if (leading === "(" && trailing === ")") bracket = "body";
+	else if (leading === "(") bracket = "left_excl";
+	else if (trailing === "]") bracket = "right_incl";
+	else if (trailing === ")") bracket = "right_excl";
+	return { kind: "anchor", pos, bracket };
+}
+
+function extractAnchorContentHint(raw: string): string | undefined {
+	const match = raw.match(ANCHOR_PREFIX_RE);
+	if (!match) return undefined;
+	const rest = raw.slice(match[0].length);
+	// Accept either the canonical `|` (HASHLINE_CONTENT_SEPARATOR) or the legacy
+	// `:` separator. Models trained on older docs still emit `82zu:  for (...)`.
+	const sep = rest[0];
+	if (sep !== HASHLINE_CONTENT_SEPARATOR && sep !== ":") return undefined;
+	const hint = rest.slice(1);
+	if (hint.trim().length === 0) return undefined;
+	return hint;
+}
+
+function parseSedSpec(input: unknown, editIndex: number): SedSpec {
+	if (input === null || typeof input !== "object" || Array.isArray(input)) {
+		throw new Error(`Edit ${editIndex}: sed must be an object with shape {pat, rep, g?}.`);
+	}
+	const obj = input as Record<string, unknown>;
+	const pat = obj.pat;
+	const rep = obj.rep;
+	if (typeof pat !== "string" || pat.length === 0) {
+		throw new Error(`Edit ${editIndex}: sed.pat must be a non-empty string.`);
+	}
+	if (pat.includes("\n")) {
+		throw new Error(
+			`Edit ${editIndex}: sed.pat must be a single line; contains a newline. Use \`splice\` to replace multiple lines, anchoring the first changed line and listing replacement lines in the array.`,
+		);
+	}
+	if (typeof rep !== "string") {
+		throw new Error(`Edit ${editIndex}: sed.rep must be a string.`);
+	}
+	const rawGlobal = obj.g;
+	let global = false;
+	if (rawGlobal !== undefined) {
+		if (typeof rawGlobal !== "boolean") {
+			throw new Error(`Edit ${editIndex}: sed.g must be a boolean when provided.`);
+		}
+		global = rawGlobal;
+	}
+	return { pattern: pat, replacement: rep, global };
+}
+
+function formatSedExpression(spec: SedSpec): string {
+	const obj: { pat: string; rep: string; g?: boolean } = {
+		pat: spec.pattern,
+		rep: spec.replacement,
+	};
+	// Only emit non-default flags so error messages stay compact (g defaults false).
+	if (spec.global) obj.g = true;
+	return JSON.stringify(obj);
+}
+
+function applyLiteralSed(currentLine: string, spec: SedSpec): { result: string; matched: boolean } {
+	const idx = currentLine.indexOf(spec.pattern);
+	if (idx === -1) return { result: currentLine, matched: false };
+	if (spec.global) {
+		return { result: currentLine.split(spec.pattern).join(spec.replacement), matched: true };
+	}
+	return {
+		result: currentLine.slice(0, idx) + spec.replacement + currentLine.slice(idx + spec.pattern.length),
+		matched: true,
+	};
+}
+
+function applySedToLine(
+	currentLine: string,
+	spec: SedSpec,
+): { result: string; matched: boolean; error?: string; literalFallback?: boolean } {
+	let flags = "";
+	if (spec.global) flags += "g";
+	let re: RegExp | undefined;
+	let compileError: string | undefined;
+	try {
+		re = new RegExp(spec.pattern, flags);
+	} catch (e) {
+		compileError = (e as Error).message;
+	}
+	if (re?.test(currentLine)) {
+		re.lastIndex = 0;
+		const probe = re.exec(currentLine);
+		re.lastIndex = 0;
+		// Zero-length matches (e.g. `()`, `(?=…)`, `^`, `$`) cause `String.replace` to
+		// insert the replacement at the match position rather than substitute. When that
+		// happens, fall through to the literal-substring fallback below — the model almost
+		// always meant the pattern literally (`()` is the parens, `^` is a caret, etc.).
+		if (!probe || probe[0].length > 0) {
+			return { result: currentLine.replace(re, spec.replacement), matched: true };
+		}
+	}
+	// Fall back to literal substring match. Models frequently send sed patterns
+	// containing unescaped regex metacharacters (parentheses, `?`, `.`) that they
+	// intend as literal code. Trying a literal match before reporting failure
+	// recovers the obvious intent without changing semantics for patterns that
+	// already match as regex.
+	const literal = applyLiteralSed(currentLine, spec);
+	if (literal.matched) {
+		return { ...literal, literalFallback: true };
+	}
+	if (compileError !== undefined) {
+		return { result: currentLine, matched: false, error: compileError };
+	}
+	return { result: currentLine, matched: false };
+}
+
+function classifyAtomEdit(edit: AtomToolEdit): string {
+	const entry = stripNullAtomFields(edit);
+	const verbs = ATOM_VERB_KEYS.filter(k => entry[k] !== undefined);
+	return verbs.length > 0 ? verbs.join("+") : "unknown";
+}
+
+function resolveAtomToolEdit(edit: AtomToolEdit, editIndex = 0, path?: string): AtomEdit[] {
+	const entry = stripNullAtomFields(edit);
+	const verbKeysPresent = ATOM_VERB_KEYS.filter(k => entry[k] !== undefined);
+	if (verbKeysPresent.length === 0) {
+		throw new Error(
+			`Edit ${editIndex}: missing verb. Each entry must include at least one of: ${ATOM_VERB_KEYS.join(", ")}.`,
+		);
+	}
+	if (typeof entry.loc !== "string") {
+		throw new Error(`Edit ${editIndex}: missing loc. Use a selector like "160sr" or "$".`);
+	}
+
+	const loc = parseLoc(entry.loc, editIndex);
+	const resolved: AtomEdit[] = [];
+
+	if (loc.kind === "file") {
+		if (entry.splice !== undefined) {
+			throw new Error(`Edit ${editIndex}: loc "$" supports pre, post, and sed (not splice).`);
+		}
+		if (entry.pre !== undefined) {
+			resolved.push({ op: "prepend_file", lines: hashlineParseText(entry.pre) });
+		}
+		if (entry.post !== undefined) {
+			resolved.push({ op: "append_file", lines: hashlineParseText(entry.post) });
+		}
+		if (entry.sed !== undefined) {
+			const spec = parseSedSpec(entry.sed, editIndex);
+			resolved.push({ op: "sed_file", spec, expression: formatSedExpression(spec) });
+		}
+		return resolved;
+	}
+
+	if (loc.bracket !== "none") {
+		// Bracketed locator: only `splice` is meaningful (region replacement).
+		const hasInvalidVerb = entry.pre !== undefined || entry.post !== undefined || entry.sed !== undefined;
+		if (hasInvalidVerb) {
+			throw new Error(
+				`Edit ${editIndex}: bracket forms in loc are splice-only; remove pre/post/sed or use a bare anchor.`,
+			);
+		}
+		if (entry.splice === undefined) {
+			throw new Error(
+				`Edit ${editIndex}: bracket loc requires \`splice\`. Bare anchors are line-only; brackets address a region.`,
+			);
+		}
+		const kind = resolveBlockDelimiterForPath(path);
+		const body = hashlineParseText(entry.splice);
+		resolved.push({ op: "splice_block", pos: loc.pos, spec: { body, kind }, bracket: loc.bracket });
+		return resolved;
+	}
+
+	if (entry.pre !== undefined) {
+		resolved.push({ op: "pre", pos: loc.pos, lines: hashlineParseText(entry.pre) });
+	}
+	if (entry.splice !== undefined) {
+		if (Array.isArray(entry.splice) && entry.splice.length === 0) {
+			// Models often default `splice: []` alongside other verbs (notably `sed`).
+			// Treating that combination as an explicit `del` produces a confusing
+			// `Conflicting ops` error. When another mutating verb is present, drop
+			// the empty `splice` instead of treating it as a deletion.
+			if (entry.sed === undefined) {
+				resolved.push({ op: "del", pos: loc.pos });
+			}
+		} else {
+			resolved.push({ op: "splice", pos: loc.pos, lines: hashlineParseText(entry.splice) });
+		}
+	}
+	if (entry.post !== undefined) {
+		resolved.push({ op: "post", pos: loc.pos, lines: hashlineParseText(entry.post) });
+	}
+	if (entry.sed !== undefined) {
+		const spliceIsExplicitReplacement = Array.isArray(entry.splice) && entry.splice.length > 0;
+		// Models often duplicate intent by sending both an explicit `splice` and a
+		// matching `sed`. The explicit replacement wins; the redundant `sed` would
+		// otherwise trigger a confusing `Conflicting ops` rejection.
+		if (!spliceIsExplicitReplacement) {
+			const spec = parseSedSpec(entry.sed, editIndex);
+			resolved.push({ op: "sed", pos: loc.pos, spec, expression: formatSedExpression(spec) });
+		}
+	}
+	return resolved;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Validation
+// ═══════════════════════════════════════════════════════════════════════════
+
+function* getAtomAnchors(edit: AtomEdit): Iterable<Anchor> {
+	switch (edit.op) {
+		case "splice":
+		case "pre":
+		case "post":
+		case "del":
+		case "sed":
+		case "splice_block":
+			yield edit.pos;
+			return;
+		default:
+			return;
+	}
+}
+
+/**
+ * Search for a line near `anchor.line` whose trimmed content equals the
+ * anchor's content hint. Returns the closest match (preferring lines below the
+ * requested anchor on ties) or `null` when no line matches. Strict equality on
+ * trimmed content keeps this conservative \u2014 we only retarget when there is no
+ * ambiguity about the model's intent.
+ */
+function findLineByContentHint(anchor: Anchor, fileLines: string[]): number | null {
+	const hint = anchor.contentHint?.trim();
+	if (!hint) return null;
+	const lo = Math.max(1, anchor.line - ANCHOR_REBASE_WINDOW);
+	const hi = Math.min(fileLines.length, anchor.line + ANCHOR_REBASE_WINDOW);
+	let best: { line: number; distance: number } | null = null;
+	for (let line = lo; line <= hi; line++) {
+		if (fileLines[line - 1].trim() !== hint) continue;
+		const distance = Math.abs(line - anchor.line);
+		if (best === null || distance < best.distance) {
+			best = { line, distance };
+		}
+	}
+	return best?.line ?? null;
+}
+
+function validateAtomAnchors(edits: AtomEdit[], fileLines: string[], warnings: string[]): HashMismatch[] {
+	const mismatches: HashMismatch[] = [];
+	for (const edit of edits) {
+		for (const anchor of getAtomAnchors(edit)) {
+			if (anchor.line < 1 || anchor.line > fileLines.length) {
+				throw new Error(`Line ${anchor.line} does not exist (file has ${fileLines.length} lines)`);
+			}
+			const actualHash = computeLineHash(anchor.line, fileLines[anchor.line - 1]);
+			if (actualHash === anchor.hash) continue;
+			// When the model supplied a content hint after the anchor (e.g.
+			// `82zu|  for (...)`), prefer rebasing to the line that actually matches
+			// that content. This avoids false positives from hash-only rebasing where
+			// a coincidentally matching hash on a nearby line silently retargets the
+			// edit to the wrong line.
+			const hinted = findLineByContentHint(anchor, fileLines);
+			if (hinted !== null) {
+				const original = `${anchor.line}${anchor.hash}`;
+				const hintedHash = computeLineHash(hinted, fileLines[hinted - 1]);
+				anchor.line = hinted;
+				anchor.hash = hintedHash;
+				warnings.push(
+					`Auto-rebased anchor ${original} → ${hinted}${hintedHash} (matched the content hint provided after the anchor).`,
+				);
+				continue;
+			}
+			const rebased = tryRebaseAnchor(anchor, fileLines);
+			if (rebased !== null) {
+				const original = `${anchor.line}${anchor.hash}`;
+				anchor.line = rebased;
+				warnings.push(
+					`Auto-rebased anchor ${original} → ${rebased}${anchor.hash} (line shifted within ±${ANCHOR_REBASE_WINDOW}; hash matched).`,
+				);
+				continue;
+			}
+			mismatches.push({ line: anchor.line, expected: anchor.hash, actual: actualHash });
+		}
+	}
+	return mismatches;
+}
+
+function validateNoConflictingAnchorOps(edits: AtomEdit[]): void {
+	// For each anchor line, at most one mutating op (splice/del). Multiple `sed`
+	// ops on the same line are allowed and applied sequentially. `pre`/`post`
+	// (insert ops) may coexist with them — they don't mutate the anchor line.
+	const mutatingPerLine = new Map<number, string>();
+	for (const edit of edits) {
+		if (edit.op !== "splice" && edit.op !== "del" && edit.op !== "sed") continue;
+		const existing = mutatingPerLine.get(edit.pos.line);
+		if (existing) {
+			if (existing === "sed" && edit.op === "sed") continue;
+			throw new Error(
+				`Conflicting ops on anchor line ${edit.pos.line}: \`${existing}\` and \`${edit.op}\`. ` +
+					`At most one of splice/del is allowed per anchor.`,
+			);
+		}
+		mutatingPerLine.set(edit.pos.line, edit.op);
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Apply
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface AtomNoopEdit {
+	editIndex: number;
+	loc: string;
+	reason: string;
+	current: string;
+}
+
+interface SpliceBlockApplyResult {
+	text: string;
+	firstChangedLine: number | undefined;
+}
+
+type SpliceBlockEdit = Extract<AtomEdit, { op: "splice_block" }>;
+
+function lineStartOffset(text: string, line: number): number {
+	let currentLine = 1;
+	let offset = 0;
+	while (offset < text.length && currentLine < line) {
+		if (text[offset] === "\n") currentLine++;
+		offset++;
+	}
+	return offset;
+}
+
+function lineEndOffset(text: string, line: number): number {
+	let offset = lineStartOffset(text, line);
+	while (offset < text.length && text[offset] !== "\n") offset++;
+	return offset;
+}
+
+function lineEndIncludingNewlineOffset(text: string, line: number): number {
+	const offset = lineEndOffset(text, line);
+	return text[offset] === "\n" ? offset + 1 : offset;
+}
+
+function spliceBlockLocatorLabel(bracket: BracketShape): string {
+	switch (bracket) {
+		case "none":
+		case "body":
+			return "(anchor)";
+		case "node":
+			return "[anchor]";
+		case "left_incl":
+			return "[anchor";
+		case "left_excl":
+			return "(anchor";
+		case "right_incl":
+			return "anchor]";
+		case "right_excl":
+			return "anchor)";
+	}
+}
+
+function applySpliceBlockEdits(
+	originalText: string,
+	edits: SpliceBlockEdit[],
+	warnings: string[],
+): SpliceBlockApplyResult {
+	// Sort by anchor line descending so applying earlier ops doesn't shift
+	// later anchors. (Multiple splice_block ops within one call are assumed
+	// non-overlapping; overlapping ranges are not supported.)
+	const sorted = [...edits].sort((a, b) => b.pos.line - a.pos.line);
+	const destStyle = detectIndentStyle(originalText);
+	let text = originalText;
+	let firstChangedLine: number | undefined;
+
+	for (const edit of sorted) {
+		const kind: DelimiterKind = edit.spec.kind;
+		const found = findEnclosingBlock(text, edit.pos.line, { kind, depth: 0 });
+		if ("message" in found) {
+			throw new Error(`splice at anchor ${edit.pos.line}: ${found.message}`);
+		}
+		const replacedLineCount = found.closeLine - found.openLine + 1;
+		warnings.push(
+			`splice locator ${spliceBlockLocatorLabel(edit.bracket)} replaced \`${kind}\` block at lines ${found.openLine}-${found.closeLine} ` +
+				`(${replacedLineCount} lines, 1 of ${found.enclosingCount} enclosing \`${kind}\` blocks).`,
+		);
+		const balanceErr = checkBodyBraceBalance(edit.spec.body.join("\n"), kind);
+		if (balanceErr) {
+			throw new Error(`splice at anchor ${edit.pos.line}: ${balanceErr}`);
+		}
+
+		const stripped = stripCommonIndent(edit.spec.body);
+		const bodyPrefix = found.bodyLineIndent ?? `${found.openerLineIndent}${defaultIndentUnit(destStyle)}`;
+
+		let replacementText: string;
+		let replaceStart: number;
+		let replaceEnd: number;
+
+		switch (edit.bracket) {
+			case "node": {
+				const indented = applyIndent(stripped, found.openerLineIndent, destStyle);
+				replacementText = indented.join("\n");
+				replaceStart = found.openLineStart;
+				replaceEnd = found.closeOffsetExclusive;
+				break;
+			}
+			case "left_incl":
+			case "left_excl": {
+				const indented = applyIndent(stripped, bodyPrefix, destStyle);
+				replacementText = `${indented.join("\n")}\n${found.openerLineIndent}`;
+				replaceStart =
+					edit.bracket === "left_incl"
+						? lineStartOffset(text, edit.pos.line)
+						: lineEndIncludingNewlineOffset(text, edit.pos.line);
+				replaceEnd = found.bodyEnd;
+				break;
+			}
+			case "right_incl":
+			case "right_excl": {
+				const indented = applyIndent(stripped, bodyPrefix, destStyle);
+				replacementText = `\n${indented.join("\n")}\n`;
+				replaceStart = found.bodyStart;
+				replaceEnd =
+					edit.bracket === "right_incl"
+						? lineEndIncludingNewlineOffset(text, edit.pos.line)
+						: lineStartOffset(text, edit.pos.line);
+				break;
+			}
+			case "none":
+			case "body": {
+				const goInline = found.sameLine && stripped.length === 1;
+				if (goInline) {
+					const single = stripped.length === 0 ? "" : stripped[0]!.trim();
+					const pad = kind === "{" ? " " : "";
+					replacementText = single.length > 0 ? `${pad}${single}${pad}` : pad;
+				} else {
+					const indented = applyIndent(stripped, bodyPrefix, destStyle);
+					replacementText = `\n${indented.join("\n")}\n${found.openerLineIndent}`;
+				}
+				replaceStart = found.bodyStart;
+				replaceEnd = found.bodyEnd;
+				break;
+			}
+		}
+
+		const before = text.slice(0, replaceStart);
+		const after = text.slice(replaceEnd);
+		const newText = before + replacementText + after;
+
+		text = newText;
+		if (firstChangedLine === undefined || found.openLine < firstChangedLine) {
+			firstChangedLine = found.openLine;
+		}
+	}
+	return { text, firstChangedLine };
+}
+
+function defaultIndentUnit(style: { kind: "tab" | "space"; width: number }): string {
+	return style.kind === "tab" ? "\t" : " ".repeat(Math.max(1, style.width));
+}
+
+export function applyAtomEdits(
+	text: string,
+	edits: AtomEdit[],
+): {
+	lines: string;
+	firstChangedLine: number | undefined;
+	warnings?: string[];
+	noopEdits?: AtomNoopEdit[];
+} {
+	if (edits.length === 0) {
+		return { lines: text, firstChangedLine: undefined };
+	}
+
+	const fileLines = text.split("\n");
+	const warnings: string[] = [];
+	let firstChangedLine: number | undefined;
+	const noopEdits: AtomNoopEdit[] = [];
+
+	const mismatches = validateAtomAnchors(edits, fileLines, warnings);
+	if (mismatches.length > 0) {
+		throw new HashlineMismatchError(mismatches, fileLines);
+	}
+	// When a `del` and a `sed`/`splice` target the same anchor (across separate edit
+	// entries), the `del` is almost always a hallucinated cleanup the model added on top
+	// of the real replacement. Drop the `del` silently so the replacement wins, matching
+	// the in-entry handling for `splice: []` paired with `sed`.
+	const replacedLines = new Set<number>();
+	for (const e of edits) {
+		if (e.op === "splice" || e.op === "sed") replacedLines.add(e.pos.line);
+	}
+	let effective = edits;
+	if (replacedLines.size > 0) {
+		effective = edits.filter(e => !(e.op === "del" && replacedLines.has(e.pos.line)));
+	}
+	validateNoConflictingAnchorOps(effective);
+
+	// splice_block ops own their entire block range. To keep line numbers sane,
+	// they cannot mix with other anchor-scoped ops in the same call. They may
+	// coexist with each other (sorted by openLine descending so earlier ops
+	// don't shift later anchors).
+	const spliceBlockEdits = effective.filter(
+		(e): e is Extract<AtomEdit, { op: "splice_block" }> => e.op === "splice_block",
+	);
+	if (spliceBlockEdits.length > 0) {
+		const otherAnchorOps = effective.filter(e => e.op !== "splice_block" && "pos" in e);
+		if (otherAnchorOps.length > 0) {
+			const otherOps = [...new Set(otherAnchorOps.map(e => e.op))].sort().join("/");
+			throw new Error(
+				`splice_block cannot be combined with other anchor-scoped ops (${otherOps}) in the same call: ` +
+					`block expansions shift line numbers and would silently misapply line-scoped edits. Split into separate calls.`,
+			);
+		}
+		const result = applySpliceBlockEdits(text, spliceBlockEdits, warnings);
+		if (result.firstChangedLine !== undefined) {
+			if (firstChangedLine === undefined || result.firstChangedLine < firstChangedLine) {
+				firstChangedLine = result.firstChangedLine;
+			}
+		}
+		// Continue pipeline against the post-splice_block text.
+		fileLines.length = 0;
+		for (const line of result.text.split("\n")) fileLines.push(line);
+		effective = effective.filter(e => e.op !== "splice_block");
+	}
+
+	const trackFirstChanged = (line: number) => {
+		if (firstChangedLine === undefined || line < firstChangedLine) {
+			firstChangedLine = line;
+		}
+	};
+
+	// Partition: anchor-scoped vs file-scoped. Preserve original order via the
+	// captured idx so multiple pre/post on the same target are emitted in the order
+	// the model produced them.
+	type Indexed<T> = { edit: T; idx: number };
+	type AnchorEdit = Exclude<AtomEdit, { op: "append_file" } | { op: "prepend_file" } | { op: "sed_file" }>;
+	const anchorEdits: Indexed<AnchorEdit>[] = [];
+	const appendEdits: Indexed<Extract<AtomEdit, { op: "append_file" }>>[] = [];
+	const sedFileEdits: Indexed<Extract<AtomEdit, { op: "sed_file" }>>[] = [];
+	const prependEdits: Indexed<Extract<AtomEdit, { op: "prepend_file" }>>[] = [];
+	effective.forEach((edit, idx) => {
+		if (edit.op === "append_file") appendEdits.push({ edit, idx });
+		else if (edit.op === "prepend_file") prependEdits.push({ edit, idx });
+		else if (edit.op === "sed_file") sedFileEdits.push({ edit, idx });
+		else anchorEdits.push({ edit, idx });
+	});
+
+	// Group anchor edits by line so all ops on the same line are applied as a
+	// single splice. This makes the per-anchor outcome independent of index
+	// shifts caused by sibling ops (e.g. `post` paired with `del` on the same
+	// anchor, or repeated `pre`/`post` inserts that previously reversed).
+	const byLine = new Map<number, Indexed<AnchorEdit>[]>();
+	for (const entry of anchorEdits) {
+		const line = entry.edit.pos.line;
+		let bucket = byLine.get(line);
+		if (!bucket) {
+			bucket = [];
+			byLine.set(line, bucket);
+		}
+		bucket.push(entry);
+	}
+
+	const anchorLines = [...byLine.keys()].sort((a, b) => b - a);
+	for (const line of anchorLines) {
+		const bucket = byLine.get(line);
+		if (!bucket) continue;
+		bucket.sort((a, b) => a.idx - b.idx);
+
+		const idx = line - 1;
+		const currentLine = fileLines[idx];
+		let replacement: string[] = [currentLine];
+		let replacementSet = false;
+		let anchorMutated = false;
+		let anchorDeleted = false;
+		const beforeLines: string[] = [];
+		const afterLines: string[] = [];
+
+		for (const { edit } of bucket) {
+			switch (edit.op) {
+				case "pre":
+					beforeLines.push(...edit.lines);
+					break;
+				case "post":
+					afterLines.push(...edit.lines);
+					break;
+				case "del":
+					replacement = [];
+					replacementSet = true;
+					anchorDeleted = true;
+					break;
+				case "splice":
+					replacement = edit.lines.length === 0 ? [""] : [...edit.lines];
+					replacementSet = true;
+					anchorMutated = true;
+					break;
+				case "sed": {
+					const input = replacementSet ? (replacement[0] ?? "") : currentLine;
+					const { result, matched, error, literalFallback } = applySedToLine(input, edit.spec);
+					if (error) {
+						throw new Error(`Edit sed expression ${JSON.stringify(edit.expression)} rejected: ${error}`);
+					}
+					if (!matched) {
+						throw new Error(
+							`Edit sed expression ${JSON.stringify(edit.expression)} did not match line ${edit.pos.line}: ${JSON.stringify(input)}`,
+						);
+					}
+					if (literalFallback) {
+						warnings.push(
+							`sed expression ${JSON.stringify(edit.expression)} did not match as a regex on line ${edit.pos.line}; applied literal substring substitution instead. Escape regex metacharacters in the pattern to match as a regex.`,
+						);
+					}
+					replacement = [result];
+					replacementSet = true;
+					anchorMutated = true;
+					break;
+				}
+			}
+		}
+
+		const noOp = !replacementSet && beforeLines.length === 0 && afterLines.length === 0;
+		if (noOp) continue;
+
+		const originalLine = fileLines[idx];
+		const replacementProducesNoChange =
+			beforeLines.length === 0 &&
+			afterLines.length === 0 &&
+			replacement.length === 1 &&
+			replacement[0] === originalLine;
+		if (replacementProducesNoChange) {
+			const firstEdit = bucket[0]?.edit;
+			const loc = firstEdit ? `${firstEdit.pos.line}${firstEdit.pos.hash}` : `${line}`;
+			const reason = "replacement is identical to the current line content";
+			noopEdits.push({
+				editIndex: bucket[0]?.idx ?? 0,
+				loc,
+				reason,
+				current: originalLine,
+			});
+			continue;
+		}
+
+		const combined = [...beforeLines, ...replacement, ...afterLines];
+		fileLines.splice(idx, 1, ...combined);
+
+		if (beforeLines.length > 0 || anchorMutated || anchorDeleted) {
+			trackFirstChanged(line);
+		} else if (afterLines.length > 0) {
+			trackFirstChanged(line + 1);
+		}
+	}
+
+	// Apply prepend_file ops in original order so the first one ends up at the
+	// very top of the file.
+	prependEdits.sort((a, b) => a.idx - b.idx);
+	for (const { edit } of prependEdits) {
+		if (edit.lines.length === 0) continue;
+		if (fileLines.length === 1 && fileLines[0] === "") {
+			fileLines.splice(0, 1, ...edit.lines);
+		} else {
+			// Insert in reverse cumulative order so later splices push earlier
+			// content further down, preserving the original op order.
+			fileLines.splice(0, 0, ...edit.lines);
+		}
+		trackFirstChanged(1);
+	}
+
+	// Apply append_file ops in original order. When the file ends with a
+	// trailing newline (last split element is the empty sentinel), insert
+	// before that sentinel so the trailing newline is preserved.
+	appendEdits.sort((a, b) => a.idx - b.idx);
+	for (const { edit } of appendEdits) {
+		if (edit.lines.length === 0) continue;
+		if (fileLines.length === 1 && fileLines[0] === "") {
+			fileLines.splice(0, 1, ...edit.lines);
+			trackFirstChanged(1);
+			continue;
+		}
+		const hasTrailingNewline = fileLines.length > 0 && fileLines[fileLines.length - 1] === "";
+		const insertIdx = hasTrailingNewline ? fileLines.length - 1 : fileLines.length;
+		fileLines.splice(insertIdx, 0, ...edit.lines);
+		trackFirstChanged(insertIdx + 1);
+	}
+
+	// Apply sed_file ops last so they observe the post-anchor / post-prepend /
+	// post-append state of the file. Each op runs across every content line and
+	let warnedLiteralFallback = false;
+	sedFileEdits.sort((a, b) => a.idx - b.idx);
+	for (const { edit } of sedFileEdits) {
+		const hasTrailingNewline = fileLines.length > 1 && fileLines[fileLines.length - 1] === "";
+		const upper = hasTrailingNewline ? fileLines.length - 1 : fileLines.length;
+		let anyMatched = false;
+		let lastCompileError: string | undefined;
+		for (let i = 0; i < upper; i++) {
+			const line = fileLines[i] ?? "";
+			const r = applySedToLine(line, edit.spec);
+			if (r.error) lastCompileError = r.error;
+			if (!r.matched) continue;
+			anyMatched = true;
+			if (r.literalFallback && !warnedLiteralFallback) {
+				warnings.push(
+					`sed expression ${JSON.stringify(edit.expression)} did not match as a regex; applied literal substring substitution. Escape regex metacharacters in the pattern to match as a regex.`,
+				);
+				warnedLiteralFallback = true;
+			}
+			if (r.result !== line) {
+				fileLines[i] = r.result;
+				trackFirstChanged(i + 1);
+			}
+		}
+		if (!anyMatched) {
+			if (lastCompileError !== undefined) {
+				throw new Error(`Edit sed expression ${JSON.stringify(edit.expression)} rejected: ${lastCompileError}`);
+			}
+			throw new Error(`Edit sed expression ${JSON.stringify(edit.expression)} did not match any line in the file.`);
+		}
+	}
+
+	return {
+		lines: fileLines.join("\n"),
+		firstChangedLine,
+		...(warnings.length > 0 ? { warnings } : {}),
+		...(noopEdits.length > 0 ? { noopEdits } : {}),
+	};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Executor
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface ExecuteAtomSingleOptions {
+	session: ToolSession;
+	path: string;
+	edits: AtomToolEdit[];
+	signal?: AbortSignal;
+	batchRequest?: LspBatchRequest;
+	writethrough: WritethroughCallback;
+	beginDeferredDiagnosticsForPath: (path: string) => WritethroughDeferredHandle;
+}
+
+export async function executeAtomSingle(
+	options: ExecuteAtomSingleOptions,
+): Promise<AgentToolResult<EditToolDetails, typeof atomEditParamsSchema>> {
+	const { session, path, edits, signal, batchRequest, writethrough, beginDeferredDiagnosticsForPath } = options;
+
+	const contentEdits = edits.flatMap((edit, i) => resolveAtomToolEdit(edit, i, path));
+
+	enforcePlanModeWrite(session, path, { op: "update" });
+
+	if (path.endsWith(".ipynb") && contentEdits.length > 0) {
+		throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
+	}
+
+	const absolutePath = resolvePlanPath(session, path);
+
+	const sourceFile = Bun.file(absolutePath);
+	const sourceExists = await sourceFile.exists();
+
+	if (!sourceExists) {
+		const lines: string[] = [];
+		for (const edit of contentEdits) {
+			if (edit.op === "append_file") {
+				lines.push(...edit.lines);
+			} else if (edit.op === "prepend_file") {
+				lines.unshift(...edit.lines);
+			} else {
+				throw new Error(`File not found: ${path}`);
+			}
+		}
+
+		await Bun.write(absolutePath, lines.join("\n"));
+		invalidateFsScanAfterWrite(absolutePath);
+		return {
+			content: [{ type: "text", text: `Created ${path}` }],
+			details: {
+				diff: "",
+				op: "create",
+				meta: outputMeta().get(),
+			},
+		};
+	}
+
+	const rawContent = await sourceFile.text();
+	assertEditableFileContent(rawContent, path);
+
+	const { bom, text } = stripBom(rawContent);
+	const originalEnding = detectLineEnding(text);
+	const originalNormalized = normalizeToLF(text);
+
+	const result = applyAtomEdits(originalNormalized, contentEdits);
+	if (originalNormalized === result.lines) {
+		let diagnostic = `Edits to ${path} resulted in no changes being made.`;
+		if (result.noopEdits && result.noopEdits.length > 0) {
+			const details = result.noopEdits
+				.map(e => {
+					const preview =
+						e.current.length > 0
+							? `\n  current: ${JSON.stringify(e.current.length > 200 ? `${e.current.slice(0, 200)}…` : e.current)}`
+							: "";
+					return `Edit ${e.editIndex} (${e.loc}): ${e.reason}.${preview}`;
+				})
+				.join("\n");
+			diagnostic += `\n${details}`;
+		}
+		throw new Error(diagnostic);
+	}
+
+	const finalContent = bom + restoreLineEndings(result.lines, originalEnding);
+	const diagnostics = await writethrough(
+		absolutePath,
+		finalContent,
+		signal,
+		Bun.file(absolutePath),
+		batchRequest,
+		dst => (dst === absolutePath ? beginDeferredDiagnosticsForPath(absolutePath) : undefined),
+	);
+	invalidateFsScanAfterWrite(absolutePath);
+
+	const diffResult = generateDiffString(originalNormalized, result.lines);
+	const meta = outputMeta()
+		.diagnostics(diagnostics?.summary ?? "", diagnostics?.messages ?? [])
+		.get();
+
+	const resultText = `Updated ${path}`;
+	const preview = buildCompactHashlineDiffPreview(diffResult.diff);
+	const summaryLine = `Changes: +${preview.addedLines} -${preview.removedLines}${
+		preview.preview ? "" : " (no textual diff preview)"
+	}`;
+	const warningsBlock = result.warnings?.length ? `\n\nWarnings:\n${result.warnings.join("\n")}` : "";
+	const previewBlock = preview.preview ? `\n\nDiff preview:\n${preview.preview}` : "";
+
+	return {
+		content: [
+			{
+				type: "text",
+				text: `${resultText}\n${summaryLine}${previewBlock}${warningsBlock}`,
+			},
+		],
+		details: {
+			diff: diffResult.diff,
+			firstChangedLine: result.firstChangedLine ?? diffResult.firstChangedLine,
+			diagnostics,
+			op: "update",
+			meta,
+		},
+	};
+}
+
+// Helpers exposed for tests / external dispatch.
+export { classifyAtomEdit, parseAnchor, resolveAtomToolEdit };

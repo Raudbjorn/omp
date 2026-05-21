@@ -161,6 +161,9 @@ function mapWithBundledReference<TApi extends Api>(
 		id: defaults.id,
 		name,
 		baseUrl: defaults.baseUrl,
+		// Endpoint discovery often omits capability metadata for proxied models. Keep the
+		// stronger bundled reference capabilities while still allowing explicit endpoint
+		// limits to override when provided.
 		contextWindow: toPositiveNumber(entry.context_length, reference.contextWindow),
 		maxTokens: toPositiveNumber(entry.max_completion_tokens, reference.maxTokens),
 	};
@@ -1454,6 +1457,47 @@ export function litellmModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// UPB AI-Chat portal (Universität Paderborn — Open WebUI proxy with central funding)
+// ---------------------------------------------------------------------------
+
+export interface UPBModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function upbModelManagerOptions(config?: UPBModelManagerConfig): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://ai-chat.uni-paderborn.de/api/v1";
+	const references = createBundledReferenceMap<"openai-completions">("upb" as Parameters<typeof getBundledModels>[0]);
+	return {
+		providerId: "upb",
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "upb",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						const mapped = mapWithBundledReference(entry, defaults, reference);
+						if (defaults.id === "openai.gpt-5.5") {
+							mapped.contextWindow = 1_050_000;
+							mapped.maxTokens = 128_000;
+							mapped.reasoning = true;
+							mapped.input = ["text", "image"];
+						}
+						// LiteLLM proxy (UPB AI-Chat) requires reasoning.summary to surface reasoning tokens.
+						// Apply to all models since the proxy handles the parameter for any model.
+						mapped.compat = { ...mapped.compat, thinkingFormat: "litellm" };
+						return mapped;
+					},
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 22. vLLM
 // ---------------------------------------------------------------------------
 
@@ -1480,6 +1524,82 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 						...model,
 						contextWindow: toPositiveNumber(entry.max_model_len, model.contextWindow),
 					};
+				},
+			}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// 22a. IPEX-LLM (Intel PyTorch Extension for LLM — XPU-accelerated serving)
+// ---------------------------------------------------------------------------
+// ipex-llm exposes an OpenAI-compatible endpoint via its FastChat or OpenAI
+// serving modules, e.g.:
+//   python -m ipex_llm.serving.fastchat.vllm_worker --port 8000 ...
+//   python -m ipex_llm.serving.fastapi.openai_api_server --port 8000 ...
+// Set IPEX_LLM_BASE_URL to override the default.
+
+export interface IpexLlmModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function ipexLlmModelManagerOptions(
+	config?: IpexLlmModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? Bun.env.IPEX_LLM_BASE_URL ?? "http://127.0.0.1:8000/v1";
+	const references = createBundledReferenceMap<"openai-completions">(
+		"ipex-llm" as Parameters<typeof getBundledModels>[0],
+	);
+	return {
+		providerId: "ipex-llm",
+		fetchDynamicModels: () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "ipex-llm",
+				baseUrl,
+				apiKey,
+				mapModel: (entry, defaults) => {
+					const reference = references.get(defaults.id);
+					return mapWithBundledReference(entry, defaults, reference);
+				},
+			}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// 22b. OpenVINO (OVMS / openvino-genai serving)
+// ---------------------------------------------------------------------------
+// OpenAI-compatible endpoint exposed by either:
+//   - OpenVINO Model Server (OVMS) with text-generation graph
+//   - openvino-genai `llm_pipeline.serve()` / FastAPI wrapper
+// Both default to port 8000; set OPENVINO_BASE_URL if running alongside
+// another server on that port (e.g. ipex-llm or vLLM).
+
+export interface OpenvinoModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function openvinoModelManagerOptions(
+	config?: OpenvinoModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? Bun.env.OPENVINO_BASE_URL ?? "http://127.0.0.1:8000/v1";
+	const references = createBundledReferenceMap<"openai-completions">(
+		"openvino" as Parameters<typeof getBundledModels>[0],
+	);
+	return {
+		providerId: "openvino",
+		fetchDynamicModels: () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "openvino",
+				baseUrl,
+				apiKey,
+				mapModel: (entry, defaults) => {
+					const reference = references.get(defaults.id);
+					return mapWithBundledReference(entry, defaults, reference);
 				},
 			}),
 	};
@@ -2104,8 +2224,25 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDe
 	anthropicMessagesDescriptor("zai-coding-plan", "zai", "https://api.z.ai/api/anthropic"),
 	// --- Xiaomi ---
 	anthropicMessagesDescriptor("xiaomi", "xiaomi", "https://api.xiaomimimo.com/anthropic", {
-		defaultContextWindow: 262144,
-		defaultMaxTokens: 8192,
+		defaultContextWindow: 1_048_576,
+		defaultMaxTokens: 131_072,
+	}),
+	// --- Xiaomi MiMo Coding Plan ---
+	openAiCompletionsDescriptor("mimo-coding-plan", "mimo-code", "https://token-plan-ams.xiaomimimo.com/v1", {
+		defaultContextWindow: 1_048_576,
+		defaultMaxTokens: 131_072,
+		resolveApi: (modelId, raw) =>
+			resolveApiByRules(
+				modelId,
+				raw,
+				[
+					{
+						matches: (_id, raw) => raw.provider?.npm === "@ai-sdk/anthropic",
+						resolved: { api: "anthropic-messages", baseUrl: "https://token-plan-ams.xiaomimimo.com/anthropic" },
+					},
+				],
+				{ api: "openai-completions", baseUrl: "https://token-plan-ams.xiaomimimo.com/v1" },
+			),
 	}),
 	// --- MiniMax Coding Plan ---
 	openAiCompletionsDescriptor("minimax-coding-plan", "minimax-code", "https://api.minimax.io/v1", {

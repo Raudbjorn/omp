@@ -1000,6 +1000,16 @@ export class AuthStorage {
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
+			case "ipex-llm": {
+				const apiKey = await loginIpexLlm(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "openvino": {
+				const apiKey = await loginOpenvino(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
 			case "ollama": {
 				const { loginOllama } = await import("./utils/oauth/ollama");
 				const apiKey = await loginOllama(ctrl);
@@ -1063,6 +1073,16 @@ export class AuthStorage {
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
+			case "devin": {
+				const apiKey = await loginDevin(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "warp": {
+				const apiKey = await loginWarp(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
 			case "venice": {
 				const { loginVenice } = await import("./utils/oauth/venice");
 				const apiKey = await loginVenice(ctrl);
@@ -1072,6 +1092,12 @@ export class AuthStorage {
 			case "litellm": {
 				const { loginLiteLLM } = await import("./utils/oauth/litellm");
 				const apiKey = await loginLiteLLM(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "upb": {
+				const { loginUPB } = await import("./utils/oauth/upb");
+				const apiKey = await loginUPB(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
@@ -1138,6 +1164,12 @@ export class AuthStorage {
 			case "xiaomi": {
 				const { loginXiaomi } = await import("./utils/oauth/xiaomi");
 				const apiKey = await loginXiaomi(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "mimo-code": {
+				const { loginMimoCode } = await import("./utils/oauth/mimo-code");
+				const apiKey = await loginMimoCode(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}

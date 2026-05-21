@@ -82,6 +82,7 @@ export interface ToolExecutionHandle {
 		toolCallId?: string,
 	): void;
 	setArgsComplete(toolCallId?: string): void;
+	notifyExecutionStarted(): void;
 	setExpanded(expanded: boolean): void;
 }
 
@@ -123,6 +124,7 @@ export class ToolExecutionComponent extends Container {
 	#spinnerInterval?: NodeJS.Timeout;
 	// Track if args are still being streamed (for edit/write spinner)
 	#argsComplete = false;
+	#executionStartTime: number | undefined;
 	#renderState: {
 		spinnerFrame?: number;
 		expanded: boolean;
@@ -190,6 +192,14 @@ export class ToolExecutionComponent extends Container {
 		this.#argsComplete = true;
 		this.#updateSpinnerAnimation();
 		void this.#runPreviewDiff();
+	}
+
+	/**
+	 * Called when the tool has actually started executing (tool_execution_start event).
+	 * More accurate than setArgsComplete() which fires at end of arg streaming.
+	 */
+	notifyExecutionStarted(): void {
+		this.#executionStartTime = Date.now();
 	}
 
 	async #runPreviewDiff(): Promise<void> {
@@ -646,11 +656,13 @@ export class ToolExecutionComponent extends Container {
 			context.expanded = this.#expanded;
 			context.previewLines = BASH_DEFAULT_PREVIEW_LINES;
 			context.timeout = normalizeTimeoutSeconds(this.#args?.timeout, 3600);
+			context.executionStartMs = this.#executionStartTime;
 		} else if (this.#toolName === "eval" && this.#result) {
 			const output = this.#getTextOutput().trimEnd();
 			context.output = output;
 			context.expanded = this.#expanded;
 			context.previewLines = EVAL_DEFAULT_PREVIEW_LINES;
+			context.executionStartMs = this.#executionStartTime;
 		} else if (isEditLikeToolName(this.#toolName)) {
 			context.editMode = this.#editMode;
 			const previews = this.#editDiffPreview;

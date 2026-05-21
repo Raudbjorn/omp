@@ -17,7 +17,14 @@ import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from ".
 import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
 import { resolveEvalBackends, type ToolSession } from ".";
 import { formatStyledTruncationWarning } from "./output-meta";
-import { formatTitle, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
+import {
+	formatTimeoutLine,
+	formatTitle,
+	replaceTabs,
+	shortenPath,
+	truncateToWidth,
+	wrapBrackets,
+} from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
@@ -548,6 +555,7 @@ interface EvalRenderContext {
 	expanded?: boolean;
 	previewLines?: number;
 	timeout?: number;
+	executionStartMs?: number;
 }
 
 function decodePartialJsonStringFragment(fragment: string): string {
@@ -892,11 +900,12 @@ export const evalToolRenderer = {
 			return [header, ...treeLines];
 		});
 
-		const timeoutSeconds = options.renderContext?.timeout;
-		const timeoutLine =
-			typeof timeoutSeconds === "number"
-				? uiTheme.fg("dim", wrapBrackets(`Timeout: ${timeoutSeconds}s`, uiTheme))
-				: undefined;
+		const timeoutLine = formatTimeoutLine(
+			options.renderContext?.timeout,
+			options.renderContext?.executionStartMs,
+			options.isPartial,
+			uiTheme,
+		);
 		let warningLine: string | undefined;
 		if (details?.meta?.truncation) {
 			warningLine = formatStyledTruncationWarning(details.meta, uiTheme) ?? undefined;

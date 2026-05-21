@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { $which, APP_NAME, getPythonEnvDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import chalk from "chalk";
+import { settings } from "../config/settings";
 import { theme } from "../modes/theme/theme";
 
 export type SetupComponent = "python" | "stt";
@@ -296,8 +297,9 @@ async function handlePythonSetup(flags: { json?: boolean; check?: boolean }): Pr
 }
 
 async function handleSttSetup(flags: { json?: boolean; check?: boolean }): Promise<void> {
+	const backend = settings.get("stt.backend") as string | undefined;
 	const { checkDependencies, formatDependencyStatus } = await import("../stt/setup");
-	const status = await checkDependencies();
+	const status = await checkDependencies(backend);
 
 	if (flags.json) {
 		console.log(JSON.stringify(status, null, 2));
@@ -328,18 +330,31 @@ async function handleSttSetup(flags: { json?: boolean; check?: boolean }): Promi
 	}
 
 	if (!status.whisper.available) {
-		console.log(chalk.dim(`\nInstalling openai-whisper...`));
+		const isFaster = backend === "faster-whisper";
+		const pkgName = isFaster ? "faster-whisper" : "openai-whisper";
+		console.log(chalk.dim(`\nInstalling ${pkgName}...`));
 		const { resolvePython } = await import("../stt/transcriber");
 		const pythonCmd = resolvePython()!;
-		const result = await $`${pythonCmd} -m pip install -q openai-whisper`.nothrow();
-		if (result.exitCode !== 0) {
-			console.error(chalk.red(`\n${theme.status.error} Failed to install openai-whisper`));
-			console.error(chalk.dim("Try manually: pip install openai-whisper"));
-			process.exit(1);
+		if (isFaster) {
+			// Install without av/numba — we load WAV via Python's wave module
+			const nodeps = await $`${pythonCmd} -m pip install -q --no-deps faster-whisper`.nothrow();
+			if (nodeps.exitCode !== 0) {
+				console.error(chalk.red(`\n${theme.status.error} Failed to install faster-whisper`));
+				console.error(chalk.dim("Try manually: pip install --no-deps faster-whisper"));
+				process.exit(1);
+			}
+			await $`${pythonCmd} -m pip install -q ctranslate2 tokenizers huggingface_hub numpy`.nothrow();
+		} else {
+			const result = await $`${pythonCmd} -m pip install -q openai-whisper`.nothrow();
+			if (result.exitCode !== 0) {
+				console.error(chalk.red(`\n${theme.status.error} Failed to install openai-whisper`));
+				console.error(chalk.dim("Try manually: pip install openai-whisper"));
+				process.exit(1);
+			}
 		}
 	}
 
-	const recheck = await checkDependencies();
+	const recheck = await checkDependencies(backend);
 	if (recheck.recorder.available && recheck.python.available && recheck.whisper.available) {
 		console.log(chalk.green(`\n${theme.status.success} Speech-to-text is ready`));
 	} else {

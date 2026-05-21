@@ -4,6 +4,7 @@ import {
 	Container,
 	getKeybindings,
 	Input,
+	isKeyRelease,
 	matchesKey,
 	Spacer,
 	type Tab,
@@ -810,6 +811,9 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	handleInput(keyData: string): void {
+		// Ignore key-release events to prevent focus-shift ghost input.
+		if (isKeyRelease(keyData)) return;
+
 		if (this.#isMenuOpen) {
 			this.#handleMenuInput(keyData);
 			return;

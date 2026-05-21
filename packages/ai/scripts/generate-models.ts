@@ -319,9 +319,15 @@ async function generateModels() {
 		)
 	).flat();
 	const gitLabDuoModels = getGitLabDuoModels();
-	// Combine models (models.dev has priority)
+	// Combine models (models.dev generally has priority; UPB is an exception because
+	// ai-chat exposes its catalog dynamically and models.dev does not know UPB's dot-prefixed IDs).
 	let allModels = applyGlobalModelsDevFallback(
-		[...modelsDevModels, ...catalogProviderModels, ...gitLabDuoModels],
+		[
+			...catalogProviderModels.filter(model => model.provider === "upb"),
+			...modelsDevModels,
+			...catalogProviderModels.filter(model => model.provider !== "upb"),
+			...gitLabDuoModels,
+		],
 		modelsDevModels,
 	);
 
@@ -369,6 +375,14 @@ async function generateModels() {
 	applyGeneratedModelPolicies(allModels);
 	linkOpenAIPromotionTargets(allModels);
 
+	// UPB AI-Chat portal (LiteLLM proxy) requires reasoning.summary to surface reasoning tokens.
+	// Apply thinkingFormat compat to all UPB models since the proxy handles the parameter.
+	for (const model of allModels) {
+		if (model.provider === "upb" && model.api === "openai-completions") {
+			model.compat = { ...model.compat, thinkingFormat: "litellm" };
+		}
+	}
+
 	// Group by provider and sort each provider's models
 	const providers: Record<string, Record<string, Model>> = {};
 	for (const model of allModels) {
@@ -398,7 +412,7 @@ async function generateModels() {
 	}
 
 	// Generate JSON file
-	await Bun.write(path.join(packageRoot, "src/models.json"), JSON.stringify(MODELS, null, "	"));
+	await Bun.write(path.join(packageRoot, "src/models.json"), JSON.stringify(MODELS, null, "\t"));
 	console.log("Generated src/models.json");
 
 	// Print statistics

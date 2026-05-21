@@ -1,0 +1,5 @@
+src/
+pkg/
+*.pkg.tar.*
+# makepkg's bare-clone scratch dir for git+https sources
+omp-*/
