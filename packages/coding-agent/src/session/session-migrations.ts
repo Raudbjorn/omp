@@ -24,6 +24,8 @@ function migrateV1ToV2(entries: FileEntry[]): void {
 	const ids = new Set<string>();
 	let prevId: string | null = null;
 
+	// Pass 1: assign stable ids/parentIds so the id set is complete before
+	// any cross-entry resolution runs.
 	for (const entry of entries) {
 		if (entry.type === "session") {
 			entry.version = 2;
@@ -31,20 +33,21 @@ function migrateV1ToV2(entries: FileEntry[]): void {
 		}
 
 		entry.id = generateId(ids);
+		ids.add(entry.id);
 		entry.parentId = prevId;
 		prevId = entry.id;
+	}
 
-		// Convert firstKeptEntryIndex to firstKeptEntryId for compaction
-		if (entry.type === "compaction") {
-			const comp = entry as CompactionEntry & { firstKeptEntryIndex?: number };
-			if (typeof comp.firstKeptEntryIndex === "number") {
-				const targetEntry = entries[comp.firstKeptEntryIndex];
-				if (targetEntry && targetEntry.type !== "session") {
-					comp.firstKeptEntryId = targetEntry.id;
-				}
-				delete comp.firstKeptEntryIndex;
-			}
+	// Pass 2: resolve firstKeptEntryIndex → firstKeptEntryId once every entry has an id.
+	for (const entry of entries) {
+		if (entry.type !== "compaction") continue;
+		const comp = entry as CompactionEntry & { firstKeptEntryIndex?: number };
+		if (typeof comp.firstKeptEntryIndex !== "number") continue;
+		const targetEntry = entries[comp.firstKeptEntryIndex];
+		if (targetEntry && targetEntry.type !== "session" && targetEntry.id) {
+			comp.firstKeptEntryId = targetEntry.id;
 		}
+		delete comp.firstKeptEntryIndex;
 	}
 }
 

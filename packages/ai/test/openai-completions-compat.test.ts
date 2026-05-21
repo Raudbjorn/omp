@@ -369,31 +369,43 @@ describe("openai-completions compatibility", () => {
 	});
 
 	it("requires reasoning_content for native DeepSeek V4 with reasoning", () => {
-			const model: Model<"openai-completions"> = {
-				...getBundledModel("openai", "gpt-4o-mini"),
-				api: "openai-completions",
-				provider: "deepseek",
-				baseUrl: "https://api.deepseek.com",
-				id: "deepseek-v4-flash",
-				reasoning: true,
-			};
-			const compat = detectCompat(model);
-			expect(compat.requiresReasoningContentForToolCalls).toBe(true);
-		});
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com",
+			id: "deepseek-v4-flash",
+			reasoning: true,
+		};
+		const compat = detectCompat(model);
+		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
+	});
 
-		it("does not require reasoning_content for native DeepSeek without reasoning", () => {
-			const model: Model<"openai-completions"> = {
-				...getBundledModel("openai", "gpt-4o-mini"),
-				api: "openai-completions",
-				provider: "deepseek",
-				baseUrl: "https://api.deepseek.com",
-				id: "deepseek-chat",
-			};
-			const compat = detectCompat(model);
-			expect(compat.requiresReasoningContentForToolCalls).toBe(false);
-		});
+	it("does not require reasoning_content for native DeepSeek without reasoning", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com",
+			id: "deepseek-chat",
+		};
+		const compat = detectCompat(model);
+		expect(compat.requiresReasoningContentForToolCalls).toBe(false);
+	});
 
-		it("treats finish_reason end as stop", async () => {
+	it("does not require reasoning_content for DeepSeek V4 without reasoning", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com",
+			id: "deepseek-v4-flash",
+		};
+		const compat = detectCompat(model);
+		expect(compat.requiresReasoningContentForToolCalls).toBe(false);
+	});
+
+	it("treats finish_reason end as stop", async () => {
 		const model: Model<"openai-completions"> = {
 			...getBundledModel("openai", "gpt-4o-mini"),
 			api: "openai-completions",

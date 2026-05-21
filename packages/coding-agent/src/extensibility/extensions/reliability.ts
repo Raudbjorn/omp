@@ -16,6 +16,7 @@ import type { ExtensionAPI, ExtensionContext } from "./types";
  */
 export default function (pi: ExtensionAPI) {
 	const loopHistory: ToolCallEntry[] = [];
+	const LOOP_HISTORY_MAX = 100;
 	let _loopCount = 0;
 	const _MAX_INTERVENTIONS = 4;
 	let _hasUnverifiedMutations = false;
@@ -33,6 +34,9 @@ export default function (pi: ExtensionAPI) {
 			key = String(args);
 		}
 		loopHistory.push({ tool: event.toolName, key });
+		if (loopHistory.length > LOOP_HISTORY_MAX) {
+			loopHistory.splice(0, loopHistory.length - LOOP_HISTORY_MAX);
+		}
 		if (MUTATING_TOOLS.has(event.toolName)) {
 			_hasUnverifiedMutations = true;
 			pi.logger.debug("Verification Gate: Mutation detected via %s. Flagging as unverified.", event.toolName);
@@ -62,7 +66,7 @@ export default function (pi: ExtensionAPI) {
 				{
 					customType: "system_intervention",
 					content: [{ type: "text", text: strategies[Math.min(_loopCount - 1, strategies.length - 1)] }],
-					display: "none",
+					display: false,
 				},
 				{ triggerTurn: true },
 			);
@@ -79,8 +83,8 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const isVerified = /\b(VERIFIED|VERIFICADO)\b/.test(assistantText);
-		const isNoVerified = /\b(NOT_VERIFIED|NO_VERIFICADO)\b/.test(assistantText);
+		const isVerified = /\b(VERIFIED|VERIFICADO)\b/i.test(assistantText);
+		const isNoVerified = /\b(NOT_VERIFIED|NO_VERIFICADO)\b/i.test(assistantText);
 
 		// Explicit VERIFIED — but where's the evidence?
 		if (isVerified) {
@@ -93,7 +97,7 @@ export default function (pi: ExtensionAPI) {
 							text: "[SYSTEM: You declared VERIFIED but there is no verification evidence (test/diff/build output). Run the corresponding command and show the REAL output.]",
 						},
 					],
-					display: "none",
+					display: false,
 				},
 				{ triggerTurn: true },
 			);
@@ -121,7 +125,7 @@ export default function (pi: ExtensionAPI) {
 							text: "[SYSTEM: You modified files and declared completion without real verification. Run bun test / bun check / git diff and show the REAL output, or declare NOT_VERIFIED if you did not verify.]",
 						},
 					],
-					display: "none",
+					display: false,
 				},
 				{ triggerTurn: true },
 			);

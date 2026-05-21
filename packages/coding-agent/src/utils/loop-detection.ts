@@ -15,7 +15,10 @@ export interface LoopDetectionResult {
  */
 export function stableStringify(value: unknown): string {
 	if (value === null || value === undefined) return "null";
-	if (typeof value !== "object" || Array.isArray(value)) {
+	if (Array.isArray(value)) {
+		return `[${value.map(stableStringify).join(",")}]`;
+	}
+	if (typeof value !== "object") {
 		return JSON.stringify(value);
 	}
 	const keys = Object.keys(value as Record<string, unknown>).sort();
