@@ -7150,7 +7150,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 1000000,
+			"contextWindow": 250000,
 			"maxTokens": 64000,
 			"thinking": {
 				"mode": "budget",
@@ -7225,7 +7225,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 1000000,
+			"contextWindow": 250000,
 			"maxTokens": 64000,
 			"thinking": {
 				"mode": "budget",
@@ -7276,7 +7276,32 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
-			"maxTokens": 65536,
+			"maxTokens": 65535,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"gemini-2.5-flash-lite": {
+			"id": "gemini-2.5-flash-lite",
+			"name": "Gemini 2.5 Flash Lite",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65535,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
@@ -7358,6 +7383,31 @@
 				"maxLevel": "high"
 			}
 		},
+		"gemini-3-flash-agent": {
+			"id": "gemini-3-flash-agent",
+			"name": "Gemini 3 Flash (Antigravity)",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
+			"thinking": {
+				"mode": "google-level",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
 		"gemini-3-pro-high": {
 			"id": "gemini-3-pro-high",
 			"name": "Gemini 3 Pro (High) (Antigravity)",
@@ -7415,6 +7465,44 @@
 					"high"
 				]
 			}
+		},
+		"gemini-3.1-flash-image": {
+			"id": "gemini-3.1-flash-image",
+			"name": "Gemini 3.1 Flash Image (Antigravity)",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 64000
+		},
+		"gemini-3.1-flash-lite": {
+			"id": "gemini-3.1-flash-lite",
+			"name": "Gemini 3.1 Flash Lite (Antigravity)",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65535
 		},
 		"gemini-3.1-pro-high": {
 			"id": "gemini-3.1-pro-high",
@@ -7490,13 +7578,51 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 114000,
+			"contextWindow": 131072,
 			"maxTokens": 32768,
 			"thinking": {
 				"mode": "budget",
 				"minLevel": "minimal",
 				"maxLevel": "high"
 			}
+		},
+		"tab_flash_lite_preview": {
+			"id": "tab_flash_lite_preview",
+			"name": "tab_flash_lite_preview",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 16384,
+			"maxTokens": 4096
+		},
+		"tab_jump_flash_lite_preview": {
+			"id": "tab_jump_flash_lite_preview",
+			"name": "tab_jump_flash_lite_preview",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 16384,
+			"maxTokens": 4096
 		}
 	},
 	"google-gemini-cli": {
@@ -17880,7 +18006,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 204800,
+			"contextWindow": 200000,
 			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
@@ -38216,7 +38342,7 @@
 				"cacheWrite": 3.75
 			},
 			"contextWindow": 200000,
-			"maxTokens": 128000,
+			"maxTokens": 64000,
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",
