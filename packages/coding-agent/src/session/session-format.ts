@@ -59,12 +59,12 @@ export function getSessionStats(
 		if (message.role === "toolResult" && message.toolName === "task") {
 			const usage = getTaskToolUsage(message.details);
 			if (usage) {
-				totalInput += usage.input;
-				totalOutput += usage.output;
-				totalCacheRead += usage.cacheRead;
-				totalCacheWrite += usage.cacheWrite;
+				totalInput += usage.input ?? 0;
+				totalOutput += usage.output ?? 0;
+				totalCacheRead += usage.cacheRead ?? 0;
+				totalCacheWrite += usage.cacheWrite ?? 0;
 				totalPremiumRequests += usage.premiumRequests ?? 0;
-				totalCost += usage.cost.total;
+				totalCost += usage.cost?.total ?? 0;
 			}
 		}
 	}

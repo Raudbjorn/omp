@@ -15,7 +15,6 @@ import type { ExtensionAPI, ExtensionContext } from "./types";
 export default function (pi: ExtensionAPI) {
 	// Track which files have been mutated in this session
 	const mutatedFiles = new Set<string>();
-	let _verificationPending = false;
 	// Tools that can mutate files
 	const MUTATING_TOOLS = new Set(["edit", "write", "ast_edit"]);
 
@@ -45,7 +44,6 @@ export default function (pi: ExtensionAPI) {
 
 		// Skip if no files were mutated this turn
 		if (mutatedFiles.size === 0) {
-			_verificationPending = false;
 			return;
 		}
 
@@ -53,8 +51,8 @@ export default function (pi: ExtensionAPI) {
 		const hasEvidence = hasVerificationEvidence(assistantText);
 
 		// Check for explicit verification declarations
-		const isVerified = /\b(VERIFIED|VERIFICADO)\b/.test(assistantText);
-		const isNoVerified = /\b(NOT_VERIFIED|NO_VERIFICADO)\b/.test(assistantText);
+		const isVerified = /\b(VERIFIED|VERIFICADO)\b/i.test(assistantText);
+		const isNoVerified = /\b(NOT_VERIFIED|NO_VERIFICADO)\b/i.test(assistantText);
 
 		// Handle explicit declarations
 		if (isVerified) {
@@ -76,11 +74,11 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
-		// Honest NOT_VERIFIED — let it pass but reset tracking
+		// Honest NOT_VERIFIED — let it pass but keep mutation tracking active
+		// so the next mutation/completion claim still triggers the gate.
+		// Mirrors reliability.ts's `_hasUnverifiedMutations` staying true on NOT_VERIFIED.
 		if (isNoVerified) {
-			pi.logger.debug("Verification: NOT_VERIFIED declared. Resetting mutation tracking.");
-			mutatedFiles.clear();
-			_verificationPending = false;
+			pi.logger.debug("Verification: NOT_VERIFIED declared. Mutations remain unverified.");
 			return;
 		}
 
@@ -111,13 +109,11 @@ export default function (pi: ExtensionAPI) {
 
 		// Mutation happened but agent is still working — no intervention, just prepare for next turn
 		pi.logger.debug("Verification: Mutations pending verification. Files: %o", Array.from(mutatedFiles));
-		_verificationPending = true;
 	});
 
 	// Reset all state on new agent start
 	pi.on("agent_start", () => {
 		mutatedFiles.clear();
-		_verificationPending = false;
 	});
 
 	// Helper: Extract file path from tool arguments
