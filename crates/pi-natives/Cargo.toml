@@ -18,6 +18,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["full"] }
 napi = { version = "3", features = ["napi10", "tokio_rt", "tokio_time"] }
 napi-derive = "3"
+pi-iso = { path = "../pi-iso" }
 pi-shell = { path = "../pi-shell" }
 parking_lot = "0.12.5"
 dashmap = "6.1"

@@ -36,6 +36,7 @@ pub mod grep;
 pub mod highlight;
 pub mod html;
 pub mod image;
+pub mod iso;
 pub mod keys;
 pub use pi_ast::language;
 
