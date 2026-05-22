@@ -155,10 +155,11 @@ export default function App() {
 					<div className="space-y-6 animate-fade-in">
 						{modelStats ? (
 							<>
-								<ChartsContainer modelSeries={modelStats.modelSeries} />
+								<ChartsContainer modelSeries={modelStats.modelSeries} timeRange={timeRange} />
 								<ModelsTable
 									models={modelStats.byModel}
 									performanceSeries={modelStats.modelPerformanceSeries}
+									timeRange={timeRange}
 								/>
 							</>
 						) : (
@@ -197,13 +198,6 @@ export default function App() {
 						) : (
 							<LoadingState label="Loading behavior..." />
 						)}
-					</div>
-				)}
-
-				{activeTab === "costs" && (
-					<div className="space-y-6 animate-fade-in">
-						<CostSummary costSeries={stats.costSeries} />
-						<CostChart costSeries={stats.costSeries} />
 					</div>
 				)}
 

@@ -39,6 +39,7 @@ This fork adds the following feature areas on top of upstream:
 - Better extension discovery, including symlinked package dirs
 - Package name derivation fixes for discovered extensions
 - Session token tracking and related session-link fixes
+- Stats dashboard sync now parses session files through a worker pool, tracks user-message behavior and priority-service premium request metrics, and release-binary smoke checks exercise the worker entrypoint with `omp --smoke-test`
 - Persistent per-install ID stored outside the agent state directory, logger transport switching, prompt ASCII replacement that preserves HTML comments, and safe spawned-process environment filtering
 - Clipboard and native integration improvements
 - Nano Banana 2 image-generation pipeline upgrade

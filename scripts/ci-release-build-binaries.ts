@@ -14,6 +14,12 @@ interface BinaryTarget {
 const repoRoot = path.join(import.meta.dir, "..");
 const binariesDir = path.join(repoRoot, "packages", "coding-agent", "binaries");
 const entrypoint = "./packages/coding-agent/src/cli.ts";
+// Keep these in sync with packages/coding-agent/scripts/build-binary.ts.
+const workerEntrypoints = [
+	"./packages/stats/src/sync-worker.ts",
+	"./packages/coding-agent/src/tools/browser/tab-worker-entry.ts",
+	"./packages/coding-agent/src/eval/js/worker-entry.ts",
+];
 const isDryRun = process.argv.includes("--dry-run");
 const targets: BinaryTarget[] = [
 	{
@@ -106,7 +112,9 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 	console.log(`Building ${target.outfile}...`);
 	await embedNative(target);
 	if (isDryRun) {
-		console.log(`DRY RUN bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --define process.env.PI_COMPILED="true" --root . --external mupdf --target=${target.target} ${entrypoint} --outfile ${target.outfile}`);
+		console.log(
+			`DRY RUN bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --no-compile-autoload-tsconfig --no-compile-autoload-package-json --keep-names --define process.env.PI_COMPILED="true" --root . --external mupdf --target=${target.target} ${entrypoint} ${workerEntrypoints.join(" ")} --outfile ${target.outfile}`,
+		);
 		return;
 	}
 
@@ -120,6 +128,9 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 			"--compile",
 			"--no-compile-autoload-bunfig",
 			"--no-compile-autoload-dotenv",
+			"--no-compile-autoload-tsconfig",
+			"--no-compile-autoload-package-json",
+			"--keep-names",
 			"--define",
 			'process.env.PI_COMPILED="true"',
 			"--root",
@@ -129,6 +140,7 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 			"--target",
 			target.target,
 			entrypoint,
+			...workerEntrypoints,
 			"--outfile",
 			target.outfile,
 		],

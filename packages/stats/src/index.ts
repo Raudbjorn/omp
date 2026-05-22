@@ -6,7 +6,14 @@ import { getDashboardStats, getTotalMessageCount, syncAllSessions } from "./aggr
 import { closeDb } from "./db";
 import { startServer } from "./server";
 
-export { getDashboardStats, getTotalMessageCount, syncAllSessions } from "./aggregator";
+export {
+	getDashboardStats,
+	getTotalMessageCount,
+	type SyncOptions,
+	type SyncProgress,
+	smokeTestSyncWorker,
+	syncAllSessions,
+} from "./aggregator";
 export { closeDb } from "./db";
 export { startServer } from "./server";
 export type {
@@ -46,6 +53,8 @@ async function printStats(): Promise<void> {
 	console.log(`  Requests: ${formatNumber(overall.totalRequests)} (${formatNumber(overall.failedRequests)} errors)`);
 	console.log(`  Error Rate: ${formatPercent(overall.errorRate)}`);
 	console.log(`  Total Tokens: ${formatNumber(overall.totalInputTokens + overall.totalOutputTokens)}`);
+	console.log(`  Input Tokens: ${formatNumber(overall.totalInputTokens)}`);
+	console.log(`  Output Tokens: ${formatNumber(overall.totalOutputTokens)}`);
 	console.log(`  Cache Rate: ${formatPercent(overall.cacheRate)}`);
 	console.log(`  Total Cost: ${formatCost(overall.totalCost)}`);
 	console.log(`  Premium Requests: ${formatNumber(normalizePremiumRequests(overall.totalPremiumRequests ?? 0))}`);
@@ -112,8 +121,28 @@ Examples:
 
 	try {
 		// Sync first
-		console.log("Syncing session files...");
-		const { processed, files } = await syncAllSessions();
+		const tty = process.stderr.isTTY === true;
+		process.stderr.write("Syncing session files...\n");
+		let lastWidth = 0;
+		let lastRender = 0;
+		const { processed, files } = await syncAllSessions({
+			onProgress: event => {
+				if (!tty) return;
+				const now = Date.now();
+				if (event.current < event.total && now - lastRender < 33) return;
+				lastRender = now;
+				const marker = "/sessions/";
+				const idx = event.sessionFile.indexOf(marker);
+				const short = idx >= 0 ? event.sessionFile.slice(idx + marker.length) : event.sessionFile;
+				const pct = ((event.current / event.total) * 100).toFixed(0).padStart(3, " ");
+				const line = `[${event.current}/${event.total}] ${pct}%  ${short}`;
+				const columns = process.stderr.columns ?? 120;
+				const clipped = line.length > columns - 1 ? `${line.slice(0, columns - 2)}\u2026` : line;
+				process.stderr.write(`\r${clipped.padEnd(lastWidth)}`);
+				lastWidth = clipped.length;
+			},
+		});
+		if (tty && lastWidth > 0) process.stderr.write(`\r${" ".repeat(lastWidth)}\r`);
 		const total = await getTotalMessageCount();
 		console.log(`Synced ${processed} new entries from ${files} files (${total} total)\n`);
 
