@@ -116,6 +116,7 @@ export type KnownProvider =
 	| "mimo-code"
 	| "github-copilot"
 	| "fireworks"
+	| "firepass"
 	| "gitlab-duo"
 	| "cursor"
 	| "deepseek"
@@ -144,9 +145,13 @@ export type KnownProvider =
 	| "together"
 	| "venice"
 	| "vllm"
+	| "skvaider"
 	| "xiaomi"
 	| "zenmux"
 	| "upb"
+	| "upb-gateway"
+	| "ipex-llm"
+	| "openvino"
 	| "lm-studio"
 	| "devin"
 	| "warp"
@@ -175,14 +180,31 @@ export type CacheRetention = "none" | "short" | "long";
 /** OpenAI service tier for processing priority. Only applies to OpenAI-compatible APIs. */
 export type ServiceTier = "auto" | "default" | "flex" | "scale" | "priority";
 
+export type ResolvedServiceTier = ServiceTier;
+
+export function resolveServiceTier(
+	serviceTier: ServiceTier | null | undefined,
+	_provider: Provider | undefined,
+): ResolvedServiceTier | undefined {
+	return serviceTier ?? undefined;
+}
+
 export function shouldSendServiceTier(
-	serviceTier?: ServiceTier | null,
-	provider?: Provider,
-): serviceTier is "flex" | "scale" | "priority" {
-	if (provider !== "openai" && provider !== "openai-codex") {
-		return false;
-	}
+	serviceTier: ServiceTier | null | undefined,
+	provider: Provider | undefined,
+): boolean {
+	if (provider !== "openai" && provider !== "openai-codex") return false;
 	return serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority";
+}
+
+export function getPriorityPremiumRequests(
+	serviceTier: ServiceTier | null | undefined,
+	provider: Provider | undefined,
+): number {
+	return serviceTier === "priority" &&
+		(provider === "openai" || provider === "openai-codex" || provider === "anthropic")
+		? 1
+		: 0;
 }
 
 export interface ProviderSessionState {
@@ -202,6 +224,10 @@ export interface RawSseEvent {
 	raw: string[];
 }
 
+export type FetchImpl = ((input: string | URL | Request, init?: RequestInit) => Promise<Response>) & {
+	preconnect?: typeof globalThis.fetch.preconnect;
+};
+
 export interface StreamOptions {
 	temperature?: number;
 	topP?: number;
@@ -209,9 +235,12 @@ export interface StreamOptions {
 	minP?: number;
 	presencePenalty?: number;
 	repetitionPenalty?: number;
+	stopSequences?: string[];
+	frequencyPenalty?: number;
 	maxTokens?: number;
 	signal?: AbortSignal;
 	apiKey?: string;
+	onAuthError?: (provider: string, apiKey: string, error: unknown) => Promise<string | undefined>;
 	cacheRetention?: CacheRetention;
 	/**
 	 * Additional headers to include in provider requests.
@@ -273,6 +302,8 @@ export interface StreamOptions {
 	 * Set to 0 to disable the inter-event idle watchdog for this request.
 	 */
 	streamIdleTimeoutMs?: number;
+	providerRetryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+	fetch?: FetchImpl;
 	/** Cursor exec/MCP tool handlers (cursor-agent only). */
 	execHandlers?: CursorExecHandlers;
 }
@@ -459,6 +490,8 @@ export interface AssistantMessage {
 	usage: Usage;
 	stopReason: StopReason;
 	errorMessage?: string;
+	errorStatus?: number;
+	disabledFeatures?: string[];
 	/** Provider-specific opaque payload used to reconstruct transport-native history. */
 	providerPayload?: ProviderPayload;
 	timestamp: number; // Unix timestamp in milliseconds
@@ -723,6 +756,7 @@ export interface Model<TApi extends Api = any> {
 	contextWindow: number;
 	maxTokens: number;
 	headers?: Record<string, string>;
+	transport?: "pi-native";
 	/** Hint that websocket transport should be preferred when supported by the provider implementation. */
 	preferWebsockets?: boolean;
 	/** Preferred model to switch to when context promotion is triggered (model id or provider/id). */
