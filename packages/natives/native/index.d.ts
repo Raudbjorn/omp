@@ -39,34 +39,6 @@ export declare class MacOSPowerAssertion {
   stop(): void
 }
 
-/** Image container for native interop. */
-export declare class PhotonImage {
-  /**
-   * Create a new `PhotonImage` from encoded image bytes (PNG, JPEG, WebP,
-   * GIF). Returns the decoded image handle on success.
-   *
-   * # Errors
-   * Returns an error if the image format cannot be detected or decoded.
-   */
-  static parse(bytes: Uint8Array): ImageTask
-  /** Get the image width in pixels. */
-  get width(): number
-  /** Get the image height in pixels. */
-  get height(): number
-  /**
-   * Encode the image to bytes in the specified format.
-   *
-   * # Errors
-   * Returns an error if encoding fails or format is invalid.
-   */
-  encode(format: ImageFormat, quality: number): Promise<Array<number>>
-  /**
-   * Resize the image to the specified pixel dimensions using the filter.
-   * Returns a new `PhotonImage` containing the resized image.
-   */
-  resize(width: number, height: number, filter: SamplingFilter): ImageTask
-}
-
 /** Stable process reference. */
 export declare class Process {
   /** Open a stable process reference from a PID. */
@@ -145,6 +117,35 @@ export declare class Shell {
    */
   abort(): Promise<void>
 }
+
+/**
+ * Version sentinel — exists solely so the JS loader can prove at load time
+ * that the `.node` file on disk is from the same package release as the
+ * `index.js` ESM wrapper invoking it.
+ *
+ * The `js_name` is bumped by `scripts/release.ts` to match the new
+ * `Cargo.toml` / `package.json` version on every release. The JS loader
+ * computes the expected name from `package.json#version` and refuses to use
+ * a `.node` that doesn't expose it, turning the silent
+ * `<sym> is not a function` crash from a locked-file update (the canonical
+ * Windows `bun install -g` failure mode) into a clear load-time error.
+ *
+ * Bump policy: `__piNativesV{major}_{minor}_{patch}` — non-alphanumerics in
+ * the version string are mapped to `_` to keep it a valid JS identifier.
+ * MUST stay in sync with `VERSION_SENTINEL_EXPORT` in
+ * `packages/natives/native/index.js` (which derives the name from
+ * `package.json#version`).
+ */
+export declare function __piNativesV14_9_3(): void
+
+/**
+ * Apply conservative pre-execution rewrites to a bash command.
+ *
+ * Strips trailing `| head|tail [safe-args]` and redundant trailing `2>&1`
+ * from each top-level pipeline. The full rules and bail conditions live in
+ * `pi_shell::fixup`. Synchronous and cheap (one parse pass over the input).
+ */
+export declare function applyBashFixups(command: string): BashFixupResult
 
 /**
  * Apply ast-grep rewrite rules to matching files; honors `dryRun` and returns
@@ -330,6 +331,17 @@ export interface AstReplaceResult {
   limitReached: boolean
   /** Parse or pattern errors when not failing the whole operation. */
   parseErrors?: Array<string>
+}
+
+/**
+ * Result of [`apply_bash_fixups`]: a possibly-rewritten command plus the
+ * substrings that were removed (in source order).
+ */
+export interface BashFixupResult {
+  /** Possibly-rewritten command. Equal to the input when no fixup fired. */
+  command: string
+  /** Substrings removed, in source order — suitable for a user-facing notice. */
+  stripped: Array<string>
 }
 
 /** Clipboard image payload encoded as PNG bytes. */
@@ -742,18 +754,6 @@ export interface HtmlToMarkdownOptions {
   skipImages?: boolean
 }
 
-/** Output format for [`PhotonImage::encode`]. */
-export declare enum ImageFormat {
-  /** PNG encoded bytes. */
-  PNG = 0,
-  /** JPEG encoded bytes. */
-  JPEG = 1,
-  /** WebP encoded bytes. */
-  WEBP = 2,
-  /** GIF encoded bytes. */
-  GIF = 3
-}
-
 /**
  * Invalidate the filesystem scan cache.
  *
@@ -764,6 +764,110 @@ export declare enum ImageFormat {
  * delete).
  */
 export declare function invalidateFsScanCache(path?: string | undefined | null): void
+
+/** Kind enum of the backend selected by default for this build target. */
+export declare function isoBackend(): IsoBackendKind
+
+/**
+ * Isolation backend identifier. Numeric so the JS side can `switch` on
+ * the enum without string comparisons.
+ */
+export declare enum IsoBackendKind {
+  Apfs = 0,
+  Btrfs = 1,
+  Zfs = 2,
+  LinuxReflink = 3,
+  Overlayfs = 4,
+  WindowsBlockClone = 5,
+  Projfs = 6,
+  Rcopy = 7
+}
+
+/** How a single file changed between `lower` and `merged`. */
+export declare enum IsoChangeKind {
+  Added = 0,
+  Modified = 1,
+  Removed = 2
+}
+
+/**
+ * Capture the changes between `lower` and `merged`.
+ *
+ * Uses [`pi_iso::IsolationBackend::diff`]'s default implementation —
+ * `git diff` when `merged/.git` exists, otherwise a mtime-skipped tree
+ * walk. The backend selection only affects the lifecycle methods; diff
+ * behaviour is uniform.
+ */
+export declare function isoDiff(lower: string, merged: string): Promise<IsoDiff>
+
+export interface IsoDiff {
+  files: Array<IsoFileChange>
+}
+
+/** One entry in an [`IsoDiff`]. */
+export interface IsoFileChange {
+  /** Path relative to `merged`. */
+  path: string
+  op: IsoChangeKind
+  /**
+   * Unified-diff text. `None` (`null` in JS) means the file is binary;
+   * read it directly from `merged` if you need the bytes.
+   */
+  diff?: string
+}
+
+/**
+ * True if `message` is an error message produced by [`IsoError::Unavailable`].
+ * Use this to distinguish "this backend isn't installed" from a hard
+ * failure when handling caught errors on the JS side.
+ */
+export declare function isoIsUnavailableError(message: string): boolean
+
+/**
+ * Probe whether the requested backend can start on this host. Pass
+ * `null`/omit `kind` to probe the platform-native backend.
+ */
+export declare function isoProbe(kind?: IsoBackendKind | undefined | null): IsoProbeResult
+
+/** Probe result for a specific isolation backend. */
+export interface IsoProbeResult {
+  /** True when the backend's prerequisites are satisfied. */
+  available: boolean
+  /** Human-readable explanation when `available` is false. */
+  reason?: string
+  /** Resolved backend kind. */
+  kind: IsoBackendKind
+}
+
+/**
+ * Pick the best backend available right now. `preferred` is treated as
+ * a hint — see [`pi_iso::resolve`] for the exact priority rules.
+ */
+export declare function isoResolve(preferred?: IsoBackendKind | undefined | null): IsoResolveResult
+
+/** Outcome of [`iso_resolve`]. */
+export interface IsoResolveResult {
+  /** Backend that will actually be tried first. */
+  kind: IsoBackendKind
+  /** Host-available backends in retry order, starting with `kind`. */
+  candidates: Array<IsoBackendKind>
+  /**
+   * True when the resolver fell back from `preferred` (or from the
+   * first automatic candidate) to a different backend.
+   */
+  fellBack: boolean
+  /** Human-readable reason for the fallback, if any. */
+  reason?: string
+}
+
+/**
+ * Materialise `merged` as a writable view of `lower` using the requested
+ * backend. `kind` defaults to the native backend.
+ */
+export declare function isoStart(kind: IsoBackendKind | undefined | null, lower: string, merged: string): Promise<void>
+
+/** Tear down a previously started backend at `merged`. */
+export declare function isoStop(kind: IsoBackendKind | undefined | null, merged: string): Promise<void>
 
 /** Event types from Kitty keyboard protocol (flag 2). */
 export declare enum KeyEventType {
@@ -1007,32 +1111,6 @@ export interface ProcessWaitOptions {
   signal?: unknown
 }
 
-/** Probe whether `ProjFS` overlay virtualization can be started on this system. */
-export declare function projfsOverlayProbe(): ProjfsOverlayProbeResult
-
-/**
- * Result of probing Windows Projected File System (`ProjFS`) support for
- * overlay workflows.
- */
-export interface ProjfsOverlayProbeResult {
-  /** True when `ProjFS` APIs are available and loaded. */
-  available: boolean
-  /**
-   * Human-readable reason when `available` is false (e.g. wrong OS or missing
-   * DLL).
-   */
-  reason?: string
-}
-
-/**
- * Start a `ProjFS` overlay: `projection_root` shows the merged view;
- * `lower_root` is the backing tree.
- */
-export declare function projfsOverlayStart(lowerRoot: string, projectionRoot: string): void
-
-/** Stop `ProjFS` virtualization for an active `projection_root` session. */
-export declare function projfsOverlayStop(projectionRoot: string): void
-
 /** Result of a PTY command run. */
 export interface PtyRunResult {
   /** Exit code when the command completes. */
@@ -1045,8 +1123,6 @@ export interface PtyRunResult {
 
 /** Options for running a command in a PTY session. */
 export interface PtyStartOptions {
-  /** Shell binary used to execute the command (optional). */
-  shell?: string
   /** Command string to execute. */
   command: string
   /** Working directory for command execution. */
@@ -1061,6 +1137,11 @@ export interface PtyStartOptions {
   cols?: number
   /** PTY row count. */
   rows?: number
+  /**
+   * Shell binary to use (e.g. "sh", "bash", or an absolute path).
+   * Defaults to "sh" if not provided.
+   */
+  shell?: string
 }
 
 /**
@@ -1072,26 +1153,6 @@ export interface PtyStartOptions {
  * Returns an error if clipboard access fails or image encoding fails.
  */
 export declare function readImageFromClipboard(): Promise<ClipboardImage | undefined | null>
-
-/** Sampling filter for resize operations. */
-export declare enum SamplingFilter {
-  /** Nearest-neighbor sampling (fast, low quality). */
-  Nearest = 1,
-  /** Triangle filter (linear interpolation). */
-  Triangle = 2,
-  /** Catmull-Rom filter with sharper edges. */
-  CatmullRom = 3,
-  /** Gaussian filter for smoother results. */
-  Gaussian = 4,
-  /** Lanczos3 filter for high-quality downscaling. */
-  Lanczos3 = 5
-}
-
-/**
- * Strip ANSI escape sequences, remove control characters / lone surrogates,
- * and normalize line endings.
- */
-export declare function sanitizeText(text: string): string
 
 /**
  * Search content for a pattern (one-shot, compiles pattern each time).
@@ -1152,8 +1213,6 @@ export interface ShellExecuteOptions {
   env?: Record<string, string>
   /** Environment variables to apply once per session. */
   sessionEnv?: Record<string, string>
-  /** Run the command attached to a PTY. */
-  pty?: boolean
   /** Timeout in milliseconds before cancelling the command. */
   timeoutMs?: number
   /** Optional snapshot file to source on session creation. */
@@ -1182,8 +1241,6 @@ export interface ShellRunOptions {
   cwd?: string
   /** Environment variables to apply for this command only. */
   env?: Record<string, string>
-  /** Run the command attached to a PTY. */
-  pty?: boolean
   /** Timeout in milliseconds before cancelling the command. */
   timeoutMs?: number
   /** Abort signal for cancelling the operation. */

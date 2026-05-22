@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Generic, Mapping, Sequence, TypeVar, cast
 
 from .host_tools import HostTool, HostToolContext
+from .host_uris import HostUri, HostUriContext, normalize_read_result
 from .protocol import (
     AgentStartEvent,
     AgentEndEvent,
@@ -216,6 +217,11 @@ class _PendingHostToolCall:
 
 
 @dataclass(slots=True)
+class _PendingHostUriRequest:
+    cancel_event: threading.Event
+
+
+@dataclass(slots=True)
 class _BoundedHistory(Generic[THistoryItem]):
     limit: int | None
     items: list[THistoryItem] = field(default_factory=list)
@@ -272,11 +278,15 @@ class RpcClient:
         session_dir: str | Path | None = None,
         cwd: str | Path | None = None,
         env: Mapping[str, str] | None = None,
+        user: int | str | None = None,
+        group: int | str | None = None,
+        extra_groups: Sequence[int | str] | None = None,
         thinking: ThinkingLevel | None = None,
         append_system_prompt: str | None = None,
         provider_session_id: str | None = None,
         tools: Sequence[str] | None = None,
         custom_tools: Sequence[HostTool[Any, Any]] | None = None,
+        host_uris: Sequence[HostUri[Any]] | None = None,
         no_session: bool = False,
         no_skills: bool = False,
         no_rules: bool = False,
@@ -295,11 +305,15 @@ class RpcClient:
         self._session_dir = Path(session_dir) if session_dir is not None else None
         self._cwd = Path(cwd) if cwd is not None else None
         self._env = dict(env or {})
+        self._user = user
+        self._group = group
+        self._extra_groups = list(extra_groups) if extra_groups is not None else None
         self._thinking = thinking
         self._append_system_prompt = append_system_prompt
         self._provider_session_id = provider_session_id
         self._tools = tuple(tools) if tools is not None else None
         self._custom_tools = tuple(custom_tools) if custom_tools is not None else ()
+        self._host_uris = tuple(host_uris) if host_uris is not None else ()
         self._no_session = no_session
         self._no_skills = no_skills
         self._no_rules = no_rules
@@ -320,6 +334,7 @@ class RpcClient:
         self._event_condition = threading.Condition()
         self._pending: dict[str, _PendingRequest] = {}
         self._pending_host_tool_calls: dict[str, _PendingHostToolCall] = {}
+        self._pending_host_uri_requests: dict[str, _PendingHostUriRequest] = {}
         self._request_id = 0
         self._events = _BoundedHistory[JsonObject](self._max_event_history)
         self._async_errors = _BoundedHistory[BaseException](_DEFAULT_ERROR_HISTORY_LIMIT)
@@ -394,6 +409,9 @@ class RpcClient:
             list(self._build_command()),
             cwd=str(self._cwd) if self._cwd is not None else None,
             env={**os.environ, **self._env},
+            user=self._user,
+            group=self._group,
+            extra_groups=self._extra_groups,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -426,6 +444,8 @@ class RpcClient:
 
         if self._custom_tools:
             self.set_custom_tools(self._custom_tools)
+        if self._host_uris:
+            self.set_host_uris(self._host_uris)
         return self
 
     def stop(self) -> None:
@@ -436,6 +456,8 @@ class RpcClient:
         self._stopping = True
         for pending_call in self._pending_host_tool_calls.values():
             pending_call.cancel_event.set()
+        for pending_uri in self._pending_host_uri_requests.values():
+            pending_uri.cancel_event.set()
 
         try:
             if process.stdin is not None:
@@ -462,12 +484,18 @@ class RpcClient:
                     process.stderr.close()
                 except OSError:
                     pass
-            self._fail_pending(RpcProcessExitError("RPC process stopped"))
+            # Mark the client closed so any thread blocked in
+            # `_wait_for_agent_end` raises `RpcProcessExitError` instead of
+            # waiting for its request timeout. The stdout reader loop would
+            # normally do this when it observes the closed pipe, but it
+            # guards on `if not self._stopping:` — which is True by the time
+            # we get here — and so skips it. Calling `_mark_closed` directly
+            # closes the gap. It is idempotent: a second call (e.g. from the
+            # reader's exception path) returns early.
+            self._mark_closed(RpcProcessExitError("RPC process stopped"))
             self._pending_host_tool_calls.clear()
+            self._pending_host_uri_requests.clear()
             self._process = None
-            self._ready.set()
-            with self._event_condition:
-                self._event_condition.notify_all()
             if self._stdout_thread is not None:
                 self._stdout_thread.join(timeout=1.0)
             if self._stderr_thread is not None:
@@ -759,6 +787,27 @@ class RpcClient:
         if not isinstance(tool_names, list):
             raise RpcError("set_host_tools response did not include toolNames")
         return tuple(str(name) for name in tool_names)
+
+    def set_host_uris(self, host_uris: Sequence[HostUri[Any]]) -> tuple[str, ...]:
+        self._host_uris = tuple(host_uris)
+        if self._process is None:
+            return tuple(uri.scheme for uri in self._host_uris)
+
+        schemes_payload: list[JsonObject] = []
+        for uri in self._host_uris:
+            entry: JsonObject = {"scheme": uri.scheme, "writable": uri.writable, "immutable": uri.immutable}
+            if uri.description is not None:
+                entry["description"] = uri.description
+            schemes_payload.append(entry)
+
+        payload = self._request(
+            "set_host_uri_schemes",
+            schemes=cast(JsonValue, schemes_payload),
+        )
+        schemes = payload.get("schemes") or []
+        if not isinstance(schemes, list):
+            raise RpcError("set_host_uri_schemes response did not include schemes")
+        return tuple(str(entry) for entry in schemes)
 
     def prompt(
         self,
@@ -1054,6 +1103,88 @@ class RpcClient:
         if pending_call is not None:
             pending_call.cancel_event.set()
 
+    def _send_host_uri_error(self, request_id: str, message: str) -> None:
+        self._send_notification(
+            {
+                "type": "host_uri_result",
+                "id": request_id,
+                "error": message,
+                "isError": True,
+            }
+        )
+
+    def _handle_host_uri_request(self, payload: JsonObject) -> None:
+        request_id = payload.get("id")
+        operation = payload.get("operation")
+        url = payload.get("url")
+        if not isinstance(request_id, str) or not isinstance(operation, str) or not isinstance(url, str):
+            return
+        if operation not in ("read", "write"):
+            self._send_host_uri_error(request_id, f"Unsupported host URI operation: {operation}")
+            return
+
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(url)
+        except ValueError:
+            self._send_host_uri_error(request_id, f"Could not parse host URI: {url}")
+            return
+        scheme = (parsed.scheme or "").lower()
+        uri = next((candidate for candidate in self._host_uris if candidate.scheme == scheme), None)
+        if uri is None:
+            self._send_host_uri_error(request_id, f'Host URI scheme "{scheme}://" is not registered')
+            return
+
+        if operation == "write" and uri.write is None:
+            self._send_host_uri_error(
+                request_id, f'Host URI scheme "{scheme}://" was not registered with a write handler'
+            )
+            return
+
+        pending = _PendingHostUriRequest(cancel_event=threading.Event())
+        self._pending_host_uri_requests[request_id] = pending
+
+        def run() -> None:
+            try:
+                context = HostUriContext(url=url, operation=cast(Any, operation), _cancel_event=pending.cancel_event)
+                if operation == "read":
+                    value = uri.read(url, context)
+                    if pending.cancel_event.is_set():
+                        return
+                    result_fields = normalize_read_result(value)
+                    self._send_notification(
+                        {
+                            "type": "host_uri_result",
+                            "id": request_id,
+                            **result_fields,
+                        }
+                    )
+                else:
+                    raw_content = payload.get("content")
+                    content = str(raw_content) if raw_content is not None else ""
+                    assert uri.write is not None
+                    uri.write(url, content, context)
+                    if pending.cancel_event.is_set():
+                        return
+                    self._send_notification({"type": "host_uri_result", "id": request_id})
+            except Exception as exc:
+                if pending.cancel_event.is_set():
+                    return
+                self._send_host_uri_error(request_id, str(exc))
+            finally:
+                self._pending_host_uri_requests.pop(request_id, None)
+
+        threading.Thread(target=run, name=f"omp-rpc-host-uri:{scheme}:{operation}", daemon=True).start()
+
+    def _handle_host_uri_cancel(self, payload: JsonObject) -> None:
+        target_id = payload.get("targetId")
+        if not isinstance(target_id, str):
+            return
+        pending = self._pending_host_uri_requests.get(target_id)
+        if pending is not None:
+            pending.cancel_event.set()
+
     def _add_typed_event_listener(self, event_type: str, listener: TEventListener) -> Callable[[], None]:
         listeners = self._typed_event_listeners.setdefault(event_type, [])
         typed_listener = cast(AgentEventListener, listener)
@@ -1231,6 +1362,12 @@ class RpcClient:
                     continue
                 if payload.get("type") == "host_tool_cancel":
                     self._handle_host_tool_cancel(payload)
+                    continue
+                if payload.get("type") == "host_uri_request":
+                    self._handle_host_uri_request(payload)
+                    continue
+                if payload.get("type") == "host_uri_cancel":
+                    self._handle_host_uri_cancel(payload)
                     continue
 
                 notification = parse_notification(payload)

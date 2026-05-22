@@ -1,5 +1,5 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
+
 import {
 	Box,
 	type Component,
@@ -13,7 +13,7 @@ import {
 	Text,
 	type TUI,
 } from "@oh-my-pi/pi-tui";
-import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
+import { getProjectDir, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { EDIT_MODE_STRATEGIES, type EditMode, type PerFileDiffPreview } from "../../edit";
 import type { Theme } from "../../modes/theme/theme";
 import { theme } from "../../modes/theme/theme";
@@ -32,7 +32,6 @@ import {
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
 import { toolRenderers } from "../../tools/renderers";
 import { renderStatusLine } from "../../tui";
-import { convertToPng } from "../../utils/image-convert";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { renderDiff } from "./diff";
 
@@ -305,13 +304,13 @@ export class ToolExecutionComponent extends Container {
 
 			// Convert async - catch errors from processing
 			const index = i;
-			convertToPng(img.data, img.mimeType)
-				.then(converted => {
-					if (converted) {
-						this.#convertedImages.set(index, converted);
-						this.#updateDisplay();
-						this.#ui.requestRender();
-					}
+			new Bun.Image(Buffer.from(img.data, "base64"))
+				.png()
+				.toBase64()
+				.then(data => {
+					this.#convertedImages.set(index, { data, mimeType: "image/png" });
+					this.#updateDisplay();
+					this.#ui.requestRender();
 				})
 				.catch(() => {
 					// Ignore conversion failures - display will use original image format

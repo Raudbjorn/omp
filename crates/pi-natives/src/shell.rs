@@ -13,7 +13,9 @@ use pi_shell::{
 	MinimizerResult as CoreMinimizerResult, Shell as CoreShell,
 	ShellExecuteOptions as CoreShellExecuteOptions, ShellOptions as CoreShellOptions,
 	ShellRunOptions as CoreShellRunOptions, ShellRunResult as CoreShellRunResult,
-	execute_shell as core_execute_shell, minimizer,
+	execute_shell as core_execute_shell,
+	fixup::{BashFixupResult as CoreBashFixupResult, apply_bash_fixups as core_apply_bash_fixups},
+	minimizer,
 };
 
 use crate::task;
@@ -84,8 +86,6 @@ pub struct ShellRunOptions<'env> {
 	pub cwd:        Option<String>,
 	/// Environment variables to apply for this command only.
 	pub env:        Option<HashMap<String, String>>,
-	/// Run the command attached to a PTY.
-	pub pty:        Option<bool>,
 	/// Timeout in milliseconds before cancelling the command.
 	pub timeout_ms: Option<u32>,
 	/// Abort signal for cancelling the operation.
@@ -103,8 +103,6 @@ pub struct ShellExecuteOptions<'env> {
 	pub env:           Option<HashMap<String, String>>,
 	/// Environment variables to apply once per session.
 	pub session_env:   Option<HashMap<String, String>>,
-	/// Run the command attached to a PTY.
-	pub pty:           Option<bool>,
 	/// Timeout in milliseconds before cancelling the command.
 	pub timeout_ms:    Option<u32>,
 	/// Optional snapshot file to source on session creation.
@@ -213,16 +211,19 @@ impl Shell {
 			command:    options.command,
 			cwd:        options.cwd,
 			env:        options.env,
-			pty:        options.pty.unwrap_or(false),
 			timeout_ms: options.timeout_ms,
 		};
 		task::future(env, "shell.run", async move {
-			let chunk_tx = bridge_chunks(on_chunk);
-			inner
+			let (chunk_tx, drain_handle) = bridge_chunks(on_chunk);
+			let result = inner
 				.run(run_options, chunk_tx, cancel_token.into_core())
 				.await
 				.map(Into::into)
-				.map_err(|err| Error::from_reason(err.to_string()))
+				.map_err(|err| Error::from_reason(err.to_string()));
+			if let Some(handle) = drain_handle {
+				let _ = handle.await;
+			}
+			result
 		})
 	}
 
@@ -257,28 +258,59 @@ pub fn execute_shell<'env>(
 		timeout_ms:    options.timeout_ms,
 		snapshot_path: options.snapshot_path,
 		minimizer:     options.minimizer.map(Into::into),
-		pty:           options.pty.unwrap_or(false),
 	};
 	task::future(env, "shell.execute", async move {
-		let chunk_tx = bridge_chunks(on_chunk);
-		core_execute_shell(exec_options, chunk_tx, cancel_token.into_core())
+		let (chunk_tx, drain_handle) = bridge_chunks(on_chunk);
+		let result = core_execute_shell(exec_options, chunk_tx, cancel_token.into_core())
 			.await
 			.map(Into::into)
-			.map_err(|err| Error::from_reason(err.to_string()))
+			.map_err(|err| Error::from_reason(err.to_string()));
+		if let Some(handle) = drain_handle {
+			let _ = handle.await;
+		}
+		result
 	})
 }
 
 fn bridge_chunks(
 	on_chunk: Option<ThreadsafeFunction<String>>,
-) -> Option<mpsc::UnboundedSender<String>> {
-	let on_chunk = on_chunk?;
+) -> (Option<mpsc::UnboundedSender<String>>, Option<napi::tokio::task::JoinHandle<()>>) {
+	let Some(on_chunk) = on_chunk else {
+		return (None, None);
+	};
 	let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-	napi::tokio::spawn(async move {
+	let handle = napi::tokio::spawn(async move {
 		while let Some(chunk) = rx.recv().await {
 			on_chunk.call(Ok(chunk), ThreadsafeFunctionCallMode::NonBlocking);
 		}
 	});
-	Some(tx)
+	(Some(tx), Some(handle))
+}
+
+/// Result of [`apply_bash_fixups`]: a possibly-rewritten command plus the
+/// substrings that were removed (in source order).
+#[napi(object)]
+pub struct BashFixupResult {
+	/// Possibly-rewritten command. Equal to the input when no fixup fired.
+	pub command:  String,
+	/// Substrings removed, in source order — suitable for a user-facing notice.
+	pub stripped: Vec<String>,
+}
+
+impl From<CoreBashFixupResult> for BashFixupResult {
+	fn from(value: CoreBashFixupResult) -> Self {
+		Self { command: value.command, stripped: value.stripped }
+	}
+}
+
+/// Apply conservative pre-execution rewrites to a bash command.
+///
+/// Strips trailing `| head|tail [safe-args]` and redundant trailing `2>&1`
+/// from each top-level pipeline. The full rules and bail conditions live in
+/// `pi_shell::fixup`. Synchronous and cheap (one parse pass over the input).
+#[napi]
+pub fn apply_bash_fixups(command: String) -> BashFixupResult {
+	core_apply_bash_fixups(&command).into()
 }
 
 #[cfg(test)]
@@ -341,7 +373,6 @@ mod tests {
 						command:    "/bin/sh -c 'printf \"%d\\n\" \"$$\"; sleep 0.5'".to_string(),
 						cwd:        None,
 						env:        None,
-						pty:        false,
 						timeout_ms: None,
 					},
 					Some(tx),
@@ -373,34 +404,6 @@ mod tests {
 		assert_eq!(child_sid, child_pid);
 	}
 
-	#[cfg(unix)]
-	#[tokio::test(flavor = "multi_thread")]
-	async fn pty_run_attaches_stdio_to_terminal() {
-		let shell = CoreShell::new(None);
-		let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-		let result = shell
-			.run(
-				CoreShellRunOptions {
-					command:    "test -t 0 && test -t 1 && tty".to_string(),
-					cwd:        None,
-					env:        None,
-					pty:        true,
-					timeout_ms: Some(5_000),
-				},
-				Some(tx),
-				CancelToken::default(),
-			)
-			.await
-			.expect("shell run");
-		let mut output = String::new();
-		while let Ok(chunk) = rx.try_recv() {
-			output.push_str(&chunk);
-		}
-
-		assert_eq!(result.exit_code, Some(0), "output: {output:?}");
-		assert!(output.contains("/dev/"), "tty output should include a terminal path: {output:?}");
-	}
-
 	#[tokio::test]
 	async fn read_output_stops_when_cancelled_before_pipe_eof() {
 		let shell = CoreShell::new(None);
@@ -413,7 +416,6 @@ mod tests {
 						command:    "sh -c 'sleep 30 & wait'".to_string(),
 						cwd:        None,
 						env:        None,
-						pty:        false,
 						timeout_ms: None,
 					},
 					None,

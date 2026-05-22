@@ -68,21 +68,22 @@ Consumers in `packages/coding-agent` and `packages/tui` import directly from `@o
 | PTY               | `new PtySession()`, `start/write/resize/kill`                                                              | `pty.rs`                                                    | class / promises              |
 | Process           | `killTree(pid, signal)`, `listDescendants(pid)`                                                            | `ps.rs`                                                     | sync                          |
 | Keys              | `parseKey`, `matchesKey`, Kitty/legacy helpers                                                             | `keys.rs`                                                   | sync                          |
-| Text              | `wrapTextWithAnsi`, `truncateToWidth`, `sliceWithWidth`, `extractSegments`, `sanitizeText`, `visibleWidth` | `text.rs`                                                   | sync                          |
+| Text              | `wrapTextWithAnsi`, `truncateToWidth`, `sliceWithWidth`, `extractSegments`, `visibleWidth`                 | `text.rs`                                                   | sync                          |
 | Highlight         | `highlightCode`, `supportsLanguage`, `getSupportedLanguages`                                               | `highlight.rs`                                              | sync                          |
 | HTML              | `htmlToMarkdown(html, options?)`                                                                           | `html.rs`                                                   | `Promise<string>`             |
-| Image             | `PhotonImage`, `encodeSixel`                                                                               | `image.rs`                                                  | class / sync / promises       |
+| SIXEL             | `encodeSixel`                                                                                              | `sixel.rs`                                                  | sync                          |
 | Clipboard         | `copyToClipboard`, `readImageFromClipboard`                                                                | `clipboard.rs`                                              | sync / promise                |
 | Tokens            | `countTokens(input, encoding?)`                                                                            | `tokens.rs`                                                 | sync                          |
-| System            | `detectMacOSAppearance`, `MacAppearanceObserver`, `MacOSPowerAssertion`, `getWorkProfile`, ProjFS helpers  | `appearance.rs`, `power.rs`, `prof.rs`, `projfs_overlay.rs` | mixed                         |
+| Isolation         | `isoBackend`, `isoResolve`, `isoProbe`, `isoStart`, `isoStop`, `isoDiff`, `isoIsUnavailableError`          | `iso.rs` + `crates/pi-iso`                                  | mixed                         |
+| System            | `detectMacOSAppearance`, `MacAppearanceObserver`, `MacOSPowerAssertion`, `getWorkProfile`                  | `appearance.rs`, `power.rs`, `prof.rs`                      | mixed                         |
 
 ## Sync vs async contract differences
 
 The contract preserves Rust/N-API call style:
 
-- **Promise-returning exports** for worker-thread or async runtime work (`grep`, `glob`, `fuzzyFind`, `astGrep`, `astEdit`, `htmlToMarkdown`, shell/PTY runs, image parse/resize/encode, clipboard image read).
+- **Promise-returning exports** for worker-thread or async runtime work (`grep`, `glob`, `fuzzyFind`, `astGrep`, `astEdit`, `htmlToMarkdown`, shell/PTY runs, isolation start/stop/diff, clipboard image read).
 - **Synchronous exports** for deterministic in-memory transforms/parsers or direct system calls (`search`, `hasMatch`, highlighting, text utilities, token counting, process queries, `copyToClipboard`, `encodeSixel`).
-- **Constructor exports** for stateful runtime objects (`Shell`, `PtySession`, `PhotonImage`, macOS observer/power handles).
+- **Constructor exports** for stateful runtime objects (`Shell`, `PtySession`, macOS observer/power handles).
 
 Changing sync ↔ async for an existing export is a breaking public API change because consumers call these exports directly.
 
@@ -108,10 +109,10 @@ Native enums are represented in generated declarations and also appended to `mod
 - `Encoding`
 - `FileType`
 - `GrepOutputMode`
-- `ImageFormat`
+- `IsoBackendKind`
+- `IsoChangeKind`
 - `KeyEventType`
 - `MacOSAppearance`
-- `SamplingFilter`
 
 ## Error behavior and caveats
 

@@ -49,3 +49,4 @@ This fork adds the following feature areas on top of upstream:
 - AI auth broker/gateway infrastructure for sharing refreshed provider credentials through broker snapshots and server-side OpenAI/Anthropic/pi-native protocol shims
 - Fork-local bundled Danger Pi extensions now live in `packages/coding-agent/src/danger-pi/extensions/index.ts` and are wired directly into `sdk.ts` inline extensions, separate from filesystem-discovered user/project extensions
 - Added fork-local `meta` bundled extension slash command for UI/autocomplete experimentation with `foo`, `bar`, and `baz` argument suggestions
+- Platform additions for isolation and orchestration: `pi-iso` native isolation backends, SIXEL-only native image encoding, Windows-safe native addon staging/version sentinels, Python `omp-rpc` host URI helpers, and the `robomp` Docker/Python/Solid dashboard workspace

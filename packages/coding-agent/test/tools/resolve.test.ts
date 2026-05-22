@@ -3,7 +3,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ResolveTool, resolveToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/resolve";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 
 function createSession(handler?: (input: unknown) => Promise<unknown>): ToolSession {
 	return {
