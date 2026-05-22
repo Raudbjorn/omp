@@ -64,17 +64,6 @@ async function cleanupStaleTemps(dir: string): Promise<void> {
 	}
 }
 
-async function stripAddon(filePath: string): Promise<void> {
-	if (targetPlatform === "win32") return; // Windows linkers strip by default
-
-	const stripCmd = targetPlatform === "darwin" ? "strip -S" : "strip";
-	console.log(`Stripping native addon: ${path.basename(filePath)}`);
-	const result = await $`${stripCmd} ${filePath}`.nothrow().quiet();
-	if (result.exitCode !== 0) {
-		console.warn(`strip failed (exit ${result.exitCode}), continuing with unstripped addon`);
-	}
-}
-
 async function installBinary(src: string, dest: string): Promise<void> {
 	const tempPath = `${dest}.tmp.${process.pid}`;
 
@@ -208,13 +197,12 @@ try {
 		const stderr = buildResult.stderr?.toString("utf-8") ?? "";
 		throw new Error(`napi build failed${stderr ? `:\n${stderr}` : ""}`);
 	}
+
 	const builtAddonPath = await resolveBuiltAddonPath(buildOutputDir, canonicalAddonFilename);
 	if (builtAddonPath !== canonicalAddonPath) {
 		console.log(`Normalizing native addon filename: ${path.basename(builtAddonPath)} → ${canonicalAddonFilename}`);
 		await installBinary(builtAddonPath, canonicalAddonPath);
 	}
-
-	await stripAddon(canonicalAddonPath);
 
 	await installGeneratedBindings(buildOutputDir);
 

@@ -26,9 +26,18 @@ export interface GetAddonFilenamesInput {
 
 export function getAddonFilenames(input: GetAddonFilenamesInput): string[];
 
+export interface ShouldStageNodeModulesAddonInput {
+	platform: NodeJS.Platform | string;
+	isCompiledBinary: boolean;
+	nativeDir: string;
+}
+
+export function shouldStageNodeModulesAddon(input: ShouldStageNodeModulesAddonInput): boolean;
+
 export interface ResolveLoaderCandidatesInput {
 	addonFilenames: string[];
 	isCompiledBinary: boolean;
+	stageFromNodeModules?: boolean;
 	nativeDir: string;
 	execDir: string;
 	versionedDir: string;
@@ -36,3 +45,5 @@ export interface ResolveLoaderCandidatesInput {
 }
 
 export function resolveLoaderCandidates(input: ResolveLoaderCandidatesInput): string[];
+
+export function loadNative(): Record<string, unknown>;

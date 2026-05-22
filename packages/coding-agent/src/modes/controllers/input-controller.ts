@@ -1,8 +1,7 @@
 import * as fs from "node:fs/promises";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
 import type { AutocompleteProvider, EditorSubmitMetadata, SlashCommand } from "@oh-my-pi/pi-tui";
-import { $env, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { $env, parseFrontmatter, sanitizeText } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
 import { interpolateShellExpressions } from "../../extensibility/shell-interpolation";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";

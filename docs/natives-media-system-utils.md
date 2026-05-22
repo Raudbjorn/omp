@@ -1,16 +1,17 @@
 # Natives media + system utilities
 
-This document covers the media/system/conversion exports in `@oh-my-pi/pi-natives`: image processing, HTML conversion, clipboard access, token counting, macOS appearance/power helpers, ProjFS helpers, and work profiling.
+This document covers the media/system/conversion exports in `@oh-my-pi/pi-natives`: SIXEL terminal image encoding, HTML conversion, clipboard access, token counting, macOS appearance/power helpers, isolation helpers, and work profiling.
 
 ## Implementation files
 
-- `crates/pi-natives/src/image.rs`
+- `crates/pi-natives/src/sixel.rs`
 - `crates/pi-natives/src/html.rs`
 - `crates/pi-natives/src/clipboard.rs`
 - `crates/pi-natives/src/tokens.rs`
 - `crates/pi-natives/src/appearance.rs`
 - `crates/pi-natives/src/power.rs`
-- `crates/pi-natives/src/projfs_overlay.rs`
+- `crates/pi-natives/src/iso.rs`
+- `crates/pi-iso/src/*.rs`
 - `crates/pi-natives/src/prof.rs`
 - `crates/pi-natives/src/task.rs`
 - `packages/natives/native/index.d.ts`
@@ -21,10 +22,7 @@ This document covers the media/system/conversion exports in `@oh-my-pi/pi-native
 
 | JS export                                           | Rust N-API export              | Rust module         |
 | --------------------------------------------------- | ------------------------------ | ------------------- |
-| `PhotonImage.parse(bytes)`                          | `PhotonImage::parse`           | `image.rs`          |
-| `PhotonImage#resize(width, height, filter)`         | `PhotonImage::resize`          | `image.rs`          |
-| `PhotonImage#encode(format, quality)`               | `PhotonImage::encode`          | `image.rs`          |
-| `encodeSixel(bytes, targetWidthPx, targetHeightPx)` | `encode_sixel`                 | `image.rs`          |
+| `encodeSixel(bytes, targetWidthPx, targetHeightPx)` | `encode_sixel`                 | `sixel.rs`          |
 | `htmlToMarkdown(html, options?)`                    | `html_to_markdown`             | `html.rs`           |
 | `copyToClipboard(text)`                             | `copy_to_clipboard`            | `clipboard.rs`      |
 | `readImageFromClipboard()`                          | `read_image_from_clipboard`    | `clipboard.rs`      |
@@ -32,32 +30,16 @@ This document covers the media/system/conversion exports in `@oh-my-pi/pi-native
 | `detectMacOSAppearance()`                           | `detect_mac_os_appearance`     | `appearance.rs`     |
 | `MacAppearanceObserver.start(callback)`             | `MacAppearanceObserver::start` | `appearance.rs`     |
 | `MacOSPowerAssertion.start(options?)`               | `MacOSPowerAssertion::start`   | `power.rs`          |
-| `projfsOverlayProbe/start/stop`                     | ProjFS exports                 | `projfs_overlay.rs` |
+| `isoBackend/resolve/probe/start/stop/diff`          | isolation exports              | `iso.rs`            |
 | `getWorkProfile(lastSeconds)`                       | `get_work_profile`             | `prof.rs`           |
 
 ## Data format boundaries and conversions
 
-### Image (`image`)
+### SIXEL (`sixel`)
 
-- **JS input boundary**: `Uint8Array` encoded image bytes for `PhotonImage.parse` and `encodeSixel`.
+- **JS input boundary**: `Uint8Array` encoded image bytes for `encodeSixel`.
 - **Rust decode boundary**: bytes are copied/read, format is guessed with `ImageReader::with_guessed_format()`, then decoded to `DynamicImage`.
-- **In-memory state**: `PhotonImage` stores `Arc<DynamicImage>`.
-- **Output boundary**:
-  - `PhotonImage#encode(format, quality)` returns a promise for encoded bytes (`Vec<u8>` in Rust; generated TS currently declares `Promise<Array<number>>`).
-  - `encodeSixel(...)` returns a SIXEL escape string synchronously.
-
-Format IDs:
-
-- `0`: PNG
-- `1`: JPEG
-- `2`: WebP
-- `3`: GIF
-
-Encoding behavior:
-
-- JPEG uses the provided `quality` with `JpegEncoder::new_with_quality`.
-- WebP uses the `webp` crate encoder with `quality` as `f32` in the same 0..=100 range.
-- PNG/GIF ignore `quality`.
+- **Output boundary**: `encodeSixel(...)` returns a SIXEL escape string synchronously.
 - Invalid dimensions for SIXEL (`0` width or height) fail with `Target SIXEL dimensions must be greater than zero`.
 
 ### HTML conversion (`html`)
@@ -95,13 +77,15 @@ There is no current `packages/natives` TS wrapper that emits OSC52, handles Term
 - `MacAppearanceObserver.start(callback)` returns a handle with `stop()`; on macOS it uses distributed notifications plus a 2-second polling fallback, and on non-macOS it is a no-op observer.
 - `MacOSPowerAssertion.start(options?)` returns a handle with `stop()`; on macOS it acquires an IOKit assertion, and on other platforms it is a no-op handle.
 
-### Windows ProjFS helpers
+### Isolation helpers
 
-- `projfsOverlayProbe()` reports whether ProjFS APIs are available.
-- `projfsOverlayStart(lowerRoot, projectionRoot)` starts an overlay.
-- `projfsOverlayStop(projectionRoot)` stops an overlay session.
+- `isoBackend()` reports the default backend kind for the current platform.
+- `isoResolve(preferred?)` chooses an available backend and reports fallback details.
+- `isoProbe(kind?)` checks backend prerequisites.
+- `isoStart(kind?, lower, merged)` and `isoStop(kind?, merged)` manage the writable view.
+- `isoDiff(lower, merged)` reports file changes between lower and merged trees.
 
-These helpers are platform-specific; availability must be checked before relying on overlay behavior.
+These helpers are platform-specific; availability must be checked before relying on isolation behavior.
 
 ### Work profiling (`work`)
 
@@ -115,18 +99,15 @@ These helpers are platform-specific; availability must be checked before relying
 
 ## Lifecycle and state transitions
 
-### Image lifecycle
+### SIXEL lifecycle
 
-1. `PhotonImage.parse(bytes)` schedules a blocking decode task (`image.decode`).
-2. On success, a native `PhotonImage` handle exists in JS.
-3. `resize(...)` creates a new native handle (`image.resize`); old and new handles can coexist.
-4. `encode(...)` schedules `image.encode` and materializes bytes without mutating image dimensions.
-5. `encodeSixel(...)` decodes, optionally resizes to exact target dimensions with Lanczos3, and returns SIXEL text synchronously.
+1. `encodeSixel(...)` decodes encoded image bytes.
+2. It optionally resizes to exact target dimensions with Lanczos3.
+3. It returns SIXEL text synchronously.
 
 Failure transitions:
 
-- Format detection/decode failure rejects parse promise or throws from SIXEL encoding.
-- Encode failure rejects encode promise.
+- Format detection/decode failure throws from SIXEL encoding.
 - Invalid SIXEL dimensions throw.
 
 ### HTML lifecycle
