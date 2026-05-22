@@ -1,14 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import type { Tool, ToolCall } from "@oh-my-pi/pi-ai/types";
 import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 
 describe("Tool argument coercion", () => {
 	it("coerces numeric strings when schema expects number", () => {
 		const tool: Tool = {
 			name: "t1",
 			description: "",
-			parameters: Type.Object({ timeout: Type.Number() }),
+			parameters: z.object({ timeout: z.number() }),
 		};
 
 		const toolCall: ToolCall = {
@@ -27,7 +27,7 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "t2",
 			description: "",
-			parameters: Type.Object({ label: Type.String() }),
+			parameters: z.object({ label: z.string() }),
 		};
 
 		const toolCall: ToolCall = {
@@ -46,7 +46,7 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "t3",
 			description: "",
-			parameters: Type.Object({ items: Type.Array(Type.Number()) }),
+			parameters: z.object({ items: z.array(z.number()) }),
 		};
 
 		const toolCall: ToolCall = {
@@ -64,7 +64,7 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "t4",
 			description: "",
-			parameters: Type.Object({ payload: Type.Object({ a: Type.Number() }) }),
+			parameters: z.object({ payload: z.object({ a: z.number() }) }),
 		};
 
 		const toolCall: ToolCall = {
@@ -78,11 +78,94 @@ describe("Tool argument coercion", () => {
 		expect(result.payload).toEqual({ a: 1 });
 	});
 
+	it("preserves unknown root fields after Zod validation so tools can reject disabled arguments", () => {
+		const tool: Tool = {
+			name: "t4b",
+			description: "",
+			parameters: z.object({ command: z.string() }),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-4b",
+			name: "t4b",
+			arguments: { command: "echo hi", async: true },
+		});
+
+		expect(result).toEqual({ command: "echo hi", async: true });
+	});
+
+	it("coerces JSON-stringified records emitted for Zod record fields", () => {
+		const tool: Tool = {
+			name: "t4c",
+			description: "",
+			parameters: z.object({ env: z.record(z.string(), z.string()) }),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-4c",
+			name: "t4c",
+			arguments: { env: '{"FOO":"bar"}' },
+		});
+
+		expect(result).toEqual({ env: { FOO: "bar" } });
+	});
+
+	it("upgrades draft-07-shaped JSON Schema without $schema before validation", () => {
+		const tool: Tool = {
+			name: "json_schema",
+			description: "",
+			parameters: {
+				type: "object",
+				properties: {
+					item: { $ref: "#/definitions/Item" },
+					name: { type: "string", nullable: true },
+					pair: {
+						type: "array",
+						items: [{ type: "string" }, { type: "integer" }],
+						additionalItems: false,
+					},
+				},
+				required: ["item", "name", "pair"],
+				definitions: {
+					Item: { type: "string" },
+				},
+			},
+		};
+
+		const valid = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-json-ok",
+			name: "json_schema",
+			arguments: { item: "ok", name: null, pair: ["a", 1] },
+		});
+		expect(valid).toEqual({ item: "ok", name: null, pair: ["a", 1] });
+
+		expect(() =>
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "call-json-bad",
+				name: "json_schema",
+				arguments: { item: "ok", name: null, pair: ["a", "not-an-integer"] },
+			}),
+		).toThrow("integer");
+
+		expect(() =>
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "call-json-extra",
+				name: "json_schema",
+				arguments: { item: "ok", name: null, pair: ["a", 1, "extra"] },
+			}),
+		).toThrow("false schema");
+	});
+
 	it("parses nested JSON arrays in string values", () => {
 		const tool: Tool = {
 			name: "t5",
 			description: "",
-			parameters: Type.Object({ payload: Type.Object({ items: Type.Array(Type.Number()) }) }),
+			parameters: z.object({ payload: z.object({ items: z.array(z.number()) }) }),
 		};
 
 		const toolCall: ToolCall = {
@@ -100,11 +183,11 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "t9",
 			description: "",
-			parameters: Type.Object({
-				a: Type.String(),
-				b: Type.Array(
-					Type.Object({
-						k: Type.String(),
+			parameters: z.object({
+				a: z.string(),
+				b: z.array(
+					z.object({
+						k: z.string(),
 					}),
 				),
 			}),
@@ -126,11 +209,11 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "t10",
 			description: "",
-			parameters: Type.Object({
-				a: Type.String(),
-				b: Type.Array(
-					Type.Object({
-						k: Type.String(),
+			parameters: z.object({
+				a: z.string(),
+				b: z.array(
+					z.object({
+						k: z.string(),
 					}),
 				),
 			}),
@@ -152,12 +235,12 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "t7",
 			description: "",
-			parameters: Type.Object({
-				path: Type.String(),
-				edits: Type.Array(
-					Type.Object({
-						target: Type.String(),
-						new_content: Type.String(),
+			parameters: z.object({
+				path: z.string(),
+				edits: z.array(
+					z.object({
+						target: z.string(),
+						new_content: z.string(),
 					}),
 				),
 			}),
@@ -180,19 +263,19 @@ describe("Tool argument coercion", () => {
 	});
 
 	it("coerces quoted edit arrays before stripping optional null fields", () => {
-		const textSchema = Type.Union([Type.Array(Type.String()), Type.String()]);
+		const textSchema = z.union([z.array(z.string()), z.string()]);
 		const tool: Tool = {
 			name: "atom-like-edit",
 			description: "",
-			parameters: Type.Object({
-				path: Type.String(),
-				edits: Type.Array(
-					Type.Object({
-						loc: Type.String(),
-						set: Type.Optional(textSchema),
-						pre: Type.Optional(textSchema),
-						post: Type.Optional(textSchema),
-						sub: Type.Optional(Type.Tuple([Type.String(), Type.String()])),
+			parameters: z.object({
+				path: z.string(),
+				edits: z.array(
+					z.object({
+						loc: z.string(),
+						set: textSchema.optional(),
+						pre: textSchema.optional(),
+						post: textSchema.optional(),
+						sub: z.tuple([z.string(), z.string()]).optional(),
 					}),
 				),
 			}),
@@ -215,14 +298,14 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "t16",
 			description: "",
-			parameters: Type.Object({
-				path: Type.String(),
-				edits: Type.Array(
-					Type.Object({
-						op: Type.String(),
-						pos: Type.String(),
-						end: Type.String(),
-						lines: Type.Array(Type.String()),
+			parameters: z.object({
+				path: z.string(),
+				edits: z.array(
+					z.object({
+						op: z.string(),
+						pos: z.string(),
+						end: z.string(),
+						lines: z.array(z.string()),
 					}),
 				),
 			}),
@@ -252,12 +335,12 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "t8",
 			description: "",
-			parameters: Type.Object({
-				path: Type.String(),
-				edits: Type.Array(
-					Type.Object({
-						target: Type.String(),
-						new_content: Type.String(),
+			parameters: z.object({
+				path: z.string(),
+				edits: z.array(
+					z.object({
+						target: z.string(),
+						new_content: z.string(),
 					}),
 				),
 			}),
@@ -281,9 +364,9 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "t11",
 			description: "",
-			parameters: Type.Object({
-				requiredText: Type.String(),
-				optionalCount: Type.Optional(Type.Number()),
+			parameters: z.object({
+				requiredText: z.string(),
+				optionalCount: z.number().optional(),
 			}),
 		};
 
@@ -302,12 +385,12 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "t12",
 			description: "",
-			parameters: Type.Object({
-				edits: Type.Array(
-					Type.Object({
-						target: Type.String(),
-						pos: Type.Optional(Type.String()),
-						end: Type.Optional(Type.String()),
+			parameters: z.object({
+				edits: z.array(
+					z.object({
+						target: z.string(),
+						pos: z.string().optional(),
+						end: z.string().optional(),
 					}),
 				),
 			}),
@@ -325,26 +408,26 @@ describe("Tool argument coercion", () => {
 	});
 
 	it("drops null optional properties in anyOf object branches", () => {
-		const opSchema = Type.Union([
-			Type.Object({
-				op: Type.Literal("add_task"),
-				phase: Type.String(),
-				content: Type.String(),
+		const opSchema = z.union([
+			z.object({
+				op: z.literal("add_task"),
+				phase: z.string(),
+				content: z.string(),
 			}),
-			Type.Object({
-				op: Type.Literal("update"),
-				id: Type.String(),
-				status: Type.Optional(Type.String()),
-				content: Type.Optional(Type.String()),
-				notes: Type.Optional(Type.String()),
+			z.object({
+				op: z.literal("update"),
+				id: z.string(),
+				status: z.string().optional(),
+				content: z.string().optional(),
+				notes: z.string().optional(),
 			}),
 		]);
 
 		const tool: Tool = {
 			name: "t13",
 			description: "",
-			parameters: Type.Object({
-				ops: Type.Array(opSchema),
+			parameters: z.object({
+				ops: z.array(opSchema),
 			}),
 		};
 
@@ -382,7 +465,7 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "t6",
 			description: "",
-			parameters: Type.Object({ timeout: Type.Number() }),
+			parameters: z.object({ timeout: z.number() }),
 		};
 
 		const toolCall: ToolCall = {
@@ -399,7 +482,7 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "t14",
 			description: "",
-			parameters: Type.Object({ tick_size: Type.Optional(Type.Number()) }),
+			parameters: z.object({ tick_size: z.number().optional() }),
 		};
 		const toolCall: ToolCall = {
 			type: "toolCall",
@@ -416,7 +499,7 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "t15",
 			description: "",
-			parameters: Type.Object({ tick_size: Type.Optional(Type.Number()) }),
+			parameters: z.object({ tick_size: z.number().optional() }),
 		};
 		const toolCall: ToolCall = {
 			type: "toolCall",
@@ -431,9 +514,9 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "edit-tool",
 			description: "",
-			parameters: Type.Object({
-				path: Type.String(),
-				delete: Type.Optional(Type.Boolean()),
+			parameters: z.object({
+				path: z.string(),
+				delete: z.boolean().optional(),
 			}),
 		};
 
@@ -452,9 +535,9 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "edit-tool",
 			description: "",
-			parameters: Type.Object({
-				path: Type.String(),
-				move: Type.Optional(Type.String()),
+			parameters: z.object({
+				path: z.string(),
+				move: z.string().optional(),
 			}),
 		};
 
@@ -473,8 +556,8 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "required-tool",
 			description: "",
-			parameters: Type.Object({
-				path: Type.String(),
+			parameters: z.object({
+				path: z.string(),
 			}),
 		};
 
@@ -495,10 +578,10 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "multi-optional",
 			description: "",
-			parameters: Type.Object({
-				required: Type.String(),
-				optBool: Type.Optional(Type.Boolean()),
-				optString: Type.Optional(Type.String()),
+			parameters: z.object({
+				required: z.string(),
+				optBool: z.boolean().optional(),
+				optString: z.string().optional(),
 			}),
 		};
 
@@ -517,12 +600,12 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "heal-1",
 			description: "",
-			parameters: Type.Object({
-				path: Type.String(),
-				edits: Type.Array(
-					Type.Object({
-						target: Type.String(),
-						content: Type.String(),
+			parameters: z.object({
+				path: z.string(),
+				edits: z.array(
+					z.object({
+						target: z.string(),
+						content: z.string(),
 					}),
 				),
 			}),
@@ -547,12 +630,12 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "heal-2",
 			description: "",
-			parameters: Type.Object({
-				path: Type.String(),
-				edits: Type.Array(
-					Type.Object({
-						target: Type.String(),
-						content: Type.String(),
+			parameters: z.object({
+				path: z.string(),
+				edits: z.array(
+					z.object({
+						target: z.string(),
+						content: z.string(),
 					}),
 				),
 			}),
@@ -577,8 +660,8 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "heal-esc-1",
 			description: "",
-			parameters: Type.Object({
-				edits: Type.Array(Type.Object({ target: Type.String(), content: Type.String() })),
+			parameters: z.object({
+				edits: z.array(z.object({ target: z.string(), content: z.string() })),
 			}),
 		};
 
@@ -600,8 +683,8 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "heal-trail-1",
 			description: "",
-			parameters: Type.Object({
-				edits: Type.Array(Type.Object({ target: Type.String(), op: Type.String() })),
+			parameters: z.object({
+				edits: z.array(z.object({ target: z.string(), op: z.string() })),
 			}),
 		};
 
@@ -623,8 +706,8 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "heal-3",
 			description: "",
-			parameters: Type.Object({
-				edits: Type.Array(Type.Object({ target: Type.String() })),
+			parameters: z.object({
+				edits: z.array(z.object({ target: z.string() })),
 			}),
 		};
 
@@ -644,14 +727,14 @@ describe("Tool argument coercion", () => {
 		const tool: Tool = {
 			name: "todo_write_like",
 			description: "",
-			parameters: Type.Object({
-				phases: Type.Array(
-					Type.Object({
-						name: Type.String(),
-						tasks: Type.Array(
-							Type.Object({
-								content: Type.String(),
-								details: Type.Optional(Type.String()),
+			parameters: z.object({
+				phases: z.array(
+					z.object({
+						name: z.string(),
+						tasks: z.array(
+							z.object({
+								content: z.string(),
+								details: z.string().optional(),
 							}),
 						),
 					}),
@@ -681,5 +764,210 @@ describe("Tool argument coercion", () => {
 				tasks: [{ content: "Locate code", details: "line one\nline two" }],
 			},
 		]);
+	});
+	it("substitutes the schema default when a required field arrives as null", () => {
+		const tool: Tool = {
+			name: "t-defaulted-null",
+			description: "",
+			parameters: z.object({
+				note: z.union([z.string(), z.null()]),
+				tags: z.array(z.string()).default([]),
+			}),
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-defaulted-null",
+			name: "t-defaulted-null",
+			arguments: { note: null, tags: null },
+		};
+
+		const result = validateToolArguments(tool, toolCall) as { note: string | null; tags: string[] };
+		expect(result).toEqual({ note: null, tags: [] });
+	});
+
+	it("clones the substituted default so per-call mutations stay local", () => {
+		const tool: Tool = {
+			name: "t-defaulted-isolation",
+			description: "",
+			parameters: z.object({
+				tags: z.array(z.string()).default([]),
+			}),
+		};
+
+		const first = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-iso-1",
+			name: "t-defaulted-isolation",
+			arguments: { tags: null },
+		}) as { tags: string[] };
+		first.tags.push("leak");
+
+		const second = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-iso-2",
+			name: "t-defaulted-isolation",
+			arguments: { tags: null },
+		}) as { tags: string[] };
+
+		expect(second.tags).toEqual([]);
+	});
+
+	it("strips null from optional properties without defaults", () => {
+		const tool: Tool = {
+			name: "t-optional-nulls",
+			description: "",
+			parameters: z.object({
+				path: z.string(),
+				offset: z.number().optional(),
+				limit: z.number().optional(),
+			}),
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-optional-nulls",
+			name: "t-optional-nulls",
+			arguments: { path: "foo", offset: null, limit: null },
+		};
+
+		const result = validateToolArguments(tool, toolCall);
+		expect(result).toEqual({ path: "foo" });
+	});
+
+	it("deserializes a stringified JSON root with null and stringified-array fields together", () => {
+		const tool: Tool = {
+			name: "t-root-json-null",
+			description: "",
+			parameters: z.object({
+				note: z.union([z.string(), z.null()]),
+				tags: z.array(z.string()).default([]),
+			}),
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-root-json-null",
+			name: "t-root-json-null",
+			arguments: JSON.stringify({ note: null, tags: JSON.stringify(["a", "b"]) }) as unknown as Record<
+				string,
+				unknown
+			>,
+		};
+
+		const result = validateToolArguments(tool, toolCall);
+		expect(result).toEqual({ note: null, tags: ["a", "b"] });
+	});
+
+	it("deserializes nested JSON strings at multiple levels", () => {
+		const tool: Tool = {
+			name: "t-nested-json",
+			description: "",
+			parameters: z.object({
+				payload: z.object({
+					flags: z.array(z.boolean()),
+					meta: z.object({ count: z.number() }),
+				}),
+			}),
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-nested-json",
+			name: "t-nested-json",
+			arguments: {
+				payload: JSON.stringify({
+					flags: JSON.stringify([true, false]),
+					meta: JSON.stringify({ count: 3 }),
+				}),
+			},
+		};
+
+		const result = validateToolArguments(tool, toolCall);
+		expect(result).toEqual({
+			payload: {
+				flags: [true, false],
+				meta: { count: 3 },
+			},
+		});
+	});
+
+	it("tolerates extra keys on .strict() Zod object schemas (loose-recursive)", () => {
+		const tool: Tool = {
+			name: "t-strict-root",
+			description: "",
+			parameters: z
+				.object({
+					op: z.string(),
+				})
+				.strict(),
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-strict-root",
+			name: "t-strict-root",
+			arguments: { op: "fix", timeout: "300" },
+		};
+
+		// Extras on strict schemas are dropped during validation rather than
+		// surfaced as a hard error — equivalent to converting every object to
+		// loose semantics for the purposes of tool dispatch.
+		const result = validateToolArguments(tool, toolCall) as Record<string, unknown>;
+		expect(result.op).toBe("fix");
+		expect(result.timeout).toBeUndefined();
+	});
+
+	it("tolerates extra keys on nested .strict() Zod object schemas", () => {
+		const tool: Tool = {
+			name: "t-strict-nested",
+			description: "",
+			parameters: z
+				.object({
+					config: z
+						.object({
+							host: z.string(),
+						})
+						.strict(),
+				})
+				.strict(),
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-strict-nested",
+			name: "t-strict-nested",
+			arguments: { config: { host: "example.com", port: 443 } },
+		};
+
+		// Nested strict objects also tolerate extras; the inner key is stripped
+		// so validation succeeds against the schema's declared shape.
+		const result = validateToolArguments(tool, toolCall) as { config: Record<string, unknown> };
+		expect(result.config.host).toBe("example.com");
+	});
+
+	it("tolerates extras on JSON Schema parameters with additionalProperties: false", () => {
+		const tool: Tool = {
+			name: "t-json-strict",
+			description: "",
+			parameters: {
+				type: "object",
+				properties: {
+					op: { type: "string" },
+				},
+				required: ["op"],
+				additionalProperties: false,
+			},
+		};
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-json-strict",
+			name: "t-json-strict",
+			arguments: { op: "fix", timeout: 300 },
+		};
+
+		const result = validateToolArguments(tool, toolCall) as Record<string, unknown>;
+		expect(result.op).toBe("fix");
 	});
 });

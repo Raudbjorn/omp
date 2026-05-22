@@ -3,11 +3,11 @@
  */
 import { type Content, FinishReason, FunctionCallingConfigMode, type Part } from "@google/genai";
 import type { Context, ImageContent, Model, StopReason, TextContent, Tool } from "../types";
-import { prepareSchemaForCCA, sanitizeSchemaForGoogle } from "../utils/schema";
+import { normalizeSchemaForCCA, toolWireSchema } from "../utils/schema";
 import { transformMessages } from "./transform-messages";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
 
-export { sanitizeSchemaForGoogle };
+export { normalizeSchemaForGoogle, sanitizeSchemaForGoogle } from "../utils/schema";
 
 type GoogleApiType = "google-generative-ai" | "google-gemini-cli" | "google-vertex";
 
@@ -293,8 +293,8 @@ export function convertTools(
 				name: tool.name,
 				description: tool.description || "",
 				...(useParameters
-					? { parameters: prepareSchemaForCCA(tool.parameters) }
-					: { parametersJsonSchema: tool.parameters }),
+					? { parameters: normalizeSchemaForCCA(toolWireSchema(tool)) }
+					: { parametersJsonSchema: toolWireSchema(tool) }),
 			})),
 		},
 	];

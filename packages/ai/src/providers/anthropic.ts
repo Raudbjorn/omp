@@ -54,7 +54,8 @@ import {
 	isRetryableError,
 	isUnexpectedSocketCloseMessage,
 } from "../utils/retry";
-import { COMBINATOR_KEYS, NO_STRICT } from "../utils/schema";
+import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
+import { spillToDescription } from "../utils/schema/spill";
 import { notifyRawSseEvent, wrapFetchForSseDebug } from "../utils/sse-debug";
 import {
 	buildCopilotDynamicHeaders,
@@ -572,7 +573,11 @@ function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: st
 		}
 	}
 	if (model.provider === "anthropic") {
-		return normalizeAnthropicBaseUrl($env.ANTHROPIC_BASE_URL) ?? normalizeAnthropicBaseUrl(model.baseUrl) ?? "https://api.anthropic.com";
+		return (
+			normalizeAnthropicBaseUrl($env.ANTHROPIC_BASE_URL) ??
+			normalizeAnthropicBaseUrl(model.baseUrl) ??
+			"https://api.anthropic.com"
+		);
 	}
 	return normalizeAnthropicBaseUrl(model.baseUrl);
 }
@@ -2068,90 +2073,210 @@ export function convertAnthropicMessages(
 	return params;
 }
 
-const ANTHROPIC_UNSUPPORTED_TOOL_SCHEMA_FIELDS = new Set(["maxItems", "patternProperties"]);
+/**
+ * JSON Schema whitelist for Anthropic tool `input_schema` nodes.
+ *
+ * Mirrors the Anthropic Python SDK's `lib/_parse/_transform.py::transform_schema`:
+ * we keep only structural/metadata keywords Anthropic's validator honors, and demote
+ * anything else into the node's `description` as `\n\n{key: value, ...}` so the model
+ * still sees the constraint as a natural-language hint.
+ *
+ * `Set` (not `Record<string, true>`) because membership is probed against arbitrary
+ * user/Zod-derived schema keys: a literal Record would falsely match prototype names
+ * like `"toString"` and silently strip valid properties.
+ */
+const ANTHROPIC_TOOL_SCHEMA_UNIVERSAL_KEEP = new Set([
+	"$ref",
+	"$defs",
+	"$schema",
+	"definitions",
+	"type",
+	"anyOf",
+	"oneOf",
+	"allOf",
+	"enum",
+	"const",
+	"description",
+	"title",
+	"default",
+	"nullable",
+]);
+/** Keys preserved on `type: "object"` nodes (in addition to the universal set). */
+const ANTHROPIC_TOOL_SCHEMA_OBJECT_KEEP = new Set(["properties", "required", "additionalProperties"]);
+/** Keys preserved on `type: "array"` nodes; `minItems` only when its value is 0 or 1. */
+const ANTHROPIC_TOOL_SCHEMA_ARRAY_KEEP = new Set(["items", "prefixItems", "minItems"]);
+/** Keys preserved on `type: "string"` nodes; `format` only when its value is in the supported list. */
+const ANTHROPIC_TOOL_SCHEMA_STRING_KEEP = new Set(["format"]);
+/**
+ * String `format` values Anthropic accepts; everything else (including `pattern`-style
+ * format hints) gets demoted into `description`. Matches `SupportedStringFormats` in the
+ * Anthropic SDK's `_transform.py`.
+ */
+const ANTHROPIC_TOOL_SCHEMA_STRING_FORMATS = new Set([
+	"date-time",
+	"time",
+	"date",
+	"duration",
+	"email",
+	"hostname",
+	"uri",
+	"ipv4",
+	"ipv6",
+	"uuid",
+]);
 const ANTHROPIC_STRICT_TOOL_ALLOWLIST = new Set(["bash", "python", "edit", "find"]);
 const MAX_ANTHROPIC_STRICT_TOOLS = 20;
 const MAX_ANTHROPIC_STRICT_OPTIONAL_PARAMETERS = 24;
 const MAX_ANTHROPIC_STRICT_UNION_PARAMETERS = 16;
 
-/** `minItems` / `maxItems` apply to arrays; Anthropic rejects them on `type: "object"` (including `minItems: 0`/`1`). */
-function isJsonSchemaArrayNode(schema: Record<string, unknown>): boolean {
-	const t = schema.type;
-	if (t === "array") return true;
-	if (Array.isArray(t) && t.includes("array") && !t.includes("object")) return true;
-	return false;
+/**
+ * Pick the principal non-null scalar type from a `type` keyword. Anthropic accepts
+ * `type` as either a single string or an array (e.g. `["number", "null"]` for a
+ * nullable value); the SDK whitelist is keyed off the scalar type, with `"null"`
+ * ignored so nullable variants are normalized as their underlying type.
+ */
+function pickAnthropicScalarType(type: unknown): string | undefined {
+	if (typeof type === "string") return type;
+	if (Array.isArray(type)) {
+		for (const entry of type) {
+			if (typeof entry === "string" && entry !== "null") return entry;
+		}
+	}
+	return undefined;
 }
 
-function isJsonSchemaObjectNode(schema: Record<string, unknown>): boolean {
-	if (isJsonSchemaArrayNode(schema)) return false;
-	if (schema.type === "object") return true;
-	if (Array.isArray(schema.type) && schema.type.includes("object")) return true;
-	if (isRecord(schema.properties)) return true;
-	return false;
+function anthropicPerTypeKeep(scalarType: string | undefined): Set<string> | undefined {
+	switch (scalarType) {
+		case "object":
+			return ANTHROPIC_TOOL_SCHEMA_OBJECT_KEEP;
+		case "array":
+			return ANTHROPIC_TOOL_SCHEMA_ARRAY_KEEP;
+		case "string":
+			return ANTHROPIC_TOOL_SCHEMA_STRING_KEEP;
+		default:
+			return undefined;
+	}
 }
 
-function normalizeAnthropicToolSchema(
-	schema: unknown,
-	cache: WeakMap<Record<string, unknown>, Record<string, unknown>> = new WeakMap(),
-): unknown {
+/**
+ * Per-schema-object memoization slot for the normalized Anthropic tool form. We stamp
+ * the result onto the host via a `Symbol` property (mirroring `utils/schema/stamps.ts`)
+ * instead of using a `WeakMap`: it's a single hidden-class slot, so warm reads are
+ * direct property access and write-once cycles resolve to the in-progress result.
+ */
+const kAnthropicToolNormal = Symbol("pi.schema.anthropic.toolNormal");
+
+/**
+ * Normalize a JSON Schema node for Anthropic tool `input_schema`.
+ *
+ * Applies the full whitelist semantics from the Anthropic Python SDK's
+ * `lib/_parse/_transform.py::transform_schema`:
+ *
+ * 1. Universal keys (`$ref`, `$defs`, `type`, `anyOf`/`oneOf`/`allOf`, `enum`, `const`,
+ *    `description`, `title`, `default`, `nullable`) are preserved on every node.
+ * 2. Per-type keys are kept additively (object → `properties`/`required`/`additionalProperties`,
+ *    array → `items`/`prefixItems` plus `minItems` only when 0 or 1, string → `format`
+ *    only when in the supported value set).
+ * 3. Everything else is demoted into the node's `description` as `\n\n{key: value, ...}`
+ *    so the model still sees the constraint as a natural-language hint.
+ *
+ * Object nodes default to `additionalProperties: false`, but explicit open-map
+ * declarations (`additionalProperties: true` or a schema literal — Zod's
+ * `z.record(z.string(), z.unknown())` produces `{}`) are preserved. The strict-mode
+ * pass downstream demotes those shapes to non-strict instead of fabricating a closed
+ * object, so callers like the resolve tool keep working open-map semantics.
+ */
+export function normalizeAnthropicToolSchema(schema: unknown): unknown {
+	if (Array.isArray(schema)) return schema.map(entry => normalizeAnthropicToolSchema(entry));
 	if (!isRecord(schema)) return schema;
 
-	const cached = cache.get(schema);
-	if (cached) return cached;
+	const slot = schema as Record<symbol, Record<string, unknown> | undefined>;
+	const existing = slot[kAnthropicToolNormal];
+	if (existing !== undefined) return existing;
 
-	const result = Object.fromEntries(
-		Object.entries(schema).filter(([key]) => !ANTHROPIC_UNSUPPORTED_TOOL_SCHEMA_FIELDS.has(key)),
-	);
-	cache.set(schema, result);
-	if (isJsonSchemaObjectNode(result)) {
-		delete result.minItems;
-	} else {
+	const result: Record<string, unknown> = {};
+	// Pre-stamp before recursion so cyclic schemas resolve to the in-progress object
+	// (mirrors the WeakMap-set-before-recurse pattern the original implementation used).
+	Object.defineProperty(schema, kAnthropicToolNormal, { value: result, writable: true, configurable: true });
+
+	const scalarType = pickAnthropicScalarType(schema.type);
+	const perTypeKeep = anthropicPerTypeKeep(scalarType);
+	const spill: Array<[string, unknown]> = [];
+
+	for (const key in schema) {
+		if (!Object.hasOwn(schema, key)) continue;
+		const value = schema[key];
+		if (ANTHROPIC_TOOL_SCHEMA_UNIVERSAL_KEEP.has(key) || perTypeKeep?.has(key)) {
+			result[key] = value;
+		} else {
+			spill.push([key, value]);
+		}
+	}
+
+	// Per-type conditional keys: prune within the kept set.
+	if (scalarType === "string") {
+		const format = result.format;
+		if (typeof format === "string" && !ANTHROPIC_TOOL_SCHEMA_STRING_FORMATS.has(format)) {
+			spill.push(["format", format]);
+			delete result.format;
+		}
+	}
+	if (scalarType === "array" && result.minItems !== undefined) {
 		const minItems = result.minItems;
-		if (typeof minItems === "number" && minItems !== 0 && minItems !== 1) {
+		if (!(typeof minItems === "number" && (minItems === 0 || minItems === 1))) {
+			spill.push(["minItems", minItems]);
 			delete result.minItems;
 		}
 	}
-
-	const type = result.type;
-	const canBeObject =
-		type === "object" || (Array.isArray(type) && type.includes("object")) || isRecord(result.properties);
-	if (canBeObject) {
+	if (scalarType === "object" && result.additionalProperties === undefined) {
 		result.additionalProperties = false;
 	}
 
+	// Recurse on structural keys.
 	if (isRecord(result.properties)) {
-		result.properties = Object.fromEntries(
-			Object.entries(result.properties).map(([propertyName, propertySchema]) => [
-				propertyName,
-				normalizeAnthropicToolSchema(propertySchema, cache),
-			]),
-		);
+		const normalizedProperties: Record<string, unknown> = {};
+		const sourceProperties = result.properties as Record<string, unknown>;
+		for (const propName in sourceProperties) {
+			if (!Object.hasOwn(sourceProperties, propName)) continue;
+			normalizedProperties[propName] = normalizeAnthropicToolSchema(sourceProperties[propName]);
+		}
+		result.properties = normalizedProperties;
 	}
-
+	if (isRecord(result.additionalProperties)) {
+		const normalized = normalizeAnthropicToolSchema(result.additionalProperties);
+		if (isRecord(normalized) && Object.keys(normalized).length === 0) {
+			result.additionalProperties = true;
+		} else {
+			result.additionalProperties = normalized;
+		}
+	}
 	if (Array.isArray(result.items)) {
-		result.items = result.items.map(item => normalizeAnthropicToolSchema(item, cache));
+		result.items = result.items.map(item => normalizeAnthropicToolSchema(item));
 	} else if (isRecord(result.items)) {
-		result.items = normalizeAnthropicToolSchema(result.items, cache);
+		result.items = normalizeAnthropicToolSchema(result.items);
 	}
-
+	if (Array.isArray(result.prefixItems)) {
+		result.prefixItems = result.prefixItems.map(item => normalizeAnthropicToolSchema(item));
+	}
 	for (const key of COMBINATOR_KEYS) {
 		const variants = result[key];
 		if (Array.isArray(variants)) {
-			result[key] = variants.map(variant => normalizeAnthropicToolSchema(variant, cache));
+			result[key] = variants.map(variant => normalizeAnthropicToolSchema(variant));
 		}
 	}
-
 	for (const defsKey of ["$defs", "definitions"] as const) {
 		const definitions = result[defsKey];
 		if (!isRecord(definitions)) continue;
-		result[defsKey] = Object.fromEntries(
-			Object.entries(definitions).map(([definitionName, definitionSchema]) => [
-				definitionName,
-				normalizeAnthropicToolSchema(definitionSchema, cache),
-			]),
-		);
+		const normalizedDefs: Record<string, unknown> = {};
+		const sourceDefs = definitions as Record<string, unknown>;
+		for (const name in sourceDefs) {
+			if (!Object.hasOwn(sourceDefs, name)) continue;
+			normalizedDefs[name] = normalizeAnthropicToolSchema(sourceDefs[name]);
+		}
+		result[defsKey] = normalizedDefs;
 	}
 
+	spillToDescription(result, spill);
 	return result;
 }
 
@@ -2310,7 +2435,7 @@ function normalizeAnthropicStrictSchema(
 }
 
 function buildAnthropicBaseToolInputSchema(tool: Tool): Record<string, unknown> {
-	const jsonSchema = tool.parameters as Record<string, unknown>;
+	const jsonSchema = toolWireSchema(tool);
 	return normalizeAnthropicToolSchema({
 		...jsonSchema,
 		type: "object",
