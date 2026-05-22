@@ -35,18 +35,17 @@ export function RequestDetail({ id, onClose }: RequestDetailProps) {
 	if (!details) return null;
 
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop dismissal
-		<div
-			role="presentation"
-			className="fixed inset-0 bg-[var(--bg-overlay)] backdrop-blur-sm flex justify-end z-[100] animate-fade-in"
-			onClick={onClose}
-		>
-			{/* biome-ignore lint/a11y/useKeyWithClickEvents: stopPropagation for modal content */}
+		<div className="fixed inset-0 flex justify-end z-[100] animate-fade-in">
+			<button
+				type="button"
+				aria-label="Close request details"
+				className="absolute inset-0 bg-[var(--bg-overlay)] backdrop-blur-sm"
+				onClick={onClose}
+			/>
 			<div
 				role="dialog"
 				aria-modal="true"
-				className="w-[600px] max-w-full bg-[var(--bg-page)] h-full overflow-y-auto border-l border-[var(--border-subtle)] animate-slide-up"
-				onClick={e => e.stopPropagation()}
+				className="relative w-[600px] max-w-full bg-[var(--bg-page)] h-full overflow-y-auto border-l border-[var(--border-subtle)] animate-slide-up"
 			>
 				{/* Header */}
 				<div className="sticky top-0 bg-[var(--bg-page)]/95 backdrop-blur border-b border-[var(--border-subtle)] px-6 py-4 flex justify-between items-center z-10">

@@ -1,5 +1,5 @@
 {
-	"extends": "./tsconfig.json",
+	"extends": "./tsconfig.client.json",
 	"compilerOptions": {
 		"noEmit": false,
 		"emitDeclarationOnly": true,
@@ -12,14 +12,10 @@
 		"noCheck": true
 	},
 	"include": [
-		"src"
+		"src/client"
 	],
 	"exclude": [
-		"src/client",
 		"dist",
-		"node_modules",
-		"test",
-		"tests",
-		"scripts"
+		"node_modules"
 	]
 }

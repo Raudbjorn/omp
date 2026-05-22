@@ -194,10 +194,17 @@ jobs:
         run: |
           mkdir -p packages/coding-agent/binaries
           ENTRYPOINT="./packages/coding-agent/src/cli.ts"
+          WORKER_ENTRYPOINTS="./packages/stats/src/sync-worker.ts ./packages/coding-agent/src/tools/browser/tab-worker-entry.ts ./packages/coding-agent/src/eval/js/worker-entry.ts"
           DEFINES="--define PI_COMPILED=true --root ."
           TARGET_PLATFORM=linux TARGET_ARCH=x64 bun --cwd=packages/natives run embed:native
-          bun build --compile $DEFINES --target="bun-linux-x64-modern" "$ENTRYPOINT" --outfile "packages/coding-agent/binaries/omp-linux-x64"
+          bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --no-compile-autoload-tsconfig --no-compile-autoload-package-json --keep-names $DEFINES --target="bun-linux-x64-modern" "$ENTRYPOINT" $WORKER_ENTRYPOINTS --outfile "packages/coding-agent/binaries/omp-linux-x64"
           bun --cwd=packages/natives run embed:native --reset
+      - name: Smoke release binary
+        run: |
+          runtime_dir="$RUNNER_TEMP/omp-runtime-linux-x64"
+          rm -rf "$runtime_dir"
+          mkdir -p "$runtime_dir/home" "$runtime_dir/xdg"
+          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" packages/coding-agent/binaries/omp-linux-x64 --smoke-test
       - name: Stage native addons for release
         run: cp packages/natives/native/*.node packages/coding-agent/binaries/
       - name: Create GitHub Release

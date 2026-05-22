@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { smokeTestSyncWorker } from "@oh-my-pi/omp-stats";
 import { APP_NAME, MIN_BUN_VERSION, procmgr, VERSION } from "@oh-my-pi/pi-utils";
 
 // Strip macOS malloc-stack-logging env vars before any subprocess is spawned.
@@ -10,7 +11,7 @@ procmgr.scrubProcessEnv();
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
  */
-import { type CommandEntry, run } from "@oh-my-pi/pi-utils/cli";
+import { type CliConfig, type CommandEntry, run } from "@oh-my-pi/pi-utils/cli";
 
 function parseSemver(version: string): [number, number, number] {
 	function toint(value: string): number {
@@ -66,7 +67,7 @@ const commands: CommandEntry[] = [
 	{ name: "search", load: () => import("./commands/web-search").then(m => m.default), aliases: ["q"] },
 ];
 
-async function showHelp(config: import("@oh-my-pi/pi-utils/cli").CliConfig): Promise<void> {
+async function showHelp(config: CliConfig): Promise<void> {
 	const { renderRootHelp } = await import("@oh-my-pi/pi-utils/cli");
 	const { getExtraHelpText } = await import("./cli/args");
 	renderRootHelp(config);
@@ -86,7 +87,13 @@ function isSubcommand(first: string | undefined): boolean {
 }
 
 /** Run the CLI with the given argv (no `process.argv` prefix). */
-export function runCli(argv: string[]): Promise<void> {
+export async function runCli(argv: string[]): Promise<void> {
+	if (argv[0] === "--smoke-test") {
+		await smokeTestSyncWorker();
+		process.stdout.write("smoke-test: ok\n");
+		return;
+	}
+
 	// --help and --version are handled by run() directly, don't rewrite those.
 	// Everything else that isn't a known subcommand routes to "launch".
 	const first = argv[0];
