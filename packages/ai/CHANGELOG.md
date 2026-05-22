@@ -4,6 +4,28 @@
 
 ### Fixed
 
+- Fixed `gemini-3.1-pro-high` and `gemini-3.1-pro-low` on the `google-antigravity` provider always returning HTTP 400 from Cloud Code Assist. The `ANTIGRAVITY_SYSTEM_INSTRUCTION` identity header was not injected for these models because the internal check matched the string `"gemini-3-pro-high"` (hyphen) instead of the versioned `"gemini-3.1-pro-..."` form. The guard now matches all `gemini-3` model variants ([#1274](https://github.com/can1357/oh-my-pi/issues/1274)).
+
+## [15.2.0] - 2026-05-21
+
+### Fixed
+
+- Fixed `/login` (and `/logout`, plus any `AuthStorage.set` / `remove` call) against a remote auth-broker throwing `RemoteAuthCredentialStore is read-only on the client. Use 'omp auth-broker login <provider>' to mutate credentials.` Added three optional async write hooks to `AuthCredentialStore` (`upsertAuthCredentialRemote`, `replaceAuthCredentialsRemote`, `deleteAuthCredentialsRemote`); `RemoteAuthCredentialStore` implements them via the broker's `POST /v1/credential` and `POST /v1/credential/:id/disable` endpoints and applies the broker's authoritative post-write entries to the local snapshot. `AuthStorage` routes through the hooks when present, so OAuth and API-key logins (and logouts) initiated from a broker-backed client now persist server-side and surface immediately without waiting for the long-poll snapshot tick.
+
+## [15.1.9] - 2026-05-21
+
+### Fixed
+
+- Fixed Ollama named tool forcing to send only the requested tool when the caller passes a named `toolChoice`, preserving `tool_choice: "required"` while preventing local models from selecting a different tool. ([#1236](https://github.com/can1357/oh-my-pi/issues/1236))
+- Fixed `/btw` (and IRC background replies) returning a `BedrockException` 400 (`The toolConfig field must be defined when using toolUse and toolResult content blocks.`) on LiteLLM → Bedrock once the session has tool-call history. Two source fixes in `buildParams`: (1) `if (context.tools)` → `if (context.tools?.length)` so an explicit `context.tools = []` (the /btw opt-out) never routes through `convertTools` and never emits an empty `"tools"` array; (2) `else if (hasToolHistory(...))` → `else if (context.tools === undefined && hasToolHistory(...))` so the Anthropic-proxy sentinel that injects `tools: []` for tool-history turns is suppressed when the caller explicitly opted out, preventing it from re-introducing the empty array. As defence-in-depth, `tool_choice: "none"` is also dropped when the resolved tools list is missing or empty. ([#1227](https://github.com/can1357/oh-my-pi/issues/1227))
+
+## [15.1.8] - 2026-05-20
+### Added
+
+- Added Fireworks Fire Pass as a separate `firepass` provider with API-key login flow, bundled `kimi-k2.6-turbo` model entry (Kimi K2.6 Turbo), and wire-id translation from the friendly catalog id to the `accounts/fireworks/routers/kimi-k2p6-turbo` router endpoint. Fire Pass keys (`fpk_…`) authorize only the dedicated router and reject `/v1/models`, so login validation pings chat completions against the router id directly. Extended the openai-completions Kimi-family safety net so the firepass entry inherits the per-Fireworks-docs "always send `max_tokens`" default ([Kimi K2 guide](https://docs.fireworks.ai/models/kimi-k2)); the router's accepted `reasoning_effort` set includes `xhigh`, so it is forwarded verbatim rather than remapped. See https://docs.fireworks.ai/firepass.
+
+### Fixed
+
 - Fixed DeepSeek V4 direct API requests with tools to keep documented thinking mode instead of dropping reasoning: lower OMP efforts now map to DeepSeek's supported `high`, `tool_choice` is omitted, `thinking: { type: "enabled" }` and `max_tokens` are sent, and partial user `reasoningEffortMap` overrides merge with DeepSeek defaults. ([#1207](https://github.com/can1357/oh-my-pi/issues/1207))
 - Fixed model cache schema v2 databases so offline refreshes preserve cached provider discoveries after upgrading to schema v3 and subsequent online refreshes can overwrite the cache. ([#1219](https://github.com/can1357/oh-my-pi/issues/1219))
 
