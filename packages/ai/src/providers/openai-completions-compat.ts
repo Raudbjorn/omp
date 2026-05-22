@@ -159,7 +159,13 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 				} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
 			: isDeepseekFamily && model.reasoning
 				? { xhigh: "max" }
-				: {};
+				: isFireworks
+					? ({
+							// Fireworks' OpenAI-compatible endpoint rejects OpenAI's
+							// `minimal` literal but accepts `none` for the lowest setting.
+							minimal: "none",
+						} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
+					: {};
 
 	return {
 		supportsStore: !isNonStandard,
