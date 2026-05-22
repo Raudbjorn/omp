@@ -10,6 +10,10 @@ Diagnose, reproduce, and (when reproducible) fix open GitHub issues in parallel 
 
 If no issues and no flags are passed, default to **all open issues opened in the last 3 days**.
 
+## Assumptions
+
+These instructions target this monorepo: Bun for TypeScript, Cargo for Rust/native code, `target` and `node_modules` at the repo root, and native addon binaries in `packages/natives/native/*.node`. If a repository differs, inspect its build layout first and adapt the symlink/test commands rather than blindly applying these paths.
+
 ## Steps
 
 ### 1. Resolve the issue set
@@ -36,7 +40,7 @@ Each subagent **MUST** follow this exact workflow:
 #### a. Read everything
 
 1. Read `issue://<N>` (or `issue://<owner>/<repo>/<N>` for cross-repo) — fetches the issue body plus comments; comments often carry the real repro and fix hints. Append `?comments=0` only if you explicitly want to skip them.
-2. `gh search prs` for the issue number to see if a fix is already in flight.
+2. Call the `github` tool with `op: search_prs` for the issue number/URL to see if a fix is already in flight.
    - If a PR exists and looks reasonable → switch tracks: review that PR per `.omp/commands/review-prs.md` instead, and report back as `existing-pr`. Do **not** open a competing fix.
 
 #### b. Diagnose & try to reproduce — **in the current cwd, on `main`**
@@ -58,14 +62,15 @@ Only after a confirmed local repro:
 
 ```bash
 MAIN="$(git rev-parse --show-toplevel)"
-ENC="$(printf '%s' "$MAIN" | sed 's|[/\\:]|-|g')"
+ENC="$(printf '%s' "$MAIN" | sed -e 's|^[/\\]||' -e 's|[/\\:]|-|g')"
+ENC="${ENC:-root}"
 WT="$HOME/.omp/wt/${ENC}/fix-issue-<N>"
 
 git -C "$MAIN" fetch origin main
 git -C "$MAIN" worktree add -B "fix/issue-<N>" "$WT" origin/main
 ```
 
-Branch naming: `fix/issue-<N>` (or `fix/issue-<N>-<slug>` if you'll open multiple). Path under `~/.omp/wt/<encoded-main-path>/...` matches the convention `pr_checkout` uses.
+Branch naming: `fix/issue-<N>` (or `fix/issue-<N>-<slug>` if you'll open multiple). Path under `~/.omp/wt/<encoded-main-path>/...` matches the convention `pr_checkout` uses: drop one leading path separator, replace `/`, `\`, and `:` with `-`, and use `root` if the encoded value is empty.
 
 #### d. Symlink build artifacts
 
