@@ -305,8 +305,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		};
 		process.stdout.on("resize", this.#resizeHandler);
 		try {
-			this.historyStorage = HistoryStorage.open();
-			this.editor.setHistoryStorage(this.historyStorage);
+			if (this.sessionManager.getSessionFile()) {
+				this.historyStorage = HistoryStorage.open();
+				this.editor.setHistoryStorage(this.historyStorage);
+			}
 		} catch (error) {
 			logger.warn("History storage unavailable", { error: String(error) });
 		}
