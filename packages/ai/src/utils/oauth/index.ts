@@ -26,6 +26,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "openai-codex-device",
+		name: "ChatGPT Plus/Pro (Codex, headless/device)",
+		available: true,
+	},
+	{
 		id: "gitlab-duo",
 		name: "GitLab Duo",
 		available: true,
@@ -56,6 +61,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "firepass",
+		name: "Fire Pass (Fireworks Kimi K2.6 Turbo subscription)",
+		available: true,
+	},
+	{
 		id: "github-copilot",
 		name: "GitHub Copilot",
 		available: true,
@@ -63,11 +73,6 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "google-gemini-cli",
 		name: "Google Cloud Code Assist (Gemini CLI)",
-		available: true,
-	},
-	{
-		id: "gemini-cli-acp",
-		name: "Gemini CLI (ACP)",
 		available: true,
 	},
 	{
@@ -81,16 +86,6 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
-		id: "devin",
-		name: "Devin",
-		available: true,
-	},
-	{
-		id: "warp",
-		name: "Warp Agent Platform",
-		available: true,
-	},
-	{
 		id: "litellm",
 		name: "LiteLLM",
 		available: true,
@@ -98,6 +93,11 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "upb",
 		name: "UPB AI-Chat (Universit\u00e4t Paderborn)",
+		available: true,
+	},
+	{
+		id: "upb-gateway",
+		name: "UPB AI Gateway (LiteLLM)",
 		available: true,
 	},
 	{
@@ -138,11 +138,6 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "xiaomi",
 		name: "Xiaomi MiMo",
-		available: true,
-	},
-	{
-		id: "mimo-code",
-		name: "Xiaomi MiMo Coding Plan",
 		available: true,
 	},
 	{
@@ -221,13 +216,8 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
-		id: "ipex-llm",
-		name: "IPEX-LLM (Intel XPU Local OpenAI-compatible)",
-		available: true,
-	},
-	{
-		id: "openvino",
-		name: "OpenVINO (OVMS / openvino-genai Local OpenAI-compatible)",
+		id: "skvaider",
+		name: "Skvaider (Flying Circus AI gateway)",
 		available: true,
 	},
 	{
@@ -309,7 +299,8 @@ export async function refreshOAuthToken(
 			newCredentials = await refreshAntigravityToken(credentials.refresh, credentials.projectId);
 			break;
 		}
-		case "openai-codex": {
+		case "openai-codex":
+		case "openai-codex-device": {
 			const { refreshOpenAICodexToken } = await import("./openai-codex");
 			newCredentials = await refreshOpenAICodexToken(credentials.refresh);
 			break;
@@ -336,14 +327,13 @@ export async function refreshOAuthToken(
 		case "opencode-go":
 		case "cerebras":
 		case "fireworks":
+		case "firepass":
 		case "nvidia":
 		case "nanogpt":
 		case "synthetic":
 		case "together":
 		case "litellm":
 		case "lm-studio":
-		case "ipex-llm":
-		case "openvino":
 		case "ollama":
 		case "ollama-cloud":
 		case "xiaomi":
@@ -359,8 +349,7 @@ export async function refreshOAuthToken(
 		case "qwen-portal":
 		case "zenmux":
 		case "vllm":
-		case "devin":
-		case "warp":
+		case "skvaider":
 			// API keys / static bearer tokens don't expire, return as-is
 			newCredentials = credentials;
 			break;
@@ -402,10 +391,14 @@ export async function getOAuthApiKey(
 	}
 
 	if (provider === "perplexity") {
+		// Perplexity JWTs usually omit `exp` (server-side sessions). Trust the JWT
+		// claim when present; otherwise treat the credential as non-expiring rather
+		// than honoring a stale stored `expires` (older logins wrote loginTime+1h).
+		const NEVER_EXPIRES = 8.64e15;
 		const normalizedExpires =
 			creds.expires > 0 && creds.expires < 10_000_000_000 ? creds.expires * 1000 : creds.expires;
 		const jwtExpiry = getPerplexityJwtExpiryMs(creds.access);
-		const expires = jwtExpiry && jwtExpiry > normalizedExpires ? jwtExpiry : normalizedExpires;
+		const expires = jwtExpiry ?? Math.max(normalizedExpires, NEVER_EXPIRES);
 		if (expires !== creds.expires) {
 			creds = { ...creds, expires };
 		}
