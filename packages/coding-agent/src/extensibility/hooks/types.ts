@@ -8,6 +8,9 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CompactionPreparation, CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ImageContent, Message, Model, TextContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
+import type { logger as piLogger } from "@oh-my-pi/pi-utils";
+import type * as TypeBox from "@sinclair/typebox";
+import type * as piCodingAgent from "../..";
 import type { Rule } from "../../capability/rule";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { EditToolDetails } from "../../edit";
@@ -795,11 +798,11 @@ export interface HookAPI {
 	exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
 
 	/** File logger for error/warning/debug messages */
-	logger: typeof import("@oh-my-pi/pi-utils").logger;
+	logger: typeof piLogger;
 	/** Injected @sinclair/typebox module */
-	typebox: typeof import("@sinclair/typebox");
+	typebox: typeof TypeBox;
 	/** Injected pi-coding-agent exports */
-	pi: typeof import("../..");
+	pi: typeof piCodingAgent;
 }
 
 /**

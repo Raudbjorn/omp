@@ -24,6 +24,8 @@ import type {
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import type * as piCodingAgent from "@oh-my-pi/pi-coding-agent";
 import type { AutocompleteItem, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
+import type { logger as piLogger } from "@oh-my-pi/pi-utils";
+import type * as TypeBox from "@sinclair/typebox";
 import type { Static, TSchema } from "@sinclair/typebox";
 import type { Rule } from "../../capability/rule";
 import type { KeybindingsManager } from "../../config/keybindings";
@@ -959,10 +961,10 @@ export interface ExtensionAPI {
 	// =========================================================================
 
 	/** File logger for error/warning/debug messages */
-	logger: typeof import("@oh-my-pi/pi-utils").logger;
+	logger: typeof piLogger;
 
 	/** Injected @sinclair/typebox module for defining tool parameters */
-	typebox: typeof import("@sinclair/typebox");
+	typebox: typeof TypeBox;
 
 	/** Injected pi-coding-agent exports for accessing SDK utilities */
 	pi: typeof piCodingAgent;

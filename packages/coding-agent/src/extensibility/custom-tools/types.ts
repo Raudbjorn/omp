@@ -8,7 +8,10 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agen
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
+import type { logger as piLogger } from "@oh-my-pi/pi-utils";
+import type * as TypeBox from "@sinclair/typebox";
 import type { Static, TSchema } from "@sinclair/typebox";
+import type * as piCodingAgent from "../..";
 import type { Rule } from "../../capability/rule";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
@@ -51,11 +54,11 @@ export interface CustomToolAPI {
 	/** Whether UI is available (false in print/RPC mode) */
 	hasUI: boolean;
 	/** File logger for error/warning/debug messages */
-	logger: typeof import("@oh-my-pi/pi-utils").logger;
+	logger: typeof piLogger;
 	/** Injected @sinclair/typebox module */
-	typebox: typeof import("@sinclair/typebox");
+	typebox: typeof TypeBox;
 	/** Injected pi-coding-agent exports */
-	pi: typeof import("../..");
+	pi: typeof piCodingAgent;
 	/** Push a preview action that can later be resolved with the hidden resolve tool */
 	pushPendingAction(action: CustomToolPendingAction): void;
 }

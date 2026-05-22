@@ -7,6 +7,7 @@ import type { AgentEvent, AgentMessage, AgentToolResult, ThinkingLevel } from "@
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { isRecord, ptree, readJsonl } from "@oh-my-pi/pi-utils";
+import type { FileSink } from "bun";
 import type { BashResult } from "../../exec/bash-executor";
 import type { SessionStats } from "../../session/agent-session";
 import type {
@@ -787,7 +788,7 @@ export class RpcClient {
 		if (!this.#process?.stdin) {
 			throw new Error("Client not started");
 		}
-		const stdin = this.#process.stdin as import("bun").FileSink;
+		const stdin = this.#process.stdin as FileSink;
 		stdin.write(`${JSON.stringify(frame)}\n`);
 		const flushResult = stdin.flush();
 		if (flushResult instanceof Promise) {
