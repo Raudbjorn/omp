@@ -7,14 +7,17 @@ import type {
 	Message,
 	Model,
 	SimpleStreamOptions,
+	Static,
 	streamSimple,
 	TextContent,
 	Tool,
 	ToolChoice,
 	ToolResultMessage,
+	TSchema,
 } from "@oh-my-pi/pi-ai";
-import type { Static, TSchema } from "@sinclair/typebox";
 import type { HarmonyAuditEvent } from "./harmony-leak";
+import type { AgentRunCoverage, AgentRunSummary } from "./run-collector";
+import type { AgentTelemetryConfig } from "./telemetry";
 
 /** Stream function - can return sync or Promise for async config lookup */
 export type StreamFn = (
@@ -119,6 +122,13 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * continues with another turn.
 	 */
 	getFollowUpMessages?: () => Promise<AgentMessage[]>;
+	/**
+	 * Hook fired right before the loop would exit.
+	 *
+	 * Called when the agent has no more tool calls and no steering messages,
+	 * immediately before polling follow-up messages.
+	 */
+	onBeforeYield?: () => Promise<void> | void;
 
 	/**
 	 * Provides tool execution context, resolved per tool call.
@@ -169,13 +179,121 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * the next model call instead of waiting for the next prompt.
 	 */
 	getReasoning?: () => Effort | undefined;
+
+	/**
+	 * Called after a tool call has been validated and is about to execute.
+	 *
+	 * Return `{ block: true }` to prevent execution. The loop emits an error tool
+	 * result instead (using `reason` as the error text, or a default if omitted).
+	 *
+	 * Mutating `context.args` in place changes the arguments passed to `tool.execute`
+	 * — the loop does **not** re-validate after this hook runs.
+	 *
+	 * The hook receives the tool abort signal (`signal`) and is responsible for
+	 * honoring it. Throwing surfaces as a tool-error result and does not abort the
+	 * rest of the batch.
+	 */
+	beforeToolCall?: (
+		context: BeforeToolCallContext,
+		signal?: AbortSignal,
+	) => Promise<BeforeToolCallResult | undefined> | BeforeToolCallResult | undefined;
+
+	/**
+	 * Called after a tool finishes executing, before `tool_execution_end` and the
+	 * tool-result message are emitted.
+	 *
+	 * Return an `AfterToolCallResult` to override individual fields of the executed
+	 * tool result. Omitted fields keep their original values; there is no deep merge.
+	 *
+	 * Throwing surfaces as a tool-error result and does not abort the rest of the batch.
+	 */
+	afterToolCall?: (
+		context: AfterToolCallContext,
+		signal?: AbortSignal,
+	) => Promise<AfterToolCallResult | undefined> | AfterToolCallResult | undefined;
+	/**
+	 * Opt-in OpenTelemetry instrumentation. Passing `{}` enables the loop's
+	 * GenAI-semantic-convention spans (`invoke_agent`, `chat`, `execute_tool`)
+	 * using the global tracer provider. Leaving this field undefined disables
+	 * the instrumentation entirely — the loop performs zero tracer lookups.
+	 *
+	 * See {@link AgentTelemetryConfig} for the full surface (hooks, content
+	 * capture, cost estimator, agent identity).
+	 */
+	telemetry?: AgentTelemetryConfig;
 }
 
+/**
+ * Batch/sequencing metadata for the tool call currently being processed.
+ */
 export interface ToolCallContext {
 	batchId: string;
 	index: number;
 	total: number;
 	toolCalls: Array<{ id: string; name: string }>;
+}
+
+/** A single tool-call content block emitted by an assistant message. */
+export type AgentToolCall = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
+
+/**
+ * Result returned from `beforeToolCall`.
+ *
+ * Set `block: true` to prevent the tool from executing. The loop emits an error tool
+ * result instead, using `reason` as the error text (or a default if omitted).
+ *
+ * Mutating the `args` reference passed in `BeforeToolCallContext` is supported and
+ * survives into execution — the loop does **not** re-validate after this hook runs.
+ */
+export interface BeforeToolCallResult {
+	block?: boolean;
+	reason?: string;
+}
+
+/**
+ * Partial override returned from `afterToolCall`.
+ *
+ * Merge semantics are field-by-field; omitted fields keep the executed values.
+ * No deep merge is performed.
+ */
+export interface AfterToolCallResult {
+	/** If provided, replaces the tool result content array in full. */
+	content?: (TextContent | ImageContent)[];
+	/** If provided, replaces the tool result details payload in full. */
+	details?: unknown;
+	/** If provided, replaces the error flag carried with the tool result. */
+	isError?: boolean;
+}
+
+/** Context passed to `beforeToolCall`. */
+export interface BeforeToolCallContext {
+	/** The assistant message that requested the tool call. */
+	assistantMessage: AssistantMessage;
+	/** The raw tool call block from `assistantMessage.content`. */
+	toolCall: AgentToolCall;
+	/**
+	 * Validated tool arguments. The same reference is forwarded to `tool.execute`
+	 * (after any `transformToolCallArguments` pass), so in-place mutations stick.
+	 */
+	args: Record<string, unknown>;
+	/** Current agent context at the time the tool call is prepared. */
+	context: AgentContext;
+}
+
+/** Context passed to `afterToolCall`. */
+export interface AfterToolCallContext {
+	/** The assistant message that requested the tool call. */
+	assistantMessage: AssistantMessage;
+	/** The raw tool call block from `assistantMessage.content`. */
+	toolCall: AgentToolCall;
+	/** Validated tool arguments used for execution (post `beforeToolCall` mutations). */
+	args: Record<string, unknown>;
+	/** The executed tool result before any `afterToolCall` overrides are applied. */
+	result: AgentToolResult<any>;
+	/** Whether the executed tool result is currently treated as an error. */
+	isError: boolean;
+	/** Current agent context at the time the tool call is finalized. */
+	context: AgentContext;
 }
 
 /**
@@ -223,6 +341,9 @@ export interface AgentToolResult<T = any, _TInput = unknown> {
 	content: (TextContent | ImageContent)[];
 	// Details to be displayed in a UI or logged
 	details?: T;
+	// Marks a non-throwing failure (e.g. an aggregator catching per-entry errors).
+	// agent-loop honors this and surfaces it as a tool error on the wire.
+	isError?: boolean;
 }
 
 // Callback for streaming tool execution updates
@@ -315,7 +436,13 @@ export interface AgentContext {
 export type AgentEvent =
 	// Agent lifecycle
 	| { type: "agent_start" }
-	| { type: "agent_end"; messages: AgentMessage[] }
+	| {
+			type: "agent_end";
+			messages: AgentMessage[];
+			/** Present iff `AgentTelemetryConfig` was supplied on this run. */
+			telemetry?: AgentRunSummary;
+			coverage?: AgentRunCoverage;
+	  }
 	// Turn lifecycle - a turn is one assistant response + any tool calls/results
 	| { type: "turn_start" }
 	| { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }

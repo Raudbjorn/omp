@@ -26,6 +26,22 @@ import {
 	type AgentTool,
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
+import {
+	AUTO_HANDOFF_THRESHOLD_FOCUS,
+	type CompactionPreparation,
+	type CompactionResult,
+	calculateContextTokens,
+	calculatePromptTokens,
+	collectEntriesForBranchSummary,
+	compact,
+	estimateTokens,
+	generateBranchSummary,
+	prepareCompaction,
+	renderHandoffPrompt,
+	type SummaryOptions,
+	shouldCompact,
+} from "@oh-my-pi/pi-agent-core/compaction";
+import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "@oh-my-pi/pi-agent-core/compaction/pruning";
 import type {
 	AssistantMessage,
 	Context,
@@ -68,8 +84,8 @@ import {
 } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
-import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { createPromptChainExecutor, type PromptChainExecutor } from "../danger-pi/command-chain-files/runtime";
+import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
 import {
 	disposeKernelSessionsByOwner,
@@ -119,9 +135,7 @@ import { resolveMemoryBackend } from "../memory-backend";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import type { PlanModeState } from "../plan-mode/state";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
-import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
-import handoffDocumentPrompt from "../prompts/system/handoff-document.md" with { type: "text" };
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
@@ -152,20 +166,6 @@ import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
-import {
-	type CompactionPreparation,
-	type CompactionResult,
-	calculateContextTokens,
-	calculatePromptTokens,
-	collectEntriesForBranchSummary,
-	compact,
-	estimateTokens,
-	generateBranchSummary,
-	prepareCompaction,
-	type SummaryOptions,
-	shouldCompact,
-} from "./compaction";
-import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "./compaction/pruning";
 import {
 	type BashExecutionMessage,
 	type CompactionSummaryMessage,
@@ -394,8 +394,6 @@ interface HandoffOptions {
 // ============================================================================
 
 /** Standard thinking levels */
-
-const AUTO_HANDOFF_THRESHOLD_FOCUS = prompt.render(autoHandoffThresholdFocusPrompt);
 
 type RetryFallbackChains = Record<string, string[]>;
 
@@ -4861,9 +4859,7 @@ export class AgentSession {
 		}
 
 		// Build the handoff prompt
-		const handoffPrompt = prompt.render(handoffDocumentPrompt, {
-			additionalFocus: customInstructions,
-		});
+		const handoffPrompt = renderHandoffPrompt(customInstructions);
 
 		// Create a promise that resolves when the agent completes
 		let handoffText: string | undefined;

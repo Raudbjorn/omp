@@ -1,4 +1,5 @@
 import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
+import { calculatePromptTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
@@ -11,7 +12,6 @@ import { TtsrNotificationComponent } from "../../modes/components/ttsr-notificat
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
-import { calculatePromptTokens } from "../../session/compaction/compaction";
 import type { ExitPlanModeDetails } from "../../tools";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];

@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { calculatePromptTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatCount, getProjectDir } from "@oh-my-pi/pi-utils";
@@ -7,7 +8,6 @@ import { settings } from "../../config/settings";
 import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "../../config/settings-schema";
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
-import { calculatePromptTokens } from "../../session/compaction/compaction";
 import * as git from "../../utils/git";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../utils/session-color";
 import { sanitizeStatusText } from "../shared";

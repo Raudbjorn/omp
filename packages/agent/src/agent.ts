@@ -38,7 +38,7 @@ import type {
  * Default convertToLlm: Keep only LLM-compatible messages, convert attachments.
  */
 function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
+	return messages.filter((m): m is Message => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
 }
 
 function refreshToolChoiceForActiveTools(
@@ -208,6 +208,25 @@ export interface AgentOptions {
 	 * Cursor tool result callback for exec tool responses.
 	 */
 	cursorOnToolResult?: CursorToolResultHandler;
+
+	/**
+	 * Called after a tool call has been validated and is about to execute.
+	 * See {@link AgentLoopConfig.beforeToolCall} for full semantics.
+	 */
+	beforeToolCall?: AgentLoopConfig["beforeToolCall"];
+
+	/**
+	 * Called after a tool finishes executing, before `tool_execution_end` and the tool-result
+	 * message are emitted. See {@link AgentLoopConfig.afterToolCall} for full semantics.
+	 */
+	afterToolCall?: AgentLoopConfig["afterToolCall"];
+
+	/**
+	 * Opt-in OpenTelemetry instrumentation. Passing `{}` enables the loop's
+	 * GenAI-semantic-convention spans using the global tracer provider. See
+	 * {@link AgentLoopConfig.telemetry} for the full surface.
+	 */
+	telemetry?: AgentLoopConfig["telemetry"];
 }
 
 export interface AgentPromptOptions {
@@ -271,12 +290,24 @@ export class Agent {
 	#onSseEvent?: SimpleStreamOptions["onSseEvent"];
 	#onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
 	#onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
+	#onBeforeYield?: () => Promise<void> | void;
+	#telemetry?: AgentLoopConfig["telemetry"];
 
 	/** Buffered Cursor tool results with text length at time of call (for correct ordering) */
 	#cursorToolResultBuffer: CursorToolResultEntry[] = [];
 
 	streamFn: StreamFn;
 	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+	/**
+	 * Hook invoked after tool arguments are validated and before execution.
+	 * Reassign at any time to swap the implementation (e.g. on extension reload).
+	 */
+	beforeToolCall?: AgentLoopConfig["beforeToolCall"];
+	/**
+	 * Hook invoked after tool execution and before `tool_execution_end` / tool-result
+	 * message emission. Reassign at any time to swap the implementation.
+	 */
+	afterToolCall?: AgentLoopConfig["afterToolCall"];
 
 	constructor(opts: AgentOptions = {}) {
 		this.#state = { ...this.#state, ...opts.initialState };
@@ -312,6 +343,9 @@ export class Agent {
 		this.#getToolChoice = opts.getToolChoice;
 		this.#onAssistantMessageEvent = opts.onAssistantMessageEvent;
 		this.#onHarmonyLeak = opts.onHarmonyLeak;
+		this.beforeToolCall = opts.beforeToolCall;
+		this.afterToolCall = opts.afterToolCall;
+		this.#telemetry = opts.telemetry;
 	}
 
 	/**
@@ -369,6 +403,25 @@ export class Agent {
 	 */
 	setMetadataResolver(resolver: ((provider: string) => Record<string, unknown> | undefined) | undefined): void {
 		this.#metadataResolver = resolver;
+	}
+
+	/**
+	 * Read the active OpenTelemetry configuration. Returns `undefined` when
+	 * instrumentation is disabled. Callers spawning child runs (e.g. subagent
+	 * dispatch) forward this to the child's loop so its spans appear under the
+	 * parent's active context with the subagent's own identity stamped.
+	 */
+	get telemetry(): AgentLoopConfig["telemetry"] | undefined {
+		return this.#telemetry;
+	}
+
+	/**
+	 * Replace the active OpenTelemetry configuration. Pass `undefined` to
+	 * disable instrumentation. Applies to the *next* `agentLoop` invocation —
+	 * in-flight loops keep the configuration they started with.
+	 */
+	setTelemetry(telemetry: AgentLoopConfig["telemetry"] | undefined): void {
+		this.#telemetry = telemetry;
 	}
 
 	/**
@@ -505,6 +558,10 @@ export class Agent {
 		fn: ((message: AssistantMessage, event: AssistantMessageEvent) => void) | undefined,
 	): void {
 		this.#onAssistantMessageEvent = fn;
+	}
+
+	setOnBeforeYield(fn: (() => Promise<void> | void) | undefined): void {
+		this.#onBeforeYield = fn;
 	}
 
 	emitExternalEvent(event: AgentEvent) {
@@ -868,6 +925,8 @@ export class Agent {
 			cursorOnToolResult,
 			transformToolCallArguments: this.#transformToolCallArguments,
 			intentTracing: this.#intentTracing,
+			beforeToolCall: this.beforeToolCall ? (ctx, signal) => this.beforeToolCall?.(ctx, signal) : undefined,
+			afterToolCall: this.afterToolCall ? (ctx, signal) => this.afterToolCall?.(ctx, signal) : undefined,
 			onAssistantMessageEvent: this.#onAssistantMessageEvent,
 			onHarmonyLeak: this.#onHarmonyLeak,
 			getToolChoice,
@@ -880,6 +939,8 @@ export class Agent {
 				return this.#dequeueSteeringMessages();
 			},
 			getFollowUpMessages: async () => this.#dequeueFollowUpMessages(),
+			onBeforeYield: () => this.#onBeforeYield?.(),
+			telemetry: this.#telemetry,
 		};
 
 		let partial: AgentMessage | null = null;
@@ -945,7 +1006,7 @@ export class Agent {
 			}
 
 			// Handle any remaining partial message
-			if (partial && partial.role === "assistant" && partial.content.length > 0) {
+			if (partial && partial.role === "assistant" && Array.isArray(partial.content) && partial.content.length > 0) {
 				const onlyEmpty = !partial.content.some(
 					c =>
 						(c.type === "thinking" && c.thinking.trim().length > 0) ||
