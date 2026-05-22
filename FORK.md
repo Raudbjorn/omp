@@ -32,6 +32,7 @@ This fork adds the following feature areas on top of upstream:
 - Codex affinity and cache-observability logging
 - Fork-local assistant token line in interactive mode: when `display.showTokenUsage` is enabled, assistant messages show dim input/output counts, a `\uf49b` cache segment with explicit cached-token count including `0` and hit/miss tinting, plus a trailing `` elapsed segment derived from assistant-message timestamps in compact `d/h/m/s` form
 - Native shell interpolation in rendered command and skill bodies
+- Bundled `.omp` workflow prompt commands include `/fix-issues` and `/review-prs` for issue/PR batch workflows
 
 ### Supporting platform and tooling changes
 - Pre-commit blocks staged `CHANGELOG.md` files with `This is a fork. We do not modify CHANGELOG.md`
