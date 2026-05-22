@@ -38,6 +38,7 @@ This fork adds the following feature areas on top of upstream:
 - Better extension discovery, including symlinked package dirs
 - Package name derivation fixes for discovered extensions
 - Session token tracking and related session-link fixes
+- Persistent per-install ID stored outside the agent state directory, logger transport switching, prompt ASCII replacement that preserves HTML comments, and safe spawned-process environment filtering
 - Clipboard and native integration improvements
 - Nano Banana 2 image-generation pipeline upgrade
 - OpenRouter image-generation requests now send `modalities` and forward `image_config` (`aspect_ratio`, `image_size`) when provided
