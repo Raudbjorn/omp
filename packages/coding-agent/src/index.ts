@@ -2,6 +2,10 @@ import { HookEditorComponent, HookInputComponent, HookSelectorComponent } from "
 
 // Core session management
 
+// Compaction
+export * from "@oh-my-pi/pi-agent-core/compaction/branch-summarization";
+export * from "@oh-my-pi/pi-agent-core/compaction/compaction";
+export * from "@oh-my-pi/pi-agent-core/compaction/utils";
 // TypeBox helper for string enums (convenience for custom tools)
 // Re-export from pi-ai which uses the correct enum-based schema format
 export { StringEnum } from "@oh-my-pi/pi-ai";
@@ -43,8 +47,6 @@ export * from "./sdk";
 export * from "./session/agent-session";
 // Auth and model registry
 export * from "./session/auth-storage";
-// Compaction
-export * from "./session/compaction";
 export * from "./session/messages";
 export * from "./session/session-dump-format";
 export * from "./session/session-manager";

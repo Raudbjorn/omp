@@ -5,6 +5,7 @@
  * and interact with the user via UI primitives.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { CompactionPreparation, CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ImageContent, Message, Model, TextContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
 import type { Rule } from "../../capability/rule";
@@ -12,7 +13,6 @@ import type { ModelRegistry } from "../../config/model-registry";
 import type { EditToolDetails } from "../../edit";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
 import type { Theme } from "../../modes/theme/theme";
-import type { CompactionPreparation, CompactionResult } from "../../session/compaction";
 import type { HookMessage } from "../../session/messages";
 import type {
 	BranchSummaryEntry,

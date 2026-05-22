@@ -45,7 +45,7 @@ The same minimum-content guard exists again inside `AgentSession.handoff()` and 
 - Reads current branch entries (`sessionManager.getBranch()`)
 - Validates minimum message count (`>= 2`)
 - Creates `#handoffAbortController`
-- Renders the fixed prompt template `prompts/system/handoff-document.md` with optional `additionalFocus`
+- Renders the fixed prompt template `packages/agent/src/compaction/prompts/handoff-document.md` with optional `additionalFocus`
 - Appends `Additional focus: ...` if custom instructions are provided
 
 Prompt is sent as an agent-authored developer message via:

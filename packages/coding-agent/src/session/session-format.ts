@@ -5,25 +5,21 @@
  */
 
 import type { AgentMessage, AgentState, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { calculateContextTokens, calculatePromptTokens, estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
-import type { CompactionSummaryMessage, FileMentionMessage } from "./messages";
-import { calculateContextTokens, estimateTokens, calculatePromptTokens } from "./compaction";
-import { getLatestCompactionEntry } from "./session-manager";
-import { formatSessionDumpText, type SessionDumpToolInfo } from "./session-dump-format";
-import type { SessionManager, SessionEntry } from "./session-manager";
-import type { ContextUsage } from "../extensibility/extensions/types";
-import type { SessionStats } from "./types";
-import { getCurrentThemeName } from "../modes/theme/theme";
 import { exportSessionToHtml } from "../export/html";
+import type { ContextUsage } from "../extensibility/extensions/types";
+import { getCurrentThemeName } from "../modes/theme/theme";
+import type { CompactionSummaryMessage, FileMentionMessage } from "./messages";
+import { formatSessionDumpText, type SessionDumpToolInfo } from "./session-dump-format";
+import type { SessionEntry, SessionManager } from "./session-manager";
+import { getLatestCompactionEntry } from "./session-manager";
+import type { SessionStats } from "./types";
 
 /**
  * Get session statistics from agent state.
  */
-export function getSessionStats(
-	state: AgentState,
-	sessionFile: string | undefined,
-	sessionId: string,
-): SessionStats {
+export function getSessionStats(state: AgentState, sessionFile: string | undefined, sessionId: string): SessionStats {
 	const userMessages = state.messages.filter(m => m.role === "user").length;
 	const assistantMessages = state.messages.filter(m => m.role === "assistant").length;
 	const toolResults = state.messages.filter(m => m.role === "toolResult").length;
@@ -175,16 +171,14 @@ export function getContextUsage(
 /**
  * Fetch usage reports from the model registry's auth storage.
  */
-export async function fetchUsageReports(
-	modelRegistry: {
-		authStorage: {
-			fetchUsageReports?: (opts: {
-				baseUrlResolver?: (provider: string) => string | undefined;
-			}) => Promise<UsageReport[] | null>;
-		};
-		getProviderBaseUrl?: (provider: string) => string | undefined;
-	},
-): Promise<UsageReport[] | null> {
+export async function fetchUsageReports(modelRegistry: {
+	authStorage: {
+		fetchUsageReports?: (opts: {
+			baseUrlResolver?: (provider: string) => string | undefined;
+		}) => Promise<UsageReport[] | null>;
+	};
+	getProviderBaseUrl?: (provider: string) => string | undefined;
+}): Promise<UsageReport[] | null> {
 	const authStorage = modelRegistry.authStorage;
 	if (!authStorage.fetchUsageReports) return null;
 	return authStorage.fetchUsageReports({

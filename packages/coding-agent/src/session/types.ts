@@ -1,21 +1,10 @@
-import type {
-	AgentEvent,
-	AgentMessage,
-	ThinkingLevel,
-} from "@oh-my-pi/pi-agent-core";
-import type {
-	ImageContent,
-	MessageAttribution,
-	Model,
-	ServiceTier,
-	TextContent,
-	ToolChoice,
-} from "@oh-my-pi/pi-ai";
+import type { AgentEvent, AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
+import type { ImageContent, MessageAttribution, Model, ServiceTier, TextContent, ToolChoice } from "@oh-my-pi/pi-ai";
 import type { AsyncJob } from "../async";
 import type { Rule } from "../capability/rule";
 import type { TodoItem } from "../tools/todo-write";
 import type { CustomMessage } from "./messages";
-import type { CompactionResult } from "./compaction";
 
 // ============================================================================
 // Shared session types
