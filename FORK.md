@@ -7,15 +7,14 @@ rebase:
   continue_check: bun fix
 ---
 
-- Prek (a modern pre-commit equivalent) is installed on this project, and runs on commit.
-- If it fails, check the logs, but be aware that a `bun fix:ts` will fix some of the easier issues that you're likely to encounter.
+* Prek (a modern pre-commit equivalent) is installed on this project, and runs on commit.
+* If it fails, check the logs, but be aware that a `bun fix:ts` will fix some of the easier issues that you're likely to encounter.
 
 ## Fork feature set
 
 This fork adds the following feature areas on top of upstream:
 
 ### Agent workflow and submission handling
-
 - Multi-block submissions in interactive mode
 - Fenced multi-block shortcut syntax
 - Streaming multi-block queue ordering so prompt text and command results stay in authored order
@@ -24,7 +23,6 @@ This fork adds the following feature areas on top of upstream:
 - Fork-local `fork-factorizer` daemon at `.agents/daemons/fork-factorizer/DAEMON.md` that advises on isolating fork-specific logic behind extension points/hooks during code changes to reduce upstream merge conflicts
 
 ### Runtime and session behavior
-
 - Native `.omp` live reload for commands and skills
 - Native `.cmd.yaml` prompt-chain command files in `.omp/commands` and `~/.omp/agent/commands`: `foo.cmd.yaml` registers `/foo`, same-directory `.md` siblings win on name collisions, and invalid YAML/schema files surface as non-fatal interactive warning blocks during startup and reload
 - `/reload` support for refreshing runtime state
@@ -36,14 +34,12 @@ This fork adds the following feature areas on top of upstream:
 - Native shell interpolation in rendered command and skill bodies
 
 ### Supporting platform and tooling changes
-
 - Pre-commit blocks staged `CHANGELOG.md` files with `This is a fork. We do not modify CHANGELOG.md`
 - Changelogs use Git's union merge strategy to reduce append-only sync conflicts
 - Better extension discovery, including symlinked package dirs
 - Package name derivation fixes for discovered extensions
 - Session token tracking and related session-link fixes
 - Persistent per-install ID stored outside the agent state directory, logger transport switching, prompt ASCII replacement that preserves HTML comments, and safe spawned-process environment filtering
-- Reusable native-build CI workflow with hash-keyed GitHub Actions artifacts for Linux test reuse and release-platform builds
 - Clipboard and native integration improvements
 - Nano Banana 2 image-generation pipeline upgrade
 - OpenRouter image-generation requests now send `modalities` and forward `image_config` (`aspect_ratio`, `image_size`) when provided
