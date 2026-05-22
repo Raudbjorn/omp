@@ -1,5 +1,5 @@
 {
-  // Fallow configuration — see `bunx fallow config-schema` for the full schema.
+  // Fallow configuration - see `bunx fallow config-schema` for the full schema.
   //
   // `entry` is critical: fallow's dead-code analyzer treats unlisted test files
   // as unreachable, which means any helper imported only from other tests looks
@@ -24,7 +24,7 @@
       "packages/coding-agent/src/internal-urls/docs-index.generated.ts",
       // Embedded HTML asset shipped as a static template, not a code module.
       "packages/coding-agent/src/export/html/template.js",
-      // Generated/owned upstream — see packages/ai/scripts/generate-models.ts.
+      // Generated/owned upstream - see packages/ai/scripts/generate-models.ts.
       "packages/ai/src/models.json",
     ],
     "ignoreImports": true,

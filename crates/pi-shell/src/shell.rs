@@ -1,13 +1,12 @@
 //! Runtime-agnostic brush shell execution.
 
-#[cfg(windows)]
-use std::collections::HashSet;
 use std::{
-	collections::HashMap,
+	collections::{HashMap, HashSet},
 	fs,
-	io::{self, Write},
+	future::Future,
+	io::{self, Read, Write},
 	str,
-	sync::Arc,
+	sync::{Arc, mpsc as std_mpsc},
 	time::Duration,
 };
 
@@ -20,8 +19,8 @@ use brush_core::{
 	env::EnvironmentScope,
 	openfiles::{self, OpenFile, OpenFiles},
 };
-use bytes::Bytes;
 use clap::Parser;
+use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 #[cfg(not(unix))]
 use tokio::io::AsyncReadExt as _;
 use tokio::{
@@ -79,6 +78,7 @@ struct ShellRunConfig {
 	command:   String,
 	cwd:       Option<String>,
 	env:       Option<HashMap<String, String>>,
+	pty:       bool,
 	minimizer: Option<minimizer::MinimizerConfig>,
 }
 
@@ -87,6 +87,7 @@ pub struct ShellRunOptions {
 	pub command:    String,
 	pub cwd:        Option<String>,
 	pub env:        Option<HashMap<String, String>>,
+	pub pty:        bool,
 	pub timeout_ms: Option<u32>,
 }
 
@@ -116,9 +117,42 @@ pub struct ShellExecuteOptions {
 	pub timeout_ms:    Option<u32>,
 	pub snapshot_path: Option<String>,
 	pub minimizer:     Option<minimizer::MinimizerOptions>,
+	pub pty:           bool,
 }
 
 pub type ShellExecuteResult = ShellRunResult;
+
+const PTY_DEFAULT_COLS: u16 = 120;
+const PTY_DEFAULT_ROWS: u16 = 40;
+const PTY_LOOP_INTERVAL: Duration = Duration::from_millis(16);
+const PTY_POST_CANCEL_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
+const PTY_POST_EXIT_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
+const PTY_FINAL_READER_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
+const PTY_READER_EVENTS_PER_TICK: usize = 256;
+
+struct PtyShellConfig {
+	command:           String,
+	cwd:               String,
+	env:               Vec<(String, String)>,
+	capture_output:    bool,
+	max_capture_bytes: usize,
+}
+
+struct PtyShellOutput {
+	exit_code: i32,
+	output:    Option<BufferedOutput>,
+}
+
+enum PtyReaderEvent {
+	Chunk(String),
+	Done,
+}
+
+struct CaptureState {
+	text:      String,
+	exceeded:  bool,
+	max_bytes: usize,
+}
 
 pub struct Shell {
 	session:     Arc<TokioMutex<Option<ShellSessionCore>>>,
@@ -160,6 +194,7 @@ impl Shell {
 			command:   options.command,
 			cwd:       options.cwd,
 			env:       options.env,
+			pty:       options.pty,
 			minimizer: self.config.minimizer.clone(),
 		};
 		run_shell_session(
@@ -192,45 +227,14 @@ pub async fn execute_shell(
 		snapshot_path: options.snapshot_path,
 		minimizer:     minimizer.clone(),
 	};
-	let run_config =
-		ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env, minimizer };
-	run_shell_oneshot(config, run_config, on_chunk, cancel_token).await
-}
-
-/// Optional per-stream raw byte sinks for [`execute_shell_streams`].
-///
-/// When a sink is `Some`, that stream's pipe is drained directly into the
-/// channel with no UTF-8 decoding and no merging. When `None`, the
-/// corresponding pipe is still drained (to avoid blocking the child) but
-/// its bytes are dropped.
-#[derive(Default)]
-pub struct StreamSinks {
-	pub stdout: Option<mpsc::UnboundedSender<Bytes>>,
-	pub stderr: Option<mpsc::UnboundedSender<Bytes>>,
-}
-
-/// One-shot execution that delivers stdout/stderr as raw byte chunks.
-///
-/// Bytes are delivered on separate channels with no UTF-8 decoding and no
-/// merging. The minimizer is intentionally disabled — its
-/// `MinimizerResult.text` contract presumes a single merged transcript.
-pub async fn execute_shell_streams(
-	options: ShellExecuteOptions,
-	streams: StreamSinks,
-	cancel_token: CancelToken,
-) -> Result<ShellExecuteResult> {
-	let config = ShellConfig {
-		session_env:   options.session_env,
-		snapshot_path: options.snapshot_path,
-		minimizer:     None,
-	};
 	let run_config = ShellRunConfig {
-		command:   options.command,
-		cwd:       options.cwd,
-		env:       options.env,
-		minimizer: None,
+		command: options.command,
+		cwd: options.cwd,
+		env: options.env,
+		pty: options.pty,
+		minimizer,
 	};
-	run_shell_oneshot_streams(config, run_config, streams, cancel_token).await
+	run_shell_oneshot(config, run_config, on_chunk, cancel_token).await
 }
 
 async fn run_shell_session(
@@ -270,12 +274,7 @@ async fn run_shell_session(
 				let _ = run_task.await;
 			}
 			abort_state.clear().await;
-			// Use try_lock to avoid deadlocking if another task holds the session.
-			// If we can't acquire the lock, the session will be cleaned up when the
-			// holding task finishes.
-			if let Ok(mut guard) = session.try_lock() {
-				*guard = None;
-			}
+			*session.lock().await = None;
 			return Ok(ShellRunResult {
 				exit_code: None,
 				cancelled: matches!(reason, AbortReason::Signal),
@@ -343,51 +342,6 @@ async fn run_shell_oneshot(
 		cancelled: false,
 		timed_out: false,
 		minimized,
-	})
-}
-
-async fn run_shell_oneshot_streams(
-	config: ShellConfig,
-	run_config: ShellRunConfig,
-	streams: StreamSinks,
-	ct: CancelToken,
-) -> Result<ShellExecuteResult> {
-	let tokio_cancel = CancellationToken::new();
-
-	let mut task = tokio::spawn({
-		let tokio_cancel = tokio_cancel.clone();
-		async move {
-			let mut session = create_session(&config).await?;
-			run_shell_command_streams(&mut session, &run_config, streams, tokio_cancel).await
-		}
-	});
-
-	let run_result = tokio::select! {
-		result = &mut task => result,
-		reason = ct.wait() => {
-			tokio_cancel.cancel();
-			let graceful = time::timeout(Duration::from_secs(2), &mut task).await;
-			if graceful.is_err() {
-				task.abort();
-				let _ = task.await;
-			}
-			return Ok(ShellExecuteResult {
-				exit_code: None,
-				cancelled: matches!(reason, AbortReason::Signal),
-				timed_out: matches!(reason, AbortReason::Timeout),
-				minimized: None,
-			});
-		},
-	};
-
-	let res = run_result
-		.unwrap_or_else(|err| Err(Error::msg(format!("Shell execution task failed: {err}"))));
-	let exec = res?;
-	Ok(ShellExecuteResult {
-		exit_code: Some(exit_code(&exec)),
-		cancelled: false,
-		timed_out: false,
-		minimized: None,
 	})
 }
 
@@ -538,7 +492,6 @@ async fn create_session(config: &ShellConfig) -> Result<ShellSessionCore> {
 				.map_err(|err| Error::msg(format!("Failed to set env: {err}")))?;
 		}
 	}
-	apply_env_fallback(&mut shell)?;
 
 	#[cfg(windows)]
 	configure_windows_path(&mut shell)?;
@@ -579,7 +532,31 @@ async fn run_shell_command(
 			.map_err(|err| Error::msg(format!("Failed to set cwd: {err}")))?;
 	}
 
-	let env_scope_pushed = apply_command_env(&mut session.shell, options.env.as_ref())?;
+	let mut env_scope_pushed = false;
+	if let Some(env) = options.env.as_ref() {
+		session
+			.shell
+			.env_mut()
+			.push_scope(EnvironmentScope::Command);
+		env_scope_pushed = true;
+		for (key, value) in env {
+			let normalized_key = normalize_env_key(key);
+			if should_skip_env_var(normalized_key) {
+				continue;
+			}
+			let mut var = ShellVariable::new(ShellValue::String(value.clone()));
+			var.export();
+			if let Err(err) =
+				session
+					.shell
+					.env_mut()
+					.add(normalized_key, var, EnvironmentScope::Command)
+			{
+				let _ = session.shell.env_mut().pop_scope(EnvironmentScope::Command);
+				return Err(Error::msg(format!("Failed to set env: {err}")));
+			}
+		}
+	}
 
 	let minimizer_mode = if let Some(config) = options.minimizer.as_ref() {
 		minimizer::engine::mode_for(&options.command, config)
@@ -592,6 +569,26 @@ async fn run_shell_command(
 	} else {
 		0
 	};
+
+	if options.pty {
+		let result = run_pty_shell_command(
+			session,
+			options,
+			on_chunk,
+			cancel_token,
+			minimizer_mode,
+			max_capture_bytes,
+		)
+		.await;
+		if env_scope_pushed {
+			session
+				.shell
+				.env_mut()
+				.pop_scope(EnvironmentScope::Command)
+				.map_err(|err| Error::msg(format!("Failed to pop env scope: {err}")))?;
+		}
+		return result;
+	}
 
 	let (reader_file, writer_file) = pipe_to_files("output")?;
 
@@ -609,6 +606,25 @@ async fn run_shell_command(
 	params.process_group_policy = ProcessGroupPolicy::NewProcessGroup;
 	params.set_cancel_token(cancel_token.clone());
 	let baseline_descendants = process::current_descendant_pids();
+	let tracked_targets = Arc::new(TokioMutex::new(process::TerminationTargets::new()));
+	let tracking_cancel = CancellationToken::new();
+	let tracker_handle = tokio::spawn({
+		let baseline_descendants = baseline_descendants.clone();
+		let tracked_targets = Arc::clone(&tracked_targets);
+		let tracking_cancel = tracking_cancel.clone();
+		async move {
+			loop {
+				{
+					let mut targets = tracked_targets.lock().await;
+					process::add_new_descendants(&mut targets, &baseline_descendants);
+				}
+				tokio::select! {
+					() = tracking_cancel.cancelled() => break,
+					() = time::sleep(Duration::from_millis(50)) => {}
+				}
+			}
+		}
+	});
 	let reader_cancel = CancellationToken::new();
 	let (activity_tx, mut activity_rx) = mpsc::channel::<()>(1);
 	// Stream every raw chunk to the caller live, regardless of whether
@@ -647,9 +663,16 @@ async fn run_shell_command(
 	let process_cancel_bridge = tokio::spawn({
 		let cancel_token = cancel_token.clone();
 		let baseline_descendants = baseline_descendants.clone();
+		let tracked_targets = Arc::clone(&tracked_targets);
 		async move {
 			cancel_token.cancelled().await;
-			process::terminate_new_descendants(&baseline_descendants).await;
+			{
+				let mut targets = tracked_targets.lock().await;
+				process::add_new_descendants(&mut targets, &baseline_descendants);
+				targets.signal(process::TERM_SIGNAL);
+			}
+			time::sleep(Duration::from_millis(500)).await;
+			tracked_targets.lock().await.signal(process::KILL_SIGNAL);
 		}
 	});
 	let source_info = SourceInfo::from("pi-natives:command");
@@ -659,7 +682,7 @@ async fn run_shell_command(
 		.await;
 
 	if cancel_token.is_cancelled() {
-		terminate_background_jobs(&session.shell);
+		terminate_background_jobs(&session.shell, &baseline_descendants);
 	}
 
 	if env_scope_pushed {
@@ -719,12 +742,10 @@ async fn run_shell_command(
 	}
 	cancel_bridge.abort();
 	let _ = cancel_bridge.await;
-	if cancel_token.is_cancelled() {
-		let _ = process_cancel_bridge.await;
-	} else {
-		process_cancel_bridge.abort();
-		let _ = process_cancel_bridge.await;
-	}
+	process_cancel_bridge.abort();
+	let _ = process_cancel_bridge.await;
+	tracking_cancel.cancel();
+	let _ = tracker_handle.await;
 
 	let result = result.map_err(|err| Error::msg(format!("Shell execution failed: {err}")))?;
 	let mut minimized_out: Option<MinimizerResult> = None;
@@ -756,212 +777,359 @@ async fn run_shell_command(
 	Ok((result, minimized_out))
 }
 
-async fn run_shell_command_streams(
-	session: &mut ShellSessionCore,
+async fn run_pty_shell_command(
+	session: &ShellSessionCore,
 	options: &ShellRunConfig,
-	streams: StreamSinks,
+	on_chunk: Option<mpsc::UnboundedSender<String>>,
 	cancel_token: CancellationToken,
-) -> Result<ExecutionResult> {
-	if let Some(cwd) = options.cwd.as_deref() {
-		session
-			.shell
-			.set_working_dir(cwd)
-			.map_err(|err| Error::msg(format!("Failed to set cwd: {err}")))?;
-	}
+	minimizer_mode: minimizer::engine::MinimizerMode,
+	max_capture_bytes: usize,
+) -> Result<(ExecutionResult, Option<MinimizerResult>)> {
+	let pty_config = PtyShellConfig {
+		command: options.command.clone(),
+		cwd: session.shell.working_dir().to_string_lossy().into_owned(),
+		env: exported_env(&session.shell),
+		capture_output: !matches!(minimizer_mode, minimizer::engine::MinimizerMode::None),
+		max_capture_bytes,
+	};
 
-	let env_scope_pushed = apply_command_env(&mut session.shell, options.env.as_ref())?;
+	let pty_output = tokio::task::spawn_blocking(move || {
+		run_pty_shell_command_sync(pty_config, on_chunk, cancel_token)
+	})
+	.await
+	.map_err(|err| Error::msg(format!("PTY execution task failed: {err}")))??;
 
-	let (stdout_reader, stdout_writer) = pipe_to_files("stdout")?;
-	let (stderr_reader, stderr_writer) = pipe_to_files("stderr")?;
-
-	let stdout_file = OpenFile::from(stdout_writer);
-	let stderr_file = OpenFile::from(stderr_writer);
-
-	let mut params = session.shell.default_exec_params();
-	params.set_fd(OpenFiles::STDIN_FD, null_file()?);
-	params.set_fd(OpenFiles::STDOUT_FD, stdout_file);
-	params.set_fd(OpenFiles::STDERR_FD, stderr_file);
-	params.process_group_policy = ProcessGroupPolicy::NewProcessGroup;
-	params.set_cancel_token(cancel_token.clone());
-	let baseline_descendants = process::current_descendant_pids();
-	let reader_cancel = CancellationToken::new();
-	let (activity_tx, mut activity_rx) = mpsc::channel::<()>(1);
-
-	let StreamSinks { stdout: stdout_sink, stderr: stderr_sink } = streams;
-	let mut stdout_handle = tokio::spawn(Box::pin(read_output_bytes(
-		stdout_reader,
-		stdout_sink,
-		reader_cancel.clone(),
-		activity_tx.clone(),
-	)));
-	let mut stderr_handle = tokio::spawn(Box::pin(read_output_bytes(
-		stderr_reader,
-		stderr_sink,
-		reader_cancel.clone(),
-		activity_tx,
-	)));
-
-	let cancel_bridge = tokio::spawn({
-		let cancel_token = cancel_token.clone();
-		let reader_cancel = reader_cancel.clone();
-		async move {
-			cancel_token.cancelled().await;
-			reader_cancel.cancel();
-		}
+	let result = execution_result_from_exit_code(pty_output.exit_code);
+	let minimized_out = pty_output.output.and_then(|output| {
+		minimize_buffered_output(
+			&options.command,
+			output,
+			pty_output.exit_code,
+			options.minimizer.as_ref(),
+			minimizer_mode,
+		)
 	});
-	let process_cancel_bridge = tokio::spawn({
-		let cancel_token = cancel_token.clone();
-		let baseline_descendants = baseline_descendants.clone();
-		async move {
-			cancel_token.cancelled().await;
-			process::terminate_new_descendants(&baseline_descendants).await;
-		}
+	Ok((result, minimized_out))
+}
+
+fn run_pty_shell_command_sync(
+	config: PtyShellConfig,
+	on_chunk: Option<mpsc::UnboundedSender<String>>,
+	cancel_token: CancellationToken,
+) -> Result<PtyShellOutput> {
+	let pty_system = native_pty_system();
+	let pair = pty_system
+		.openpty(PtySize {
+			rows:         PTY_DEFAULT_ROWS,
+			cols:         PTY_DEFAULT_COLS,
+			pixel_width:  0,
+			pixel_height: 0,
+		})
+		.map_err(|err| Error::msg(format!("Failed to open PTY: {err}")))?;
+
+	let mut cmd = CommandBuilder::new("sh");
+	cmd.arg("-lc");
+	cmd.arg(&config.command);
+	cmd.cwd(config.cwd.as_str());
+	cmd.env_clear();
+	for (key, value) in &config.env {
+		cmd.env(key, value);
+	}
+
+	let mut child = pair
+		.slave
+		.spawn_command(cmd)
+		.map_err(|err| Error::msg(format!("Failed to spawn PTY command: {err}")))?;
+	drop(pair.slave);
+
+	let master = pair.master;
+	let mut reader = master
+		.try_clone_reader()
+		.map_err(|err| Error::msg(format!("Failed to create PTY reader: {err}")))?;
+	let (reader_tx, reader_rx) = std_mpsc::channel::<PtyReaderEvent>();
+	let reader_thread = std::thread::spawn(move || read_pty_output(&mut reader, reader_tx));
+
+	let child_pid = child
+		.process_id()
+		.and_then(|value| i32::try_from(value).ok());
+	#[cfg(unix)]
+	let process_group_id = master.process_group_leader().filter(|pgid| *pgid > 0);
+	#[cfg(not(unix))]
+	let process_group_id: Option<i32> = None;
+
+	let mut capture = config.capture_output.then(|| CaptureState {
+		text:      String::new(),
+		exceeded:  false,
+		max_bytes: config.max_capture_bytes,
 	});
-	let source_info = SourceInfo::from("pi-shell:streams");
-	let result = session
-		.shell
-		.run_string(options.command.clone(), &source_info, &params)
-		.await;
+	let mut reader_done = false;
+	let mut exit_code: Option<i32> = None;
+	let mut terminate_requested = false;
+	let mut reader_drain_deadline = None;
 
-	if cancel_token.is_cancelled() {
-		terminate_background_jobs(&session.shell);
-	}
+	while exit_code.is_none() || !reader_done {
+		if !terminate_requested && cancel_token.is_cancelled() {
+			terminate_pty_processes(&mut child, child_pid, process_group_id);
+			terminate_requested = true;
+			reader_drain_deadline = Some(std::time::Instant::now() + PTY_POST_CANCEL_DRAIN_TIMEOUT);
+		}
 
-	if env_scope_pushed {
-		session
-			.shell
-			.env_mut()
-			.pop_scope(EnvironmentScope::Command)
-			.map_err(|err| Error::msg(format!("Failed to pop env scope: {err}")))?;
-	}
+		drain_pty_reader_events(&reader_rx, on_chunk.as_ref(), &mut capture, &mut reader_done);
 
-	drop(params);
+		if exit_code.is_none()
+			&& let Some(status) = child
+				.try_wait()
+				.map_err(|err| Error::msg(format!("Failed checking PTY status: {err}")))?
+		{
+			exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
+			if !reader_done && reader_drain_deadline.is_none() {
+				reader_drain_deadline = Some(std::time::Instant::now() + PTY_POST_EXIT_DRAIN_TIMEOUT);
+			}
+		}
 
-	const POST_EXIT_IDLE: Duration = Duration::from_millis(250);
-	const POST_EXIT_MAX: Duration = Duration::from_secs(2);
-	const READER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
-
-	let mut stdout_finished = false;
-	let mut stderr_finished = false;
-	let mut idle_timer = Box::pin(time::sleep(POST_EXIT_IDLE));
-	let mut max_timer = Box::pin(time::sleep(POST_EXIT_MAX));
-
-	loop {
-		if stdout_finished && stderr_finished {
+		if let Some(deadline) = reader_drain_deadline
+			&& std::time::Instant::now() >= deadline
+		{
 			break;
 		}
-		tokio::select! {
-			res = &mut stdout_handle, if !stdout_finished => {
-				let _ = res;
-				stdout_finished = true;
+
+		if exit_code.is_none() || !reader_done {
+			let wait_duration = reader_drain_deadline.map_or(PTY_LOOP_INTERVAL, |deadline| {
+				deadline
+					.saturating_duration_since(std::time::Instant::now())
+					.min(PTY_LOOP_INTERVAL)
+			});
+			match reader_rx.recv_timeout(wait_duration) {
+				Ok(event) => {
+					handle_pty_reader_event(event, on_chunk.as_ref(), &mut capture, &mut reader_done)
+				},
+				Err(std_mpsc::RecvTimeoutError::Timeout) => {},
+				Err(std_mpsc::RecvTimeoutError::Disconnected) => reader_done = true,
 			}
-			res = &mut stderr_handle, if !stderr_finished => {
-				let _ = res;
-				stderr_finished = true;
+		}
+	}
+
+	if exit_code.is_none() {
+		if terminate_requested {
+			if let Some(status) = child
+				.try_wait()
+				.map_err(|err| Error::msg(format!("Failed checking PTY status: {err}")))?
+			{
+				exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
 			}
-			msg = activity_rx.recv() => {
-				if msg.is_none() {
+		} else {
+			let status = child
+				.wait()
+				.map_err(|err| Error::msg(format!("Failed waiting PTY process: {err}")))?;
+			exit_code = Some(i32::try_from(status.exit_code()).unwrap_or(i32::MAX));
+		}
+	}
+
+	drop(master);
+	if !reader_done {
+		let finalize_deadline = std::time::Instant::now() + PTY_FINAL_READER_DRAIN_TIMEOUT;
+		while std::time::Instant::now() < finalize_deadline {
+			let wait_duration = finalize_deadline
+				.saturating_duration_since(std::time::Instant::now())
+				.min(Duration::from_millis(5));
+			match reader_rx.recv_timeout(wait_duration) {
+				Ok(event) => {
+					handle_pty_reader_event(event, on_chunk.as_ref(), &mut capture, &mut reader_done)
+				},
+				Err(std_mpsc::RecvTimeoutError::Timeout) => {},
+				Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+					reader_done = true;
 					break;
-				}
-				idle_timer.as_mut().reset(time::Instant::now() + POST_EXIT_IDLE);
+				},
 			}
-			() = &mut idle_timer => break,
-			() = &mut max_timer => break,
 		}
 	}
-
-	if !stdout_finished || !stderr_finished {
-		reader_cancel.cancel();
-	}
-	if !stdout_finished
-		&& time::timeout(READER_SHUTDOWN_TIMEOUT, &mut stdout_handle)
-			.await
-			.is_err()
-	{
-		stdout_handle.abort();
-		let _ = stdout_handle.await;
-	}
-	if !stderr_finished
-		&& time::timeout(READER_SHUTDOWN_TIMEOUT, &mut stderr_handle)
-			.await
-			.is_err()
-	{
-		stderr_handle.abort();
-		let _ = stderr_handle.await;
-	}
-	cancel_bridge.abort();
-	let _ = cancel_bridge.await;
-	if cancel_token.is_cancelled() {
-		// Let the kill-wave bridge finish all three signal passes so stragglers
-		// have a chance to receive SIGKILL.
-		let _ = process_cancel_bridge.await;
-	} else {
-		process_cancel_bridge.abort();
-		let _ = process_cancel_bridge.await;
+	if reader_done {
+		let _ = reader_thread.join();
 	}
 
-	let result = result.map_err(|err| Error::msg(format!("Shell execution failed: {err}")))?;
-	Ok(result)
+	Ok(PtyShellOutput {
+		exit_code: exit_code.unwrap_or(1),
+		output:    capture.map(CaptureState::finish),
+	})
 }
 
-async fn read_output_bytes(
-	reader: fs::File,
-	mut sink: Option<mpsc::UnboundedSender<Bytes>>,
-	cancel_token: CancellationToken,
-	activity: mpsc::Sender<()>,
-) {
-	const BUF: usize = 65536;
+fn exported_env(shell: &BrushShell) -> Vec<(String, String)> {
+	shell
+		.env()
+		.iter_exported()
+		.filter_map(|(key, value)| {
+			value
+				.value()
+				.try_get_cow_str(shell)
+				.map(|value| (key.clone(), value.into_owned()))
+		})
+		.collect()
+}
 
-	#[cfg(unix)]
-	let Ok(reader) = register_nonblocking_pipe(reader) else {
-		return;
+fn execution_result_from_exit_code(exit_code: i32) -> ExecutionResult {
+	let code = u8::try_from(exit_code).unwrap_or(if exit_code < 0 { 1 } else { u8::MAX });
+	ExecutionResult::new(code)
+}
+
+fn minimize_buffered_output(
+	command: &str,
+	output: BufferedOutput,
+	exit_code: i32,
+	config: Option<&minimizer::MinimizerConfig>,
+	minimizer_mode: minimizer::engine::MinimizerMode,
+) -> Option<MinimizerResult> {
+	let config = config.filter(|_| !output.exceeded)?;
+	let minimized = match minimizer_mode {
+		minimizer::engine::MinimizerMode::WholeCommand => {
+			minimizer::apply(command, &output.text, exit_code, config)
+		},
+		minimizer::engine::MinimizerMode::None => {
+			minimizer::MinimizerOutput::passthrough(&output.text)
+		},
 	};
-	#[cfg(not(unix))]
-	let mut reader = tokio::fs::File::from_std(reader);
+	if !minimized.changed {
+		return None;
+	}
+	let original = minimized.original_text?;
+	let output_bytes = u32::try_from(minimized.text.len()).unwrap_or(u32::MAX);
+	Some(MinimizerResult {
+		filter: minimized.filter.to_string(),
+		text: minimized.text,
+		original_text: original,
+		input_bytes: u32::try_from(minimized.input_bytes).unwrap_or(u32::MAX),
+		output_bytes,
+	})
+}
 
-	loop {
-		let mut buf = vec![0u8; BUF];
-		#[cfg(unix)]
-		let n = {
-			let Ok(mut readiness) = (tokio::select! {
-				ready = reader.readable() => ready,
-				() = cancel_token.cancelled() => break,
-			}) else {
+fn terminate_pty_processes(
+	child: &mut Box<dyn Child + Send + Sync>,
+	child_pid: Option<i32>,
+	process_group_id: Option<i32>,
+) {
+	let mut targets = process::TerminationTargets::new();
+	if let Some(pgid) = process_group_id {
+		targets.add_pgid(pgid);
+	}
+	if let Some(pid) = child_pid {
+		targets.add_pid(pid);
+	}
+	targets.signal(process::TERM_SIGNAL);
+	let _ = child.kill();
+	targets.signal(process::KILL_SIGNAL);
+}
+
+fn drain_pty_reader_events(
+	reader_rx: &std_mpsc::Receiver<PtyReaderEvent>,
+	on_chunk: Option<&mpsc::UnboundedSender<String>>,
+	capture: &mut Option<CaptureState>,
+	reader_done: &mut bool,
+) {
+	for _ in 0..PTY_READER_EVENTS_PER_TICK {
+		match reader_rx.try_recv() {
+			Ok(event) => handle_pty_reader_event(event, on_chunk, capture, reader_done),
+			Err(std_mpsc::TryRecvError::Empty) => break,
+			Err(std_mpsc::TryRecvError::Disconnected) => {
+				*reader_done = true;
 				break;
-			};
-			match readiness.try_io(|inner| read_nonblocking(inner.get_ref(), &mut buf)) {
-				Ok(Ok(0)) => break,
-				Ok(Ok(n)) => n,
-				Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
-				Ok(Err(_)) => break,
-				Err(_would_block) => continue,
-			}
-		};
-		#[cfg(not(unix))]
-		let n = {
-			let read_future = reader.read(&mut buf);
-			tokio::pin!(read_future);
-			match tokio::select! {
-				res = &mut read_future => res,
-				() = cancel_token.cancelled() => break,
-			} {
-				Ok(0) => break,
-				Ok(n) => n,
-				Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-				Err(_) => break,
-			}
-		};
-		let _ = activity.try_send(());
-		buf.truncate(n);
-		if let Some(sender) = sink.as_ref()
-			&& sender.send(Bytes::from(buf)).is_err()
-		{
-			sink = None;
+			},
 		}
 	}
 }
 
-fn terminate_background_jobs(shell: &BrushShell) {
+fn handle_pty_reader_event(
+	event: PtyReaderEvent,
+	on_chunk: Option<&mpsc::UnboundedSender<String>>,
+	capture: &mut Option<CaptureState>,
+	reader_done: &mut bool,
+) {
+	match event {
+		PtyReaderEvent::Chunk(chunk) => {
+			if let Some(capture) = capture.as_mut() {
+				capture.push(&chunk);
+			}
+			if let Some(on_chunk) = on_chunk {
+				let _ = on_chunk.send(chunk);
+			}
+		},
+		PtyReaderEvent::Done => *reader_done = true,
+	}
+}
+
+fn read_pty_output(reader: &mut Box<dyn Read + Send>, reader_tx: std_mpsc::Sender<PtyReaderEvent>) {
+	const REPLACEMENT: &str = "\u{FFFD}";
+	const BUF: usize = 65536;
+	let mut buf = vec![0_u8; BUF + 4];
+	let mut it = 0;
+	loop {
+		match reader.read(&mut buf[it..BUF]) {
+			Ok(0) => break,
+			Ok(n) => {
+				it += n;
+				while it > 0 {
+					let pending = &buf[..it];
+					match str::from_utf8(pending) {
+						Ok(text) => {
+							let _ = reader_tx.send(PtyReaderEvent::Chunk(text.to_string()));
+							it = 0;
+							break;
+						},
+						Err(err) => {
+							let valid_up_to = err.valid_up_to();
+							if valid_up_to > 0 {
+								if let Ok(text) = str::from_utf8(&pending[..valid_up_to]) {
+									let _ = reader_tx.send(PtyReaderEvent::Chunk(text.to_string()));
+								}
+								buf.copy_within(valid_up_to..it, 0);
+								it -= valid_up_to;
+							}
+							match err.error_len() {
+								Some(invalid_len) => {
+									let _ = reader_tx.send(PtyReaderEvent::Chunk(REPLACEMENT.to_string()));
+									let drop_len = invalid_len.min(it);
+									buf.copy_within(drop_len..it, 0);
+									it -= drop_len;
+								},
+								None => break,
+							}
+						},
+					}
+				}
+			},
+			Err(_) => break,
+		}
+	}
+	for chunk in buf[..it].utf8_chunks() {
+		let valid = chunk.valid();
+		if !valid.is_empty() {
+			let _ = reader_tx.send(PtyReaderEvent::Chunk(valid.to_string()));
+		}
+		if !chunk.invalid().is_empty() {
+			let _ = reader_tx.send(PtyReaderEvent::Chunk(REPLACEMENT.to_string()));
+		}
+	}
+	let _ = reader_tx.send(PtyReaderEvent::Done);
+}
+
+impl CaptureState {
+	fn push(&mut self, chunk: &str) {
+		if self.exceeded {
+			return;
+		}
+		if self.text.len().saturating_add(chunk.len()) > self.max_bytes {
+			self.exceeded = true;
+			self.text.clear();
+			return;
+		}
+		self.text.push_str(chunk);
+	}
+
+	fn finish(self) -> BufferedOutput {
+		BufferedOutput { text: self.text, exceeded: self.exceeded }
+	}
+}
+
+fn terminate_background_jobs(shell: &BrushShell, baseline_descendants: &HashSet<i32>) {
 	let mut targets = process::TerminationTargets::new();
 	for job in &shell.jobs().jobs {
 		if let Some(pgid) = job.process_group_id() {
@@ -972,73 +1140,18 @@ fn terminate_background_jobs(shell: &BrushShell) {
 		}
 	}
 	if targets.is_empty() {
-		// Pure descendant cleanup is handled by `process_cancel_bridge` while
-		// the cancel was still in flight. Here we only signal brush's own
-		// job-tracked targets \u2014 pgids of background-group leaders that may have
-		// already exited (so the descendant walk would no longer find them as
-		// new descendants, but their group still holds live grandchildren).
+		process::add_new_descendants(&mut targets, baseline_descendants);
+	}
+	if targets.is_empty() {
 		return;
 	}
 
 	targets.signal(process::TERM_SIGNAL);
 	tokio::spawn(async move {
-		time::sleep(Duration::from_millis(150)).await;
+		time::sleep(Duration::from_millis(500)).await;
 		targets.signal(process::KILL_SIGNAL);
 	});
 }
-
-/// Apply per-command environment variables onto a freshly pushed
-/// `Command` scope. Returns `true` when a scope was pushed (so the caller
-/// can pop it after the command runs), `false` when there were no vars and
-/// the existing scopes remain untouched.
-fn apply_command_env(
-	shell: &mut BrushShell,
-	env: Option<&HashMap<String, String>>,
-) -> Result<bool> {
-	let Some(env) = env else {
-		return Ok(false);
-	};
-	shell.env_mut().push_scope(EnvironmentScope::Command);
-	for (key, value) in env {
-		let normalized_key = normalize_env_key(key);
-		if should_skip_env_var(normalized_key) {
-			continue;
-		}
-		let mut var = ShellVariable::new(ShellValue::String(value.clone()));
-		var.export();
-		if let Err(err) = shell
-			.env_mut()
-			.add(normalized_key, var, EnvironmentScope::Command)
-		{
-			let _ = shell.env_mut().pop_scope(EnvironmentScope::Command);
-			return Err(Error::msg(format!("Failed to set env: {err}")));
-		}
-	}
-	Ok(true)
-}
-
-/// Define `env` as a shell variable expanding to the literal `$env` so that
-/// brush-core's POSIX parameter expansion preserves PowerShell-style
-/// `$env:NAME` references when commands are dispatched through brush to a
-/// PowerShell (or any) subprocess. The variable is not exported, so it only
-/// influences brush's own expansion; the child process environment is
-/// unaffected.
-///
-/// User-driven assignments (`env=prod; echo "$env:8080"`) push their own
-/// binding in the command scope and shadow this global default, preserving
-/// the bash POSIX contract for callers that genuinely use a variable named
-/// `env`.
-fn apply_env_fallback(shell: &mut BrushShell) -> Result<()> {
-	if shell.env().get("env").is_some() {
-		return Ok(());
-	}
-	let var = ShellVariable::new(ShellValue::String("$env".to_string()));
-	shell
-		.env_mut()
-		.set_global("env", var)
-		.map_err(|err| Error::msg(format!("Failed to set env fallback: {err}")))
-}
-
 fn should_skip_env_var(key: &str) -> bool {
 	if key.starts_with("BASH_FUNC_") && key.ends_with("%%") {
 		return true;
@@ -1789,97 +1902,5 @@ mod tests {
 			.await
 			.expect("reader task should stop after cancellation")
 			.expect("reader task should not panic");
-	}
-
-	#[cfg(unix)]
-	#[tokio::test(flavor = "multi_thread")]
-	async fn execute_shell_streams_separates_stdout_and_stderr() {
-		let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<Bytes>();
-		let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<Bytes>();
-		let options = ShellExecuteOptions {
-			command: "echo out; echo err 1>&2".to_string(),
-			..Default::default()
-		};
-		let streams = StreamSinks { stdout: Some(stdout_tx), stderr: Some(stderr_tx) };
-		let result = execute_shell_streams(options, streams, CancelToken::default())
-			.await
-			.expect("execute should succeed");
-		assert_eq!(result.exit_code, Some(0));
-		assert!(!result.cancelled);
-
-		let mut stdout = Vec::new();
-		while let Some(chunk) = stdout_rx.recv().await {
-			stdout.extend_from_slice(&chunk);
-		}
-		let mut stderr = Vec::new();
-		while let Some(chunk) = stderr_rx.recv().await {
-			stderr.extend_from_slice(&chunk);
-		}
-		assert_eq!(stdout, b"out\n");
-		assert_eq!(stderr, b"err\n");
-	}
-
-	#[cfg(unix)]
-	#[tokio::test(flavor = "multi_thread")]
-	async fn execute_shell_streams_works_when_sinks_are_none() {
-		// Both sinks `None` — pipes must still drain so the child can exit.
-		let options = ShellExecuteOptions {
-			command: "yes done | head -n 100 1>&2; echo final".to_string(),
-			..Default::default()
-		};
-		let result = execute_shell_streams(options, StreamSinks::default(), CancelToken::default())
-			.await
-			.expect("execute should succeed");
-		assert_eq!(result.exit_code, Some(0));
-	}
-
-	/// Brush expands `$env:NAME` against the `env` shell variable by default,
-	/// collapsing PowerShell references like `Write-Host $env:OMPCODE` to
-	/// `:OMPCODE`. The session-level fallback below defines `env=$env` so the
-	/// expansion is the literal `$env:OMPCODE`, preserving the PowerShell
-	/// token when the command is forwarded to a child shell.
-	#[cfg(unix)]
-	#[tokio::test(flavor = "multi_thread")]
-	async fn powershell_env_reference_survives_brush_expansion() {
-		let (tx, mut rx) = mpsc::unbounded_channel::<Bytes>();
-		let options = ShellExecuteOptions {
-			command: "printf '%s' \"$env:SystemRoot\"".to_string(),
-			..Default::default()
-		};
-		let streams = StreamSinks { stdout: Some(tx), stderr: None };
-		let result = execute_shell_streams(options, streams, CancelToken::default())
-			.await
-			.expect("execute should succeed");
-		assert_eq!(result.exit_code, Some(0));
-
-		let mut stdout = Vec::new();
-		while let Some(chunk) = rx.recv().await {
-			stdout.extend_from_slice(&chunk);
-		}
-		assert_eq!(stdout, b"$env:SystemRoot");
-	}
-
-	/// A user assignment to `env` in the command itself must shadow the
-	/// session-level fallback so callers that genuinely use a POSIX variable
-	/// named `env` see their value, not the literal `$env`.
-	#[cfg(unix)]
-	#[tokio::test(flavor = "multi_thread")]
-	async fn user_env_assignment_shadows_powershell_fallback() {
-		let (tx, mut rx) = mpsc::unbounded_channel::<Bytes>();
-		let options = ShellExecuteOptions {
-			command: "env=prod; printf '%s' \"$env:8080\"".to_string(),
-			..Default::default()
-		};
-		let streams = StreamSinks { stdout: Some(tx), stderr: None };
-		let result = execute_shell_streams(options, streams, CancelToken::default())
-			.await
-			.expect("execute should succeed");
-		assert_eq!(result.exit_code, Some(0));
-
-		let mut stdout = Vec::new();
-		while let Some(chunk) = rx.recv().await {
-			stdout.extend_from_slice(&chunk);
-		}
-		assert_eq!(stdout, b"prod:8080");
 	}
 }
