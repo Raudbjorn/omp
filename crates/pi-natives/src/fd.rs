@@ -99,9 +99,9 @@ fn score_fuzzy_path(
 	}
 
 	// Match against the full relative path only when the user typed a path-style
-	// query (contains '/'). Plain queries should match by basename only, otherwise
-	// '@plan' surfaces every file whose ancestor directories contain 'plan'.
-	let query_has_slash = query_lower.contains('/');
+	// query. Plain queries should match by basename only, otherwise '@plan'
+	// surfaces every file whose ancestor directories contain 'plan'.
+	let query_has_slash = query_lower.contains('/') || query_lower.contains('\\');
 
 	let file_name = Path::new(path)
 		.file_name()
@@ -125,7 +125,8 @@ fn score_fuzzy_path(
 		}
 	} else {
 		let lower_path = path.to_lowercase();
-		if lower_path.contains(query_lower) {
+		let path_query = query_lower.replace('\\', "/");
+		if lower_path.contains(&path_query) {
 			60
 		} else {
 			let normalized_file_name = normalize_fuzzy_text(file_name);

@@ -99,6 +99,7 @@ struct CacheKey {
 	include_hidden:    bool,
 	use_gitignore:     bool,
 	skip_node_modules: bool,
+	follow_links:      bool,
 	detail:            ScanDetail,
 }
 
@@ -461,6 +462,7 @@ pub fn get_or_scan(
 		include_hidden:    options.include_hidden,
 		use_gitignore:     options.use_gitignore,
 		skip_node_modules: options.skip_node_modules,
+		follow_links:      options.follow_links,
 		detail:            options.detail,
 	};
 
@@ -499,6 +501,7 @@ pub fn force_rescan(
 		include_hidden:    options.include_hidden,
 		use_gitignore:     options.use_gitignore,
 		skip_node_modules: options.skip_node_modules,
+		follow_links:      options.follow_links,
 		detail:            options.detail,
 	};
 	FS_CACHE.remove(&key);
@@ -573,7 +576,10 @@ pub fn invalidate_fs_scan_cache(path: Option<String>) {
 #[cfg(test)]
 mod tests {
 	#[cfg(unix)]
-	use std::{ffi::CString, os::unix::ffi::OsStrExt};
+	use std::{
+		ffi::CString,
+		os::unix::{ffi::OsStrExt, fs as unix_fs},
+	};
 	use std::{
 		fs,
 		path::{Path, PathBuf},
@@ -712,6 +718,49 @@ mod tests {
 			"expected no node_modules entries, got: {paths:?}"
 		);
 		assert!(paths.iter().any(|p| p == &"real.txt"), "expected real.txt, got: {paths:?}");
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn cache_key_isolates_follow_links() {
+		let root = TempDirGuard::new();
+		fs::create_dir_all(root.path().join("target")).unwrap();
+		fs::write(root.path().join("target/inside.txt"), "ok").unwrap();
+		unix_fs::symlink(root.path().join("target"), root.path().join("link")).unwrap();
+
+		let ct = crate::task::CancelToken::default();
+		let base_options = super::ScanOptions {
+			include_hidden:    true,
+			use_gitignore:     false,
+			skip_node_modules: true,
+			follow_links:      false,
+			detail:            super::ScanDetail::Minimal,
+		};
+
+		let without_links = super::get_or_scan(root.path(), base_options, &ct).unwrap();
+		assert!(
+			!without_links
+				.entries
+				.iter()
+				.any(|entry| entry.path == "link/inside.txt"),
+			"follow_links=false should not traverse symlinked directories"
+		);
+
+		let with_links = super::get_or_scan(
+			root.path(),
+			super::ScanOptions { follow_links: true, ..base_options },
+			&ct,
+		)
+		.unwrap();
+		assert!(
+			with_links
+				.entries
+				.iter()
+				.any(|entry| entry.path == "link/inside.txt"),
+			"follow_links=true scan should not reuse the follow_links=false cache entry"
+		);
+
+		super::invalidate_all();
 	}
 
 	#[test]

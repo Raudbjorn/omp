@@ -460,19 +460,18 @@ mod platform {
 	const PROC_PIDPATHINFO_MAXSIZE: usize = 4096;
 
 	/// Snapshot every pid currently visible to `proc_listallpids`. macOS
-	/// silently truncates the second call to the supplied buffer size even
-	/// when the sizing query reports more bytes available, so the buffer is
-	/// padded well beyond the reported count.
+	/// silently truncates the second call to the supplied buffer size, so the
+	/// buffer is padded beyond the reported PID count to tolerate process churn
+	/// between the sizing query and the read.
 	fn snapshot_all_pids() -> Vec<i32> {
 		// SAFETY: Passing a null buffer with size 0 is the documented libproc query
-		// form for obtaining the byte count needed for all PIDs; libproc does not
+		// form for obtaining the PID count; libproc does not
 		// dereference the null pointer in this mode.
-		let bytes = unsafe { proc_listallpids(ptr::null_mut(), 0) };
-		if bytes <= 0 {
+		let pid_count_hint = unsafe { proc_listallpids(ptr::null_mut(), 0) };
+		if pid_count_hint <= 0 {
 			return Vec::new();
 		}
-		let count = (bytes as usize) / size_of::<i32>();
-		let cap = count.saturating_mul(4).max(2048);
+		let cap = (pid_count_hint as usize).saturating_mul(4).max(2048);
 		let mut buffer = vec![0i32; cap];
 		// SAFETY: `buffer` is valid for `buffer.len() * size_of::<i32>()` bytes and
 		// is properly aligned for `i32`; libproc writes at most the supplied size.
@@ -481,7 +480,7 @@ mod platform {
 		if actual <= 0 {
 			return Vec::new();
 		}
-		let pid_count = ((actual as usize) / size_of::<i32>()).min(buffer.len());
+		let pid_count = (actual as usize).min(buffer.len());
 		buffer.truncate(pid_count);
 		buffer
 	}
@@ -1584,6 +1583,29 @@ pub fn add_new_descendants<S: std::hash::BuildHasher>(
 	}
 	for pid in selection.pids {
 		targets.add_pid(pid);
+	}
+}
+
+pub async fn terminate_new_descendants<S: std::hash::BuildHasher + Sync>(
+	baseline: &HashSet<i32, S>,
+) {
+	const WAVES: u32 = 3;
+	for wave in 0..WAVES {
+		let mut targets = TerminationTargets::new();
+		add_new_descendants(&mut targets, baseline);
+		if targets.is_empty() {
+			return;
+		}
+		let signal = if wave == 0 { TERM_SIGNAL } else { KILL_SIGNAL };
+		targets.signal(signal);
+		if wave + 1 < WAVES {
+			let pause = if wave == 0 {
+				Duration::from_millis(75)
+			} else {
+				Duration::from_millis(150)
+			};
+			tokio::time::sleep(pause).await;
+		}
 	}
 }
 

@@ -649,34 +649,7 @@ async fn run_shell_command(
 		let baseline_descendants = baseline_descendants.clone();
 		async move {
 			cancel_token.cancelled().await;
-			// Rescan-and-signal loop. Each pass picks up grandchildren spawned
-			// during the previous wave's grace period, then exits early as soon
-			// as no descendants remain. The first wave is SIGTERM so well-behaved
-			// programs get a chance to clean up; subsequent waves escalate to
-			// SIGKILL. Cheaper than the previous 20\u202fHz tracker loop and avoids
-			// the constant kernel chatter when no cancellation ever happens.
-			const WAVES: u32 = 3;
-			for wave in 0..WAVES {
-				let mut targets = process::TerminationTargets::new();
-				process::add_new_descendants(&mut targets, &baseline_descendants);
-				if targets.is_empty() {
-					return;
-				}
-				let signal = if wave == 0 {
-					process::TERM_SIGNAL
-				} else {
-					process::KILL_SIGNAL
-				};
-				targets.signal(signal);
-				if wave + 1 < WAVES {
-					let pause = if wave == 0 {
-						Duration::from_millis(75)
-					} else {
-						Duration::from_millis(150)
-					};
-					time::sleep(pause).await;
-				}
-			}
+			process::terminate_new_descendants(&baseline_descendants).await;
 		}
 	});
 	let source_info = SourceInfo::from("pi-natives:command");
@@ -746,8 +719,12 @@ async fn run_shell_command(
 	}
 	cancel_bridge.abort();
 	let _ = cancel_bridge.await;
-	process_cancel_bridge.abort();
-	let _ = process_cancel_bridge.await;
+	if cancel_token.is_cancelled() {
+		let _ = process_cancel_bridge.await;
+	} else {
+		process_cancel_bridge.abort();
+		let _ = process_cancel_bridge.await;
+	}
 
 	let result = result.map_err(|err| Error::msg(format!("Shell execution failed: {err}")))?;
 	let mut minimized_out: Option<MinimizerResult> = None;
@@ -837,28 +814,7 @@ async fn run_shell_command_streams(
 		let baseline_descendants = baseline_descendants.clone();
 		async move {
 			cancel_token.cancelled().await;
-			const WAVES: u32 = 3;
-			for wave in 0..WAVES {
-				let mut targets = process::TerminationTargets::new();
-				process::add_new_descendants(&mut targets, &baseline_descendants);
-				if targets.is_empty() {
-					return;
-				}
-				let signal = if wave == 0 {
-					process::TERM_SIGNAL
-				} else {
-					process::KILL_SIGNAL
-				};
-				targets.signal(signal);
-				if wave + 1 < WAVES {
-					let pause = if wave == 0 {
-						Duration::from_millis(75)
-					} else {
-						Duration::from_millis(150)
-					};
-					time::sleep(pause).await;
-				}
-			}
+			process::terminate_new_descendants(&baseline_descendants).await;
 		}
 	});
 	let source_info = SourceInfo::from("pi-shell:streams");
@@ -950,7 +906,7 @@ async fn run_shell_command_streams(
 
 async fn read_output_bytes(
 	reader: fs::File,
-	sink: Option<mpsc::UnboundedSender<Bytes>>,
+	mut sink: Option<mpsc::UnboundedSender<Bytes>>,
 	cancel_token: CancellationToken,
 	activity: mpsc::Sender<()>,
 ) {
@@ -997,11 +953,10 @@ async fn read_output_bytes(
 		};
 		let _ = activity.try_send(());
 		buf.truncate(n);
-		if let Some(sink) = sink.as_ref()
-			&& sink.send(Bytes::from(buf)).is_err()
+		if let Some(sender) = sink.as_ref()
+			&& sender.send(Bytes::from(buf)).is_err()
 		{
-			// Receiver dropped — stop forwarding and let the pipe close.
-			break;
+			sink = None;
 		}
 	}
 }
