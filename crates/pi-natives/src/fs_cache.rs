@@ -99,6 +99,7 @@ struct CacheKey {
 	include_hidden:    bool,
 	use_gitignore:     bool,
 	skip_node_modules: bool,
+	follow_links:      bool,
 	detail:            ScanDetail,
 }
 
@@ -113,6 +114,7 @@ pub struct ScanOptions {
 	pub include_hidden:    bool,
 	pub use_gitignore:     bool,
 	pub skip_node_modules: bool,
+	pub follow_links:      bool,
 	pub detail:            ScanDetail,
 }
 
@@ -241,16 +243,18 @@ pub fn classify_file_type(path: &Path) -> Option<(FileType, Option<f64>, Option<
 ///
 /// When `skip_node_modules` is true, `node_modules` directories are pruned at
 /// traversal time (not just filtered post-scan). `.git` is always skipped.
+#[allow(clippy::fn_params_excessive_bools, reason = "matches WalkBuilder option fields")]
 pub fn build_walker(
 	root: &Path,
 	include_hidden: bool,
 	use_gitignore: bool,
 	skip_node_modules: bool,
+	follow_links: bool,
 ) -> WalkBuilder {
 	let mut builder = WalkBuilder::new(root);
 	builder
 		.hidden(!include_hidden)
-		.follow_links(false)
+		.follow_links(follow_links)
 		.sort_by_file_path(|a, b| a.cmp(b))
 		// filter_entry controls whether to yield an entry AND whether to descend
 		// into a directory. Returning false for a directory skips the entire subtree.
@@ -362,8 +366,13 @@ fn collect_entries(
 	options: ScanOptions,
 	ct: &task::CancelToken,
 ) -> Result<Vec<GlobMatch>> {
-	let mut builder =
-		build_walker(root, options.include_hidden, options.use_gitignore, options.skip_node_modules);
+	let mut builder = build_walker(
+		root,
+		options.include_hidden,
+		options.use_gitignore,
+		options.skip_node_modules,
+		options.follow_links,
+	);
 	let workers = grep_workers();
 	if workers > 0 {
 		builder.threads(workers);
@@ -453,6 +462,7 @@ pub fn get_or_scan(
 		include_hidden:    options.include_hidden,
 		use_gitignore:     options.use_gitignore,
 		skip_node_modules: options.skip_node_modules,
+		follow_links:      options.follow_links,
 		detail:            options.detail,
 	};
 
@@ -491,6 +501,7 @@ pub fn force_rescan(
 		include_hidden:    options.include_hidden,
 		use_gitignore:     options.use_gitignore,
 		skip_node_modules: options.skip_node_modules,
+		follow_links:      options.follow_links,
 		detail:            options.detail,
 	};
 	FS_CACHE.remove(&key);
@@ -565,7 +576,10 @@ pub fn invalidate_fs_scan_cache(path: Option<String>) {
 #[cfg(test)]
 mod tests {
 	#[cfg(unix)]
-	use std::{ffi::CString, os::unix::ffi::OsStrExt};
+	use std::{
+		ffi::CString,
+		os::unix::{ffi::OsStrExt, fs as unix_fs},
+	};
 	use std::{
 		fs,
 		path::{Path, PathBuf},
@@ -633,7 +647,7 @@ mod tests {
 		fs::write(root.path().join("real.txt"), "ok").unwrap();
 
 		// skip_node_modules: true -> should only see real.txt
-		let walker = super::build_walker(root.path(), true, false, true);
+		let walker = super::build_walker(root.path(), true, false, true, false);
 		let paths: Vec<String> = walker
 			.build()
 			.filter_map(|e| e.ok())
@@ -655,7 +669,7 @@ mod tests {
 		assert!(paths.iter().any(|p| p == "real.txt"), "expected real.txt, got: {paths:?}");
 
 		// skip_node_modules: false -> should see node_modules but not .git
-		let walker = super::build_walker(root.path(), true, false, false);
+		let walker = super::build_walker(root.path(), true, false, false, false);
 		let paths: Vec<String> = walker
 			.build()
 			.filter_map(|e| e.ok())
@@ -692,6 +706,7 @@ mod tests {
 				include_hidden:    true,
 				use_gitignore:     false,
 				skip_node_modules: true,
+				follow_links:      false,
 				detail:            super::ScanDetail::Full,
 			},
 			&ct,
@@ -703,6 +718,49 @@ mod tests {
 			"expected no node_modules entries, got: {paths:?}"
 		);
 		assert!(paths.iter().any(|p| p == &"real.txt"), "expected real.txt, got: {paths:?}");
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn cache_key_isolates_follow_links() {
+		let root = TempDirGuard::new();
+		fs::create_dir_all(root.path().join("target")).unwrap();
+		fs::write(root.path().join("target/inside.txt"), "ok").unwrap();
+		unix_fs::symlink(root.path().join("target"), root.path().join("link")).unwrap();
+
+		let ct = crate::task::CancelToken::default();
+		let base_options = super::ScanOptions {
+			include_hidden:    true,
+			use_gitignore:     false,
+			skip_node_modules: true,
+			follow_links:      false,
+			detail:            super::ScanDetail::Minimal,
+		};
+
+		let without_links = super::get_or_scan(root.path(), base_options, &ct).unwrap();
+		assert!(
+			!without_links
+				.entries
+				.iter()
+				.any(|entry| entry.path == "link/inside.txt"),
+			"follow_links=false should not traverse symlinked directories"
+		);
+
+		let with_links = super::get_or_scan(
+			root.path(),
+			super::ScanOptions { follow_links: true, ..base_options },
+			&ct,
+		)
+		.unwrap();
+		assert!(
+			with_links
+				.entries
+				.iter()
+				.any(|entry| entry.path == "link/inside.txt"),
+			"follow_links=true scan should not reuse the follow_links=false cache entry"
+		);
+
+		super::invalidate_all();
 	}
 
 	#[test]
@@ -718,6 +776,7 @@ mod tests {
 				include_hidden:    true,
 				use_gitignore:     false,
 				skip_node_modules: true,
+				follow_links:      false,
 				detail:            super::ScanDetail::Minimal,
 			},
 			&ct,
@@ -752,6 +811,7 @@ mod tests {
 				include_hidden:    true,
 				use_gitignore:     false,
 				skip_node_modules: true,
+				follow_links:      false,
 				detail:            super::ScanDetail::Full,
 			},
 			false,
@@ -768,6 +828,7 @@ mod tests {
 				include_hidden:    true,
 				use_gitignore:     false,
 				skip_node_modules: false,
+				follow_links:      false,
 				detail:            super::ScanDetail::Full,
 			},
 			false,
@@ -789,6 +850,7 @@ mod tests {
 				include_hidden:    true,
 				use_gitignore:     false,
 				skip_node_modules: true,
+				follow_links:      false,
 				detail:            super::ScanDetail::Minimal,
 			},
 			&ct,
@@ -807,6 +869,7 @@ mod tests {
 				include_hidden:    true,
 				use_gitignore:     false,
 				skip_node_modules: true,
+				follow_links:      false,
 				detail:            super::ScanDetail::Full,
 			},
 			&ct,

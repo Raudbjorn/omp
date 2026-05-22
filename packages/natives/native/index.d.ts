@@ -147,6 +147,26 @@ export declare class Shell {
 }
 
 /**
+ * Version sentinel — exists solely so the JS loader can prove at load time
+ * that the `.node` file on disk is from the same package release as the
+ * `index.js` ESM wrapper invoking it.
+ *
+ * The `js_name` is bumped by `scripts/release.ts` to match the new
+ * `Cargo.toml` / `package.json` version on every release. The JS loader
+ * computes the expected name from `package.json#version` and refuses to use
+ * a `.node` that doesn't expose it, turning the silent
+ * `<sym> is not a function` crash from a locked-file update (the canonical
+ * Windows `bun install -g` failure mode) into a clear load-time error.
+ *
+ * Bump policy: `__piNativesV{major}_{minor}_{patch}` — non-alphanumerics in
+ * the version string are mapped to `_` to keep it a valid JS identifier.
+ * MUST stay in sync with `VERSION_SENTINEL_EXPORT` in
+ * `packages/natives/native/index.js` (which derives the name from
+ * `package.json#version`).
+ */
+export declare function __piNativesV14_9_3(): void
+
+/**
  * Apply ast-grep rewrite rules to matching files; honors `dryRun` and returns
  * a promise.
  */
@@ -1152,8 +1172,6 @@ export interface ShellExecuteOptions {
   env?: Record<string, string>
   /** Environment variables to apply once per session. */
   sessionEnv?: Record<string, string>
-  /** Run the command attached to a PTY. */
-  pty?: boolean
   /** Timeout in milliseconds before cancelling the command. */
   timeoutMs?: number
   /** Optional snapshot file to source on session creation. */
@@ -1182,8 +1200,6 @@ export interface ShellRunOptions {
   cwd?: string
   /** Environment variables to apply for this command only. */
   env?: Record<string, string>
-  /** Run the command attached to a PTY. */
-  pty?: boolean
   /** Timeout in milliseconds before cancelling the command. */
   timeoutMs?: number
   /** Abort signal for cancelling the operation. */

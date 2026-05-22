@@ -237,14 +237,12 @@ fn run_pty_sync(
 		cmd.arg("-NoLogo");
 		cmd.arg("-NoProfile");
 		cmd.arg("-Command");
-		cmd.arg(&config.command);
 	} else if shell_lower.contains("cmd") {
 		cmd.arg("/c");
-		cmd.arg(&config.command);
 	} else {
 		cmd.arg("-lc");
-		cmd.arg(&config.command);
 	}
+	cmd.arg(&config.command);
 	if let Some(cwd) = config.cwd.as_ref() {
 		cmd.cwd(cwd);
 	}
