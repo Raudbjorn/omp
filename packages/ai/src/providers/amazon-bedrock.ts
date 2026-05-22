@@ -17,6 +17,7 @@ import {
 	type SystemContentBlock,
 	type ToolChoice,
 	type ToolConfiguration,
+	type ToolInputSchema,
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
 import { type DefaultProviderInit, defaultProvider } from "@aws-sdk/credential-provider-node";
@@ -46,6 +47,7 @@ import { normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
 import { parseStreamingJson } from "../utils/json-parse";
+import { toolWireSchema } from "../utils/schema";
 import { transformMessages } from "./transform-messages";
 
 export interface BedrockOptions extends StreamOptions {
@@ -668,7 +670,7 @@ function convertToolConfig(
 		toolSpec: {
 			name: tool.name,
 			description: tool.description || "",
-			inputSchema: { json: tool.parameters },
+			inputSchema: { json: toolWireSchema(tool) } as ToolInputSchema,
 		},
 	}));
 

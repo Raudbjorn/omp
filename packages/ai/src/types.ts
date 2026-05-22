@@ -1,4 +1,5 @@
-import type { TSchema } from "@sinclair/typebox";
+import type { TSchema as TypeBoxSchema, Static as TypeBoxStatic } from "@sinclair/typebox";
+import type { ZodType, z } from "zod/v4";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { AzureOpenAIResponsesOptions } from "./providers/azure-openai-responses";
@@ -22,7 +23,6 @@ import type {
 } from "./providers/cursor/gen/agent_pb";
 import type { DevinOptions } from "./providers/devin";
 import type { GoogleOptions } from "./providers/google";
-import type { AcpAgentOptions } from "./providers/acp";
 import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
 import type { GoogleVertexOptions } from "./providers/google-vertex";
 import type { OllamaChatOptions } from "./providers/ollama";
@@ -517,6 +517,10 @@ export interface CursorExecHandlers {
 	mcp?: (call: CursorMcpCall) => Promise<CursorExecHandlerResult<McpResult>>;
 	onToolResult?: CursorToolResultHandler;
 }
+
+export type TJsonSchema = TypeBoxSchema | Record<string, unknown>;
+export type TSchema = ZodType | TJsonSchema;
+export type Static<S> = S extends ZodType ? z.infer<S> : S extends TypeBoxSchema ? TypeBoxStatic<S> : unknown;
 
 export interface Tool<TParameters extends TSchema = TSchema> {
 	name: string;

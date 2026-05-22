@@ -24,7 +24,7 @@ import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus
 import { refreshAntigravityToken } from "../utils/oauth/google-antigravity";
 import { refreshGoogleCloudToken } from "../utils/oauth/google-gemini-cli";
 import { extractHttpStatusFromError } from "../utils/retry";
-import { sanitizeSchemaForCCA } from "../utils/schema";
+import { normalizeSchemaForCCA } from "../utils/schema";
 import {
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
 	extractRetryDelay,
@@ -854,7 +854,7 @@ function normalizeAntigravityTools(
 			const { parametersJsonSchema, ...rest } = declaration;
 			return {
 				...rest,
-				parameters: sanitizeSchemaForCCA(parametersJsonSchema),
+				parameters: normalizeSchemaForCCA(parametersJsonSchema),
 			};
 		}),
 	}));

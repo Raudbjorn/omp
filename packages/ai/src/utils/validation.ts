@@ -1,7 +1,38 @@
+/**
+ * Tool-call argument validation pipeline.
+ *
+ * Tools may declare their parameters as either Zod schemas (canonical) or
+ * plain JSON Schema (legacy / extensions). This module is the single
+ * entrypoint the agent calls before dispatching a tool — it:
+ *
+ *   1. Builds (or fetches from cache) a `ValidationContext` for the tool —
+ *      the Zod schema if available plus the equivalent wire JSON Schema, or
+ *      just the JSON Schema for non-Zod tools.
+ *   2. Normalizes LLM quirks (null / "null" → omit-or-default substitution)
+ *      against the JSON Schema before validation.
+ *   3. Validates with the Zod or JSON-Schema validator.
+ *   4. On failure, walks the resulting issues and coerces JSON-stringified
+ *      values (`"[1,2]"` → `[1,2]`), drops unrecognized keys, and retries up
+ *      to `MAX_COERCION_PASSES` times.
+ *   5. Throws a formatted error if reconciliation fails; otherwise returns
+ *      the parsed arguments with original unknown root fields preserved (so
+ *      hallucinated top-level keys still surface to the caller).
+ *
+ * The goal is to be conservative: every coercion is a structural rewrite that
+ * keeps the schema in charge of acceptance — we never invent values, only
+ * massage shapes the LLM almost got right.
+ */
 import { structuredCloneJSON } from "@oh-my-pi/pi-utils";
-import Ajv from "ajv";
-import addFormats from "ajv-formats";
+import type { ZodType } from "zod/v4";
+import type { $ZodIssue as ZodIssue } from "zod/v4/core";
 import type { Tool, ToolCall } from "../types";
+import { upgradeJsonSchemaTo202012 } from "./schema/draft";
+import {
+	isJsonSchemaValueValid,
+	type JsonSchemaValidationIssue,
+	validateJsonSchemaValue,
+} from "./schema/json-schema-validator";
+import { isZodSchema, zodToWireSchema } from "./schema/wire";
 
 // ============================================================================
 // Type Coercion Utilities
@@ -12,10 +43,11 @@ import type { Tool, ToolCall } from "../types";
 // example, an array parameter might arrive as `"[1, 2, 3]"` instead of `[1, 2, 3]`.
 //
 // Rather than rejecting these outright, we attempt automatic coercion:
-//   1. AJV validates the arguments and reports type errors
+//   1. Validate against the tool's schema (Zod, derived from TypeBox when the
+//      tool was authored with TypeBox).
 //   2. For each type error where the actual value is a string, we check if
-//      parsing it as JSON yields a value matching the expected type
-//   3. If so, we replace the string with the parsed value and re-validate
+//      parsing it as JSON yields a value matching the expected type.
+//   3. If so, we replace the string with the parsed value and re-validate.
 //
 // This is intentionally conservative: we only parse strings that look like
 // valid JSON literals (objects, arrays, booleans, null, numbers) and only
@@ -27,19 +59,6 @@ const JSON_NUMBER_PATTERN = /^[+-]?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 
 /** Regex matching numeric strings (allows leading zeros) */
 const NUMERIC_STRING_PATTERN = /^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
-
-/**
- * Normalizes AJV's `params.type` into a consistent string array.
- * AJV may report the expected type as a single string or an array of strings
- * (for union types like `["string", "null"]`).
- */
-function normalizeExpectedTypes(typeParam: unknown): string[] {
-	if (typeof typeParam === "string") return [typeParam];
-	if (Array.isArray(typeParam)) {
-		return typeParam.filter((entry): entry is string => typeof entry === "string");
-	}
-	return [];
-}
 
 /**
  * Checks if a value matches any of the expected JSON Schema types.
@@ -198,6 +217,7 @@ function cleanLiteralEscapes(value: string): string {
 	}
 	return result;
 }
+
 /**
  * Escape raw control characters (0x00–0x1F) that appear *inside* JSON string
  * literals. LLMs sometimes emit literal newlines/tabs/etc. inside string
@@ -347,9 +367,9 @@ function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: 
 	try {
 		const parsed = JSON.parse(trimmed) as unknown;
 		// If the string was "null", we parsed it to actual null.
-		// Accept this even if null isn't in expectedTypes - the LLM meant "no value".
+		// Accept this even if null isn't in expectedTypes — the LLM meant "no value".
 		// normalizeOptionalNullsForSchema will strip it from optional fields, and
-		// AJV will correctly error on required fields.
+		// the validator will correctly error on required fields.
 		if (parsed === null && trimmed === "null") {
 			return { value: null, changed: true };
 		}
@@ -391,9 +411,17 @@ function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: 
 // JSON Pointer Utilities (RFC 6901)
 // ============================================================================
 //
-// AJV reports error locations using JSON Pointer syntax (e.g., `/foo/0/bar`).
-// These utilities allow reading and writing values at those paths.
+// Internally we still address error locations using JSON Pointer syntax
+// (e.g., `/foo/0/bar`).  These utilities let coercion read and write values at
+// those paths regardless of whether the original error came from Zod or
+// from JSON-Schema-shaped normalization.
 // ============================================================================
+
+/** Encode a structured Zod issue path as a JSON Pointer. */
+function pathToPointer(path: ReadonlyArray<PropertyKey>): string {
+	if (path.length === 0) return "";
+	return `/${path.map(seg => String(seg).replace(/~/g, "~0").replace(/\//g, "~1")).join("/")}`;
+}
 
 /**
  * Decodes a JSON Pointer string into path segments.
@@ -469,7 +497,69 @@ function setValueAtPointer(root: unknown, pointer: string, value: unknown): unkn
 	return root;
 }
 
-function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { value: unknown; changed: boolean } {
+/**
+ * Returns a new structure with the key at `pointer` removed. Only the
+ * containers along the path are shallow-cloned (`O(depth)` allocations);
+ * every sibling subtree is shared with the input. Returns the input
+ * reference unchanged when the pointer is empty, the path is invalid, or
+ * the final key is absent — so callers can detect a no-op via identity.
+ */
+function deleteValueAtPointer(root: unknown, pointer: string): unknown {
+	if (!pointer) return root;
+	const segments = decodeJsonPointer(pointer);
+	if (segments.length === 0) return root;
+	return deleteAtSegment(root, segments, 0);
+}
+
+function deleteAtSegment(node: unknown, segments: string[], depth: number): unknown {
+	const segment = segments[depth];
+	const isLeaf = depth === segments.length - 1;
+
+	if (Array.isArray(node)) {
+		const index = Number(segment);
+		if (!Number.isInteger(index) || index < 0 || index >= node.length) return node;
+		if (isLeaf) {
+			const next = node.slice();
+			next.splice(index, 1);
+			return next;
+		}
+		const child = deleteAtSegment(node[index], segments, depth + 1);
+		if (child === node[index]) return node;
+		const next = node.slice();
+		next[index] = child;
+		return next;
+	}
+
+	if (typeof node !== "object" || node === null) return node;
+	const obj = node as Record<string, unknown>;
+	if (!Object.hasOwn(obj, segment)) return node;
+	if (isLeaf) {
+		const { [segment]: _omit, ...rest } = obj;
+		return rest;
+	}
+	const child = deleteAtSegment(obj[segment], segments, depth + 1);
+	if (child === obj[segment]) return node;
+	return { ...obj, [segment]: child };
+}
+
+// ============================================================================
+// JSON-Schema-driven normalization passes (LLM quirks).
+// ============================================================================
+
+/**
+ * Test a JSON-Schema branch during nullable normalization. Kept deliberately
+ * small and synchronous so validation does not need to compile legacy schemas
+ * into another schema language.
+ */
+function branchMatchesSchema(branch: unknown, value: unknown): boolean {
+	return isJsonSchemaValueValid(branch, value);
+}
+
+function normalizeOptionalNullsForSchema(
+	schema: unknown,
+	value: unknown,
+	isRoot = true,
+): { value: unknown; changed: boolean } {
 	if (value === null || value === undefined) return { value, changed: false };
 	if (schema === null || typeof schema !== "object") return { value, changed: false };
 
@@ -482,16 +572,11 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 		let changedCandidate: { value: unknown; changed: true } | null = null;
 
 		for (const branch of branches) {
-			const normalized = normalizeOptionalNullsForSchema(branch, value);
+			const normalized = normalizeOptionalNullsForSchema(branch, value, isRoot);
 			if (!normalized.changed) continue;
 
-			try {
-				const validateBranch = ajv.compile(branch);
-				if (validateBranch(normalized.value)) {
-					return normalized;
-				}
-			} catch {
-				// Ignore branch-level compilation/validation errors and keep scanning.
+			if (branchMatchesSchema(branch, normalized.value)) {
+				return normalized;
 			}
 
 			if (!changedCandidate) {
@@ -512,7 +597,7 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 		let changed = false;
 		let nextValue: unknown = value;
 		for (const branch of schemaObject.allOf) {
-			const normalized = normalizeOptionalNullsForSchema(branch, nextValue);
+			const normalized = normalizeOptionalNullsForSchema(branch, nextValue, isRoot);
 			if (!normalized.changed) continue;
 			nextValue = normalized.value;
 			changed = true;
@@ -529,7 +614,7 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 		let changed = false;
 		let nextValue = value;
 		for (let i = 0; i < value.length; i += 1) {
-			const normalized = normalizeOptionalNullsForSchema(itemSchema, value[i]);
+			const normalized = normalizeOptionalNullsForSchema(itemSchema, value[i], false);
 			if (!normalized.changed) continue;
 			if (!changed) {
 				nextValue = [...value];
@@ -542,8 +627,7 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 
 	// Coerce string → number/integer when the schema branch declares those types.
 	// This fixes anyOf:[{type:"number"},{type:"null"}] (i.e. Optional<number>) where
-	// AJV reports an "anyOf" error rather than a "type" error, bypassing
-	// coerceArgsFromErrors which only handles keyword:"type" errors.
+	// the validator reports an "anyOf" error rather than a "type" error.
 	if ((schemaObject.type === "number" || schemaObject.type === "integer") && typeof value === "string") {
 		return tryParseNumberString(value, [schemaObject.type as string]);
 	}
@@ -564,10 +648,11 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 	for (const [key, propertySchema] of Object.entries(properties)) {
 		if (!(key in nextValue)) continue;
 		const currentValue = nextValue[key];
+		const isNullish = currentValue === null || currentValue === "null";
 
 		// Strip null and the string "null" from optional fields.
 		// The LLM sometimes outputs string "null" to mean "no value".
-		if ((currentValue === null || currentValue === "null") && !required.has(key)) {
+		if (isNullish && !required.has(key)) {
 			if (!changed) {
 				nextValue = { ...nextValue };
 				changed = true;
@@ -575,7 +660,24 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 			delete nextValue[key];
 			continue;
 		}
-		const normalized = normalizeOptionalNullsForSchema(propertySchema, currentValue);
+
+		// Substitute the schema-supplied default when a required field arrives
+		// as null/"null". LLMs commonly emit null for "I have nothing to say
+		// here"; if the schema documents a default, honor it instead of
+		// rejecting the whole call. The default is cloned so mutations on the
+		// validated value never bleed back into the schema.
+		if (isNullish && propertySchema && typeof propertySchema === "object") {
+			const propertyObject = propertySchema as Record<string, unknown>;
+			if ("default" in propertyObject) {
+				if (!changed) {
+					nextValue = { ...nextValue };
+					changed = true;
+				}
+				nextValue[key] = structuredCloneJSON(propertyObject.default);
+				continue;
+			}
+		}
+		const normalized = normalizeOptionalNullsForSchema(propertySchema, currentValue, false);
 		if (!normalized.changed) continue;
 
 		if (!changed) {
@@ -591,7 +693,13 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 	// these the same as null on known optional fields is a safer fallback. Keys
 	// with non-null unknown values are left intact so genuine schema mistakes
 	// still surface as validation errors.
-	if (schemaObject.additionalProperties === false) {
+	//
+	// At the ROOT level we deliberately keep unknown null-valued keys intact:
+	// Zod-emitted wire schemas always set `additionalProperties: false`, but the
+	// post-validation `preserveUnknownRootFields` pass re-attaches root extras
+	// so callers can observe (and reject) hallucinated fields. Stripping here
+	// would erase the field before that snapshot, hiding the rejection signal.
+	if (!isRoot && schemaObject.additionalProperties === false) {
 		const knownKeys = new Set(Object.keys(properties));
 		for (const key of Object.keys(nextValue)) {
 			if (knownKeys.has(key)) continue;
@@ -608,83 +716,235 @@ function normalizeOptionalNullsForSchema(schema: unknown, value: unknown): { val
 	return { value: changed ? nextValue : value, changed };
 }
 
+// ============================================================================
+// Zod issue → coercion bridge
+// ============================================================================
+
+interface FlatIssue {
+	keyword: "type" | "unrecognized" | "other";
+	instancePath: string;
+	expectedTypes: string[];
+}
+
 /**
- * Attempts to fix type errors by parsing JSON-encoded strings.
+ * Translate the Zod expected-type marker into the JSON-Schema type name our
+ * coercion helpers already understand.
+ */
+function mapZodExpectedToJsonSchemaType(expected: unknown): string | null {
+	if (typeof expected !== "string") return null;
+	switch (expected) {
+		case "string":
+		case "number":
+		case "boolean":
+		case "array":
+		case "object":
+		case "null":
+			return expected;
+		case "record":
+			return "object";
+		case "int":
+		case "bigint":
+			return "integer";
+		case "nan":
+			return "number";
+		default:
+			return null;
+	}
+}
+
+/**
+ * Flatten Zod issues into a list of (path, expected-types) records suitable
+ * for the coercion pass. Recurses through `invalid_union` so each inner
+ * candidate produces independent coercion attempts.
+ */
+function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
+	const out: FlatIssue[] = [];
+	const walk = (issue: ZodIssue, prefix: ReadonlyArray<PropertyKey>): void => {
+		const fullPath = prefix.length === 0 ? issue.path : [...prefix, ...issue.path];
+		if (issue.code === "invalid_type") {
+			const mapped = mapZodExpectedToJsonSchemaType((issue as { expected?: unknown }).expected);
+			if (mapped) {
+				out.push({ keyword: "type", instancePath: pathToPointer(fullPath), expectedTypes: [mapped] });
+				return;
+			}
+		}
+		if (issue.code === "unrecognized_keys") {
+			const keys = (issue as { keys?: ReadonlyArray<string> }).keys ?? [];
+			for (const key of keys) {
+				out.push({
+					keyword: "unrecognized",
+					instancePath: pathToPointer([...fullPath, key]),
+					expectedTypes: [],
+				});
+			}
+			return;
+		}
+		if (issue.code === "invalid_union") {
+			const inner = (issue as unknown as { errors?: ReadonlyArray<ReadonlyArray<ZodIssue>> }).errors;
+			if (inner) {
+				for (const branch of inner) {
+					for (const child of branch) {
+						walk(child, fullPath);
+					}
+				}
+			}
+			return;
+		}
+		out.push({ keyword: "other", instancePath: pathToPointer(fullPath), expectedTypes: [] });
+	};
+	for (const issue of issues) walk(issue, []);
+	return out;
+}
+
+/**
+ * Repair issues raised by the validator before we surface them to the caller.
  *
- * When AJV reports type errors, this function checks if the offending values
- * are strings that contain valid JSON matching the expected type. If so, it
- * returns a new args object with those strings replaced by their parsed values.
+ * Two kinds of repair are applied:
+ *  - **type**: when a value is a JSON-encoded string and the schema wants
+ *    something else, parse it and substitute the parsed value.
+ *  - **unrecognized**: when a strict object received an extra key (Zod's
+ *    `unrecognized_keys` or JSON Schema's `additionalProperties: false`),
+ *    drop that key so re-validation succeeds. This effectively coerces every
+ *    object schema to loose semantics recursively without rebuilding the
+ *    underlying Zod tree.
  *
- * The function is designed to be safe and conservative:
- *   - Only processes "type" errors (not format, pattern, etc.)
- *   - Only attempts coercion on string values
+ * The function is safe and conservative:
+ *   - Only processes "type" and "unrecognized" issues
+ *   - Only attempts JSON coercion on string values
  *   - Only accepts parsed results that match the expected type
  *   - Clones the args object before mutation (copy-on-write)
  */
-function coerceArgsFromErrors(
-	args: unknown,
-	errors: Array<{ keyword?: string; instancePath?: string; params?: { type?: unknown } }> | null | undefined,
-): { value: unknown; changed: boolean } {
-	if (!errors || errors.length === 0) return { value: args, changed: false };
+function coerceArgsFromIssues(args: unknown, issues: FlatIssue[]): { value: unknown; changed: boolean } {
+	if (issues.length === 0) return { value: args, changed: false };
 
 	let changed = false;
+	// Tracks whether `nextArgs` is a fully owned deep copy (safe to mutate
+	// leaves). The unrecognized-key path uses path-shallow immutable updates
+	// and does NOT require ownership, so we only pay for the deep clone when
+	// a type coercion actually needs to write into a leaf.
+	let owned = false;
 	let nextArgs: unknown = args;
 
-	for (const error of errors) {
-		// Only handle type mismatch errors
-		if (error.keyword !== "type") continue;
+	for (const issue of issues) {
+		if (issue.keyword === "unrecognized") {
+			const previous = nextArgs;
+			nextArgs = deleteValueAtPointer(nextArgs, issue.instancePath);
+			if (nextArgs !== previous) changed = true;
+			continue;
+		}
+		if (issue.keyword !== "type") continue;
+		if (issue.expectedTypes.length === 0) continue;
 
-		const instancePath = error.instancePath ?? "";
-		const expectedTypes = normalizeExpectedTypes(error.params?.type);
-		if (expectedTypes.length === 0) continue;
-
-		// Get the current value at the error location
-		const currentValue = getValueAtPointer(nextArgs, instancePath);
+		const currentValue = getValueAtPointer(nextArgs, issue.instancePath);
 		if (typeof currentValue !== "string") continue;
 
-		// Try to parse the string as JSON
-		const result = tryParseJsonForTypes(currentValue, expectedTypes);
+		const result = tryParseJsonForTypes(currentValue, issue.expectedTypes);
 		if (!result.changed) continue;
 
-		// Clone on first modification (copy-on-write)
-		if (!changed) {
+		if (!owned) {
 			nextArgs = structuredCloneJSON(nextArgs);
+			owned = true;
 			changed = true;
 		}
-		nextArgs = setValueAtPointer(nextArgs, instancePath, result.value);
+		nextArgs = setValueAtPointer(nextArgs, issue.instancePath, result.value);
 	}
 
 	return { value: changed ? nextArgs : args, changed };
 }
 
-// Create a singleton AJV instance with formats (only if not in browser extension)
-// AJV requires 'unsafe-eval' CSP which is not allowed in Manifest V3
-//
-// Silent logger: MCP servers may declare non-standard format keywords (e.g. "uint")
-// which cause Ajv to emit console.warn() with strict:false — corrupting TUI output.
-const ajv = new Ajv({
-	allErrors: true,
-	strict: false,
-	logger: false,
-});
-addFormats(ajv);
+// ============================================================================
+// Public API
+// ============================================================================
 
-// Cache compiled validators by schema object identity to avoid
-// re-compiling the same tool schema on every call.
-const compiledSchemaCache = new WeakMap<object, import("ajv").ValidateFunction>();
-function compileSchema(schema: object): import("ajv").ValidateFunction {
-	let validate = compiledSchemaCache.get(schema);
-	if (!validate) {
-		validate = ajv.compile(schema);
-		compiledSchemaCache.set(schema, validate);
-	}
-	return validate;
-}
-
-const MAX_TYPE_COERCION_PASSES = 5;
+type ValidationContext =
+	| {
+			kind: "zod";
+			zod: ZodType;
+			json: Record<string, unknown>;
+	  }
+	| {
+			kind: "json";
+			json: Record<string, unknown>;
+	  };
 
 /**
- * Finds a tool by name and validates the tool call arguments against its TypeBox schema
+ * Cache the validation context derived from a tool's parameters schema.
+ * Keyed by the parameters object identity, which is stable across tool
+ * registrations.
+ */
+const kValidationContext = Symbol("ai.validationContext");
+type ParamsWithValidationContext = object & { [kValidationContext]?: ValidationContext };
+function getValidationContext(tool: Tool): ValidationContext {
+	const params = tool.parameters as ParamsWithValidationContext;
+	const existing = params[kValidationContext];
+	if (existing) return existing;
+	const ctx: ValidationContext = isZodSchema(params)
+		? { kind: "zod", zod: params, json: zodToWireSchema(params) }
+		: { kind: "json", json: upgradeJsonSchemaTo202012(params) as Record<string, unknown> };
+	params[kValidationContext] = ctx;
+	return ctx;
+}
+
+type ContextValidationResult =
+	| { success: true; value: unknown }
+	| { success: false; flatIssues: FlatIssue[]; messages: string[] };
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function preserveUnknownRootFields(input: unknown, parsed: unknown): unknown {
+	if (!isPlainRecord(input) || !isPlainRecord(parsed)) return parsed;
+	return { ...input, ...parsed };
+}
+
+function flattenJsonSchemaIssues(issues: ReadonlyArray<JsonSchemaValidationIssue>): FlatIssue[] {
+	return issues.map(issue => {
+		if (issue.keyword === "additionalProperties") {
+			return {
+				keyword: "unrecognized",
+				instancePath: pathToPointer(issue.path),
+				expectedTypes: [],
+			};
+		}
+		return {
+			keyword: issue.keyword === "type" ? "type" : "other",
+			instancePath: pathToPointer(issue.path),
+			expectedTypes: issue.expectedTypes ?? [],
+		};
+	});
+}
+
+function formatIssuePath(path: ReadonlyArray<PropertyKey>): string {
+	return path.length === 0 ? "root" : path.map(seg => String(seg)).join("/");
+}
+
+function validateContext(ctx: ValidationContext, value: unknown): ContextValidationResult {
+	if (ctx.kind === "zod") {
+		const result = ctx.zod.safeParse(value);
+		if (result.success) {
+			return { success: true, value: preserveUnknownRootFields(value, result.data) };
+		}
+		return {
+			success: false,
+			flatIssues: flattenIssues(result.error.issues),
+			messages: result.error.issues.map(issue => `  - ${formatIssuePath(issue.path)}: ${issue.message}`),
+		};
+	}
+
+	const result = validateJsonSchemaValue(ctx.json, value);
+	if (result.success) return { success: true, value };
+	return {
+		success: false,
+		flatIssues: flattenJsonSchemaIssues(result.issues),
+		messages: result.issues.map(issue => `  - ${formatIssuePath(issue.path)}: ${issue.message}`),
+	};
+}
+
+const MAX_COERCION_PASSES = 5;
+
+/**
+ * Finds a tool by name and validates the tool call arguments against its schema.
  * @param tools Array of tool definitions
  * @param toolCall The tool call from the LLM
  * @returns The validated arguments
@@ -699,59 +959,50 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): ToolCall["a
 }
 
 /**
- * Validates tool call arguments against the tool's TypeBox schema
- * @param tool The tool definition with TypeBox schema
- * @param toolCall The tool call from the LLM
- * @returns The validated arguments
- * @throws Error with formatted message if validation fails
+ * Validates tool call arguments against the tool's schema (Zod or plain JSON
+ * Schema). Applies LLM-quirk coercions (numeric strings, JSON-string
+ * containers, null-for-optional, null-for-default) before declaring failure.
+ *
+ * @throws Error with a formatted message when validation cannot be reconciled.
  */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall["arguments"] {
 	const originalArgs = toolCall.arguments;
+	const ctx = getValidationContext(tool);
+	const { json } = ctx;
 
-	const validate = compileSchema(tool.parameters);
-
-	// Always normalize first - strip null and string "null" from optional fields.
-	// This handles LLM outputting string "null" to mean "no value" even when
-	// validation would pass (e.g., optional string field where "null" is a valid string).
+	// Always normalize first — strip null and string "null" from optional
+	// fields and substitute defaults. Handles LLM outputting string "null"
+	// to mean "no value" even when validation would otherwise pass.
 	let normalizedArgs: unknown = originalArgs;
 	let changed = false;
-
-	const initialNormalization = normalizeOptionalNullsForSchema(tool.parameters, normalizedArgs);
+	const initialNormalization = normalizeOptionalNullsForSchema(json, normalizedArgs);
 	if (initialNormalization.changed) {
 		normalizedArgs = initialNormalization.value;
 		changed = true;
 	}
 
-	// Validate after normalization
-	if (validate(normalizedArgs)) {
-		return normalizedArgs as ToolCall["arguments"];
-	}
+	let result = validateContext(ctx, normalizedArgs);
+	if (result.success) return result.value as ToolCall["arguments"];
 
-	for (let pass = 0; pass < MAX_TYPE_COERCION_PASSES; pass += 1) {
-		const coercion = coerceArgsFromErrors(normalizedArgs, validate.errors);
+	for (let pass = 0; pass < MAX_COERCION_PASSES; pass += 1) {
+		const coercion = coerceArgsFromIssues(normalizedArgs, result.flatIssues);
 		if (!coercion.changed) break;
 
 		normalizedArgs = coercion.value;
 		changed = true;
 
-		const nullNormalization = normalizeOptionalNullsForSchema(tool.parameters, normalizedArgs);
+		const nullNormalization = normalizeOptionalNullsForSchema(json, normalizedArgs);
 		if (nullNormalization.changed) {
 			normalizedArgs = nullNormalization.value;
 		}
 
-		if (validate(normalizedArgs)) {
-			return normalizedArgs as ToolCall["arguments"];
-		}
+		result = validateContext(ctx, normalizedArgs);
+		if (result.success) return result.value as ToolCall["arguments"];
 	}
 
-	// Format validation errors nicely
-	const errors =
-		validate.errors
-			?.map((err: any) => {
-				const path = err.instancePath ? err.instancePath.substring(1) : err.params.missingProperty || "root";
-				return `  - ${path}: ${err.message}`;
-			})
-			.join("\n") || "Unknown validation error";
+	// Format validation errors nicely. The header phrase is asserted by
+	// existing tests; the detailed body is informational.
+	const errors = result.messages.join("\n") || "Unknown validation error";
 
 	const receivedArgs = changed
 		? {

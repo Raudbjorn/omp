@@ -1,6 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import { enforceStrictSchema, sanitizeSchemaForStrictMode, tryEnforceStrictSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { Type } from "@sinclair/typebox";
+import type { Tool, ToolCall } from "@oh-my-pi/pi-ai/types";
+import {
+	enforceStrictSchema,
+	isJsonSchemaValueValid,
+	isValidJsonSchema,
+	sanitizeSchemaForStrictMode,
+	tryEnforceStrictSchema,
+	zodToWireSchema,
+} from "@oh-my-pi/pi-ai/utils/schema";
+import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
+import * as z from "zod/v4";
 
 describe("sanitizeSchemaForStrictMode", () => {
 	it("infers object type, strips non-structural keywords, and converts const to enum", () => {
@@ -214,7 +223,7 @@ describe("sanitizeSchemaForStrictMode", () => {
 		expect(retries.description).toBe("retry count (default: 3)");
 	});
 
-	it("inlines defaults through the type-array (nullable) branch", () => {
+	it("hoists shared description to the wrapper when expanding a nullable type-array", () => {
 		const schema = {
 			type: ["number", "null"],
 			description: "timeout",
@@ -224,21 +233,206 @@ describe("sanitizeSchemaForStrictMode", () => {
 		const sanitized = sanitizeSchemaForStrictMode(schema);
 		const variants = sanitized.anyOf as Array<Record<string, unknown>>;
 		const numberVariant = variants.find(v => v.type === "number");
+		const nullVariant = variants.find(v => v.type === "null");
 
-		expect(numberVariant).toBeDefined();
-		expect((numberVariant as Record<string, unknown>).default).toBeUndefined();
-		expect((numberVariant as Record<string, unknown>).description).toBe("timeout (default: 60)");
+		// Description with the inlined `(default: …)` suffix lives on the
+		// wrapper, not duplicated onto each variant — matches the optional-
+		// property wrap shape produced by `enforceStrictSchema`.
+		expect(sanitized.description).toBe("timeout (default: 60)");
+		expect(numberVariant).toEqual({ type: "number" });
+		expect(nullVariant).toEqual({ type: "null" });
+	});
+	// Mirrors: openai-python/tests/lib/test_pydantic.py::test_nested_inline_ref_expansion
+	// SDK behavior: a `$ref` with sibling keys (e.g. description) must be unraveled —
+	// resolve the ref, merge its contents, then let the sibling keys override the def's.
+	it("unravels `$ref` with sibling keys by inlining the resolved def (siblings win)", () => {
+		const schema = {
+			type: "object",
+			$defs: {
+				Star: {
+					type: "object",
+					properties: { name: { type: "string", description: "The name of the star." } },
+					required: ["name"],
+				},
+			},
+			properties: {
+				largest_star: {
+					$ref: "#/$defs/Star",
+					description: "The largest star in the galaxy.",
+				},
+			},
+			required: ["largest_star"],
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		const props = sanitized.properties as Record<string, Record<string, unknown>>;
+		const largest = props.largest_star;
+
+		// $ref dropped; def contents inlined.
+		expect(largest.$ref).toBeUndefined();
+		expect(largest.type).toBe("object");
+		// Sibling description wins over any description in the def.
+		expect(largest.description).toBe("The largest star in the galaxy.");
+		// Nested properties from the def are present.
+		const nested = largest.properties as Record<string, Record<string, unknown>>;
+		expect(nested.name.type).toBe("string");
+	});
+
+	// SDK: a bare `$ref` (no sibling keys) is preserved as-is; only siblings trigger unravel.
+	// Cite: openai-python/src/openai/lib/_pydantic.py:96-110 (`has_more_than_n_keys`)
+	it("preserves bare `$ref` with no sibling keys", () => {
+		const schema = {
+			type: "object",
+			$defs: { Foo: { type: "string" } },
+			properties: { foo: { $ref: "#/$defs/Foo" } },
+			required: ["foo"],
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		const props = sanitized.properties as Record<string, Record<string, unknown>>;
+		expect(props.foo).toEqual({ $ref: "#/$defs/Foo" });
+	});
+
+	// SDK: when a `$ref` cannot be resolved (external / unknown segment), leave it alone
+	// rather than dropping data. Our sanitizer falls back to passing it through.
+	it("leaves unresolvable `$ref` siblings intact", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				foo: { $ref: "#/$defs/Missing", description: "x" },
+			},
+			required: ["foo"],
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		const props = sanitized.properties as Record<string, Record<string, unknown>>;
+		expect(props.foo.$ref).toBe("#/$defs/Missing");
+		expect(props.foo.description).toBe("x");
+	});
+
+	// Mirrors: openai-python SDK rule — `allOf` with exactly one entry is inlined
+	// and `allOf` is removed; with multiple entries `allOf` is recursed instead.
+	// Cite: openai-python/src/openai/lib/_pydantic.py:79-83
+	it("inlines single-element `allOf` and drops the keyword", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				wrapped: {
+					allOf: [{ type: "string", description: "from allOf" }],
+				},
+			},
+			required: ["wrapped"],
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		const props = sanitized.properties as Record<string, Record<string, unknown>>;
+		expect(props.wrapped.allOf).toBeUndefined();
+		expect(props.wrapped.type).toBe("string");
+		expect(props.wrapped.description).toBe("from allOf");
+	});
+
+	// Cite: openai-python/src/openai/lib/_pydantic.py:79-83 — `json_schema.update(ensured)`
+	// means the inlined entry's keys WIN over original sibling keys.
+	it("inlines single-element `allOf` with the inlined entry winning over siblings", () => {
+		const schema = {
+			type: "string",
+			description: "outer",
+			allOf: [{ description: "inner" }],
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		expect(sanitized.allOf).toBeUndefined();
+		expect(sanitized.description).toBe("inner");
+	});
+
+	// SDK does NOT inline `allOf` with more than one entry — it recurses each branch.
+	// Cite: openai-python/src/openai/lib/_pydantic.py:84-88
+	it("does not collapse `allOf` when it has multiple entries", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				combo: {
+					allOf: [
+						{ type: "object", properties: { a: { type: "string" } }, required: ["a"] },
+						{ type: "object", properties: { b: { type: "number" } }, required: ["b"] },
+					],
+				},
+			},
+			required: ["combo"],
+		} as Record<string, unknown>;
+
+		const sanitized = sanitizeSchemaForStrictMode(schema);
+		const props = sanitized.properties as Record<string, Record<string, unknown>>;
+		const combo = props.combo as Record<string, unknown>;
+		expect(Array.isArray(combo.allOf)).toBe(true);
+		expect((combo.allOf as unknown[]).length).toBe(2);
+	});
+
+	// Mirrors: openai-python/tests/lib/test_pydantic.py::test_nested_inline_ref_expansion
+	// End-to-end via tryEnforceStrictSchema: a tree mixing nested objects and a $ref-with-sibling
+	// description gets `additionalProperties: false` on every object node and every
+	// property forced into `required` — matching the SDK's strict snapshot.
+	it("end-to-end: nested objects all get additionalProperties:false + full required (SDK parity)", () => {
+		const schema = {
+			type: "object",
+			$defs: {
+				Star: {
+					type: "object",
+					properties: { name: { type: "string", description: "The name of the star." } },
+					required: ["name"],
+				},
+			},
+			properties: {
+				name: { type: "string", description: "The name of the universe." },
+				galaxy: {
+					type: "object",
+					properties: {
+						name: { type: "string", description: "The name of the galaxy." },
+						largest_star: { $ref: "#/$defs/Star", description: "The largest star." },
+					},
+					required: ["name", "largest_star"],
+				},
+			},
+			required: ["name", "galaxy"],
+		} as Record<string, unknown>;
+
+		const { schema: strict, strict: isStrict } = tryEnforceStrictSchema(schema);
+		expect(isStrict).toBe(true);
+		expect(strict.additionalProperties).toBe(false);
+		expect(strict.required).toEqual(["name", "galaxy"]);
+
+		const rootProps = strict.properties as Record<string, Record<string, unknown>>;
+		const galaxy = rootProps.galaxy;
+		expect(galaxy.additionalProperties).toBe(false);
+		expect(galaxy.required).toEqual(["name", "largest_star"]);
+
+		const galaxyProps = galaxy.properties as Record<string, Record<string, unknown>>;
+		const largest = galaxyProps.largest_star;
+		// $ref was unraveled — inlined as a real object node.
+		expect(largest.$ref).toBeUndefined();
+		expect(largest.type).toBe("object");
+		expect(largest.additionalProperties).toBe(false);
+		expect(largest.required).toEqual(["name"]);
+		// Sibling description survived the unravel.
+		expect(largest.description).toBe("The largest star.");
+
+		// The original $def was also enforced strict-mode style.
+		const defs = strict.$defs as Record<string, Record<string, unknown>>;
+		expect(defs.Star.additionalProperties).toBe(false);
+		expect(defs.Star.required).toEqual(["name"]);
 	});
 });
 
 describe("enforceStrictSchema", () => {
 	it("converts optional properties to nullable schemas and requires all object keys", () => {
-		const schema = Type.Object({
-			requiredText: Type.String(),
-			optionalCount: Type.Optional(Type.Number()),
-		});
+		const schema = zodToWireSchema(
+			z.object({
+				requiredText: z.string(),
+				optionalCount: z.number().optional(),
+			}),
+		);
 
-		const strict = enforceStrictSchema(schema as unknown as Record<string, unknown>);
+		const strict = enforceStrictSchema(schema);
 		const properties = strict.properties as Record<string, Record<string, unknown>>;
 
 		expect(strict.required).toEqual(["requiredText", "optionalCount"]);
@@ -248,16 +442,18 @@ describe("enforceStrictSchema", () => {
 	});
 
 	it("never emits undefined as a schema type", () => {
-		const schema = Type.Object({
-			questions: Type.Array(
-				Type.Object({
-					id: Type.String(),
-					recommended: Type.Optional(Type.Number()),
-				}),
-			),
-		});
+		const schema = zodToWireSchema(
+			z.object({
+				questions: z.array(
+					z.object({
+						id: z.string(),
+						recommended: z.number().optional(),
+					}),
+				),
+			}),
+		);
 
-		const strict = enforceStrictSchema(schema as unknown as Record<string, unknown>);
+		const strict = enforceStrictSchema(schema);
 		const serialized = JSON.stringify(strict);
 
 		expect(serialized.includes('"undefined"')).toBe(false);
@@ -452,27 +648,29 @@ describe("tryEnforceStrictSchema", () => {
 	});
 
 	it("keeps shared object schemas strict-compatible after adaptation", () => {
-		const sharedTaskSchema = Type.Object({
-			content: Type.String(),
-			status: Type.Optional(Type.String()),
-			notes: Type.Optional(Type.String()),
+		const sharedTaskSchema = z.object({
+			content: z.string(),
+			status: z.string().optional(),
+			notes: z.string().optional(),
 		});
-		const schema = Type.Object({
-			ops: Type.Array(
-				Type.Union([
-					Type.Object({
-						op: Type.Literal("replace"),
-						tasks: Type.Array(sharedTaskSchema),
-					}),
-					Type.Object({
-						op: Type.Literal("update"),
-						tasks: Type.Optional(Type.Array(sharedTaskSchema)),
-					}),
-				]),
-			),
-		});
+		const schema = zodToWireSchema(
+			z.object({
+				ops: z.array(
+					z.union([
+						z.object({
+							op: z.literal("replace"),
+							tasks: z.array(sharedTaskSchema),
+						}),
+						z.object({
+							op: z.literal("update"),
+							tasks: z.array(sharedTaskSchema).optional(),
+						}),
+					]),
+				),
+			}),
+		);
 
-		const result = tryEnforceStrictSchema(schema as unknown as Record<string, unknown>);
+		const result = tryEnforceStrictSchema(schema);
 		const rootProperties = result.schema.properties as Record<string, Record<string, unknown>>;
 		const opBranches = ((rootProperties.ops.items as Record<string, unknown>).anyOf ?? []) as Array<
 			Record<string, unknown>
@@ -490,5 +688,189 @@ describe("tryEnforceStrictSchema", () => {
 		expect(replaceTasks.required).toEqual(["content", "status", "notes"]);
 		expect(updateTasks.additionalProperties).toBe(false);
 		expect(updateTasks.required).toEqual(["content", "status", "notes"]);
+	});
+
+	it("falls back to non-strict for mixed-primitive enum roots (no representable type)", () => {
+		// `{enum:[1, "two", null]}` cannot be reduced to a single `type` keyword,
+		// so strict mode cannot accept it. Older releases set `strict: true` with
+		// a typeless `{enum:[...]}` schema that OpenAI strict mode would reject
+		// on the wire; the contract is now to fall back to non-strict instead.
+		const result = tryEnforceStrictSchema({ enum: [1, "two", null] });
+		expect(result.strict).toBe(false);
+		expect(result.schema).toEqual({ enum: [1, "two", null] });
+	});
+
+	it("falls back to non-strict for non-primitive const roots", () => {
+		const objectResult = tryEnforceStrictSchema({ const: { a: 1 } });
+		expect(objectResult.strict).toBe(false);
+		expect(objectResult.schema).toEqual({ const: { a: 1 } });
+
+		const arrayResult = tryEnforceStrictSchema({ const: [1, 2, 3] });
+		expect(arrayResult.strict).toBe(false);
+		expect(arrayResult.schema).toEqual({ const: [1, 2, 3] });
+	});
+
+	it("infers a primitive type from enum/const when calling enforceStrictSchema directly", () => {
+		// `enforceStrictSchema` is a public API. Callers that pass a bare
+		// `{enum:[primitives]}` (without first running sanitize) still get a
+		// `type` filled in so the result is wire-valid.
+		const enumResult = enforceStrictSchema({ enum: ["draft", "published"] });
+		expect(enumResult).toEqual({ type: "string", enum: ["draft", "published"] });
+
+		const constResult = enforceStrictSchema({ const: 7 });
+		expect(constResult).toEqual({ type: "number", const: 7 });
+
+		// Mixed-primitive enum still throws — caller must fall back via tryEnforce.
+		expect(() => enforceStrictSchema({ enum: [1, "two"] })).toThrow();
+		// Non-primitive const still throws — caller must fall back via tryEnforce.
+		expect(() => enforceStrictSchema({ const: { a: 1 } })).toThrow();
+	});
+});
+
+describe("json-schema validator unsupported-keyword regressions", () => {
+	it("rejects values with keys that fail the propertyNames schema", () => {
+		const schema = {
+			type: "object",
+			propertyNames: { type: "string", pattern: "^[a-z]+$" },
+		};
+		expect(isJsonSchemaValueValid(schema, { abc: 1 })).toBe(true);
+		expect(isJsonSchemaValueValid(schema, { "BAD-KEY": 1 })).toBe(false);
+	});
+
+	it("rejects patternProperties mismatches", () => {
+		const schema = {
+			type: "object",
+			patternProperties: { "^id_": { type: "number" } },
+		};
+		expect(isJsonSchemaValueValid(schema, { id_a: 1 })).toBe(true);
+		expect(isJsonSchemaValueValid(schema, { id_a: "not-a-number" })).toBe(false);
+	});
+
+	it("rejects values that violate dependentRequired", () => {
+		const schema = {
+			type: "object",
+			dependentRequired: { credit_card: ["billing_address"] },
+		};
+		expect(isJsonSchemaValueValid(schema, { credit_card: "x", billing_address: "y" })).toBe(true);
+		expect(isJsonSchemaValueValid(schema, { credit_card: "x" })).toBe(false);
+	});
+
+	it("applies then when if matches and rejects missing required fields", () => {
+		const schema = {
+			type: "object",
+			properties: { kind: { type: "string" }, extra: { type: "string" } },
+			if: { properties: { kind: { const: "a" } }, required: ["kind"] },
+			// biome-ignore lint/suspicious/noThenProperty: JSON Schema if/then/else keyword
+			then: { required: ["extra"] },
+		};
+		expect(isJsonSchemaValueValid(schema, { kind: "b" })).toBe(true);
+		expect(isJsonSchemaValueValid(schema, { kind: "a", extra: "ok" })).toBe(true);
+		expect(isJsonSchemaValueValid(schema, { kind: "a" })).toBe(false);
+	});
+
+	it("validates contains against array elements", () => {
+		const schema = { type: "array", contains: { type: "number" } };
+		expect(isJsonSchemaValueValid(schema, ["a", 1])).toBe(true);
+		expect(isJsonSchemaValueValid(schema, ["a", "b"])).toBe(false);
+	});
+
+	it("validates prefixItems by index", () => {
+		const schema = { type: "array", prefixItems: [{ type: "string" }, { type: "number" }] };
+		expect(isJsonSchemaValueValid(schema, ["x", 1])).toBe(true);
+		expect(isJsonSchemaValueValid(schema, [1, "x"])).toBe(false);
+		expect(isJsonSchemaValueValid({ type: "array", items: [{ type: "string" }] }, ["x"])).toBe(false);
+	});
+
+	it("recursively validates nested values through self-referential $ref", () => {
+		const schema = {
+			$ref: "#/definitions/Node",
+			definitions: {
+				Node: {
+					type: "object",
+					properties: {
+						name: { type: "string" },
+						child: { $ref: "#/definitions/Node" },
+					},
+					required: ["name"],
+					additionalProperties: false,
+				},
+			},
+		};
+		// Nested shape conforming — should validate.
+		expect(isJsonSchemaValueValid(schema, { name: "root", child: { name: "leaf" } })).toBe(true);
+		// Nested child violates the inner shape: previously short-circuited to true
+		// because the second occurrence of the $ref was treated as a seen ref.
+		expect(isJsonSchemaValueValid(schema, { name: "root", child: { name: 123 } })).toBe(false);
+		expect(isJsonSchemaValueValid(schema, { name: "root", child: { child: { name: "x" } } })).toBe(false);
+	});
+
+	it("fails primitive $ref chains that exceed the recursion cap instead of accepting invalid values", () => {
+		const definitions: Record<string, unknown> = {};
+		for (let i = 0; i < 66; i += 1) {
+			definitions[`A${i}`] = { $ref: `#/definitions/A${i + 1}` };
+		}
+		definitions.A66 = { type: "number" };
+
+		const schema = { $ref: "#/definitions/A0", definitions };
+		expect(isJsonSchemaValueValid(schema, "not-a-number")).toBe(false);
+	});
+});
+
+describe("meta-validator conditional keywords", () => {
+	it("accepts well-formed if/then/else", () => {
+		expect(
+			isValidJsonSchema({
+				type: "object",
+				if: { properties: { kind: { const: "a" } } },
+				// biome-ignore lint/suspicious/noThenProperty: JSON Schema if/then/else keyword
+				then: { required: ["extra"] },
+				else: { required: ["other"] },
+			}),
+		).toBe(true);
+	});
+
+	it("rejects malformed if (must be a schema, not an array)", () => {
+		expect(isValidJsonSchema({ type: "object", if: [] })).toBe(false);
+	});
+
+	it("rejects malformed then", () => {
+		// biome-ignore lint/suspicious/noThenProperty: JSON Schema if/then/else keyword
+		expect(isValidJsonSchema({ type: "object", then: "not-a-schema" })).toBe(false);
+	});
+
+	it("accepts 2020-12 dependent keywords and rejects obsolete tuple/dependency keywords", () => {
+		expect(
+			isValidJsonSchema({
+				type: "object",
+				dependentRequired: { a: ["b"] },
+				dependentSchemas: { c: { type: "object" } },
+			}),
+		).toBe(true);
+		expect(isValidJsonSchema({ type: "object", dependentRequired: { a: [1] } })).toBe(false);
+		expect(isValidJsonSchema({ type: "object", dependentSchemas: { a: 1 } })).toBe(false);
+		expect(isValidJsonSchema({ type: "object", dependencies: { a: ["b"] } })).toBe(false);
+		expect(isValidJsonSchema({ type: "array", items: [{ type: "string" }] })).toBe(false);
+		expect(isValidJsonSchema({ type: "array", additionalItems: false })).toBe(false);
+	});
+});
+
+describe("Zod root extras preserved through normalize", () => {
+	it("retains a null-valued unknown root key after tool-argument validation so downstream rejection still triggers", () => {
+		const tool: Tool = {
+			name: "simple_tool",
+			description: "",
+			parameters: z.object({ assignment: z.string() }),
+		};
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-zod-null-root",
+			name: "simple_tool",
+			arguments: { assignment: "do thing", schema: null },
+		};
+
+		const result = validateToolArguments(tool, toolCall) as Record<string, unknown>;
+		expect(result.assignment).toBe("do thing");
+		expect("schema" in result).toBe(true);
+		expect(result.schema).toBeNull();
 	});
 });
