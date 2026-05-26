@@ -25,6 +25,7 @@ import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
 	formatPathRelativeToCwd,
+	hasGlobPathChars,
 	normalizePathLikeInput,
 	parseFindPattern,
 	partitionExistingPaths,
@@ -116,7 +117,23 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 
 		return untilAborted(signal, async () => {
 			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
-			const normalizedPatterns = paths.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
+			const rawPatterns = paths.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
+			const internalRouter = this.session.internalRouter;
+			const normalizedPatterns: string[] = [];
+			for (const rawPattern of rawPatterns) {
+				if (!internalRouter?.canHandle(rawPattern)) {
+					normalizedPatterns.push(rawPattern);
+					continue;
+				}
+				if (hasGlobPathChars(rawPattern)) {
+					throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPattern}`);
+				}
+				const resource = await internalRouter.resolve(rawPattern);
+				if (!resource.sourcePath) {
+					throw new ToolError(`Cannot find internal URL without a backing file: ${rawPattern}`);
+				}
+				normalizedPatterns.push(resource.sourcePath);
+			}
 			if (normalizedPatterns.some(pattern => pattern.length === 0)) {
 				throw new ToolError("`paths` must contain non-empty globs or paths");
 			}
