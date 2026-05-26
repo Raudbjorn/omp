@@ -17,6 +17,7 @@ import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
 import type { HookUIContext } from "../../extensibility/hooks/types";
+import type { InternalUrlRouter } from "../../internal-urls";
 import type { Theme } from "../../modes/theme/theme";
 import type { ReadonlySessionManager } from "../../session/session-manager";
 import type { TodoItem } from "../../tools/todo-write";
@@ -59,6 +60,8 @@ export interface CustomToolAPI {
 	typebox: typeof TypeBox;
 	/** Injected pi-coding-agent exports */
 	pi: typeof piCodingAgent;
+	/** Internal URL router for resolving artifact://, skill://, agent://, etc. URLs */
+	internalRouter: InternalUrlRouter;
 	/** Push a preview action that can later be resolved with the hidden resolve tool */
 	pushPendingAction(action: CustomToolPendingAction): void;
 }
@@ -196,6 +199,10 @@ export interface CustomTool<TParams extends TSchema = TSchema, TDetails = any> {
 	/** If true, the result component replaces the call component in the TUI rather than
 	 *  rendering below it. Use when renderResult already includes the call header. */
 	mergeCallAndResult?: boolean;
+	/**
+	 * If true, renders without the Box container that normally adds padding and background.
+	 */
+	noBox?: boolean;
 	/**
 	 * Execute the tool.
 	 * @param toolCallId - Unique ID for this tool call
