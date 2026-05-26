@@ -429,6 +429,69 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(originalNestedSchema).toHaveProperty("patternProperties");
 	});
 
+	it("preserves explicit additionalProperties schemas and true for open record fields", async () => {
+		// Mirrors open record-style shapes: Zod's `z.record(z.string(), z.unknown())`
+		// emits `additionalProperties: {}`, typed maps use a schema, and the yield
+		// fallback uses `additionalProperties: true`. Each must remain open after
+		// unsupported key-schema keywords are stripped.
+		const tools: Tool[] = [
+			{
+				name: "resolve",
+				description: "resolve a pending action",
+				parameters: {
+					type: "object",
+					properties: {
+						action: { type: "string" },
+						extra: {
+							type: "object",
+							propertyNames: { type: "string" },
+							additionalProperties: {},
+						},
+						extraTyped: {
+							type: "object",
+							additionalProperties: { type: "string" },
+						},
+						extraLoose: {
+							type: "object",
+							additionalProperties: true,
+						},
+					},
+					required: ["action"],
+				} as unknown as TSchema,
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: ["Stay concise."],
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			tools,
+		})) as {
+			tools?: Array<{
+				input_schema?: {
+					additionalProperties?: boolean;
+					properties?: Record<string, unknown>;
+				};
+			}>;
+		};
+
+		const inputSchema = payload.tools?.[0]?.input_schema;
+		const properties = inputSchema?.properties as Record<string, Record<string, unknown>>;
+		const extra = properties.extra as { additionalProperties?: unknown; propertyNames?: unknown };
+		const extraTyped = properties.extraTyped as { additionalProperties?: unknown };
+		const extraLoose = properties.extraLoose as { additionalProperties?: unknown };
+
+		expect(inputSchema?.additionalProperties).toBe(false);
+		// The unsupported `propertyNames` keyword is still stripped …
+		expect(extra).not.toHaveProperty("propertyNames");
+		// … but the explicit open-map schema survives (normalized to `true` per
+		// JSON Schema 2020-12 §4.3.1 — `{}` and `true` are equivalent).
+		expect(extra.additionalProperties).toBe(true);
+		// A typed value schema is preserved verbatim (and would be recursed into
+		// if it were an object — covered separately).
+		expect(extraTyped.additionalProperties).toEqual({ type: "string" });
+		expect(extraLoose.additionalProperties).toBe(true);
+	});
+
 	it("removes Anthropic-unsupported array item count constraints", async () => {
 		const tools: Tool[] = [
 			{
