@@ -1,8 +1,15 @@
 import { execSync } from "node:child_process";
 import type { ClipboardImage } from "@oh-my-pi/pi-natives";
 import * as native from "@oh-my-pi/pi-natives";
+import { logger } from "@oh-my-pi/pi-utils";
 
-const hasDisplay = process.platform !== "linux" || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+function hasDisplay(): boolean {
+	return process.platform !== "linux" || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+}
+
+function isWsl(): boolean {
+	return process.platform === "linux" && Boolean(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP);
+}
 
 async function readClipboardCommand(command: string[]): Promise<string | null> {
 	try {
@@ -75,11 +82,72 @@ export async function copyToClipboard(text: string): Promise<void> {
 	}
 }
 
+// PowerShell one-liner that emits the clipboard image as base64-encoded PNG on
+// stdout, or nothing when the clipboard does not hold image data. Used as the
+// WSL bridge — arboard cannot read the Windows clipboard through WSLg.
+const POWERSHELL_IMAGE_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$img = [System.Windows.Forms.Clipboard]::GetImage()
+if ($img -ne $null) {
+	$ms = New-Object System.IO.MemoryStream
+	$img.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+	[Console]::Out.Write([Convert]::ToBase64String($ms.ToArray()))
+}
+`;
+
+const POWERSHELL_TIMEOUT_MS = 8000;
+
+/**
+ * Read a clipboard image through the Windows host's PowerShell.
+ *
+ * WSLg exposes a Wayland socket but no native clipboard image transport, so
+ * `arboard` returns `ContentNotAvailable`. PowerShell, reached via WSL interop,
+ * can read the Windows clipboard directly and round-trip the bitmap as PNG.
+ *
+ * Returns null when no image is on the clipboard, the host PowerShell is
+ * missing, or the bridge times out.
+ */
+async function readImageViaPowerShell(): Promise<ClipboardImage | null> {
+	try {
+		const proc = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_IMAGE_SCRIPT], {
+			stdout: "pipe",
+			stderr: "ignore",
+			stdin: "ignore",
+		});
+		const timer = setTimeout(() => proc.kill(), POWERSHELL_TIMEOUT_MS);
+		let stdout = "";
+		try {
+			stdout = await new Response(proc.stdout).text();
+			await proc.exited;
+		} catch (err) {
+			// powershell.exe is a Windows process reached over WSL interop; if it
+			// doesn't reap cleanly, swallow the error so the dispatcher can fall
+			// through to the native bridge instead of throwing.
+			logger.warn("clipboard: powershell read failed", { error: String(err) });
+			return null;
+		} finally {
+			clearTimeout(timer);
+		}
+		if (proc.exitCode !== 0) return null;
+		const b64 = stdout.trim();
+		if (!b64) return null;
+		const bytes = Buffer.from(b64, "base64");
+		if (bytes.byteLength === 0) return null;
+		return { data: new Uint8Array(bytes), mimeType: "image/png" };
+	} catch {
+		return null;
+	}
+}
+
 /**
  * Read an image from the system clipboard.
  *
  * Returns null on Termux (no image clipboard support) or when no display
- * server is available (headless/SSH without forwarding).
+ * server is available (headless/SSH without forwarding). Under WSL the
+ * Windows clipboard is reached through `powershell.exe`, since WSLg's
+ * Wayland clipboard does not carry image payloads through to `arboard`.
  *
  * @returns PNG payload or null when no image is available.
  */
@@ -88,7 +156,15 @@ export async function readImageFromClipboard(): Promise<ClipboardImage | null> {
 		return null;
 	}
 
-	if (!hasDisplay) {
+	if (isWsl()) {
+		const image = await readImageViaPowerShell();
+		if (image) return image;
+		// Fall through: arboard may still succeed on a future WSLg release —
+		// but only when we actually have a display server. Headless WSL has
+		// no display, so arboard would reject anyway.
+	}
+
+	if (!hasDisplay()) {
 		return null;
 	}
 
