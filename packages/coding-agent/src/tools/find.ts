@@ -8,7 +8,6 @@ import { isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
 import findDescription from "../prompts/tools/find.md" with { type: "text" };
 import { type TruncationResult, truncateHead } from "../session/streaming-output";
@@ -119,10 +118,10 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 		return untilAborted(signal, async () => {
 			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
 			const rawPatterns = paths.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
-			const internalRouter = InternalUrlRouter.instance();
+			const internalRouter = this.session.internalRouter;
 			const normalizedPatterns: string[] = [];
 			for (const rawPattern of rawPatterns) {
-				if (!internalRouter.canHandle(rawPattern)) {
+				if (!internalRouter?.canHandle(rawPattern)) {
 					normalizedPatterns.push(rawPattern);
 					continue;
 				}
