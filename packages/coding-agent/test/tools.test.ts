@@ -1241,14 +1241,21 @@ function b() {
 
 		it("should abort and recover for subsequent commands", async () => {
 			const controller = new AbortController();
-			const promise = bashTool.execute("test-call-10-abort", { command: "sleep 5" }, controller.signal);
-			await Bun.sleep(200);
-			controller.abort("test abort");
+			const promise = bashTool.execute(
+				"test-call-10-abort",
+				{ command: "printf 'started\\n'; sleep 60" },
+				controller.signal,
+				update => {
+					if (update.content?.some(content => content.type === "text" && content.text.includes("started"))) {
+						controller.abort("test abort");
+					}
+				},
+			);
 			await expect(promise).rejects.toThrow(/abort|cancel|timed out/i);
 
 			const result = await bashTool.execute("test-call-10-after-abort", { command: "echo ok" });
 			expect(getTextOutput(result)).toContain("ok");
-		});
+		}, 15_000);
 
 		it("should throw error when cwd does not exist", async () => {
 			const nonexistentCwd = "/this/directory/definitely/does/not/exist/12345";
