@@ -91,7 +91,8 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		provider === "opencode-zen" ||
 		provider === "opencode-go" ||
 		baseUrl.includes("opencode.ai");
-	const isOpenCodeProvider = provider === "opencode-go" || provider === "opencode-zen";
+	const isOpenCodeProvider =
+		provider === "opencode-go" || provider === "opencode-zen" || baseUrl.includes("opencode.ai");
 
 	const useMaxTokens =
 		provider === "mistral" ||

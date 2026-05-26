@@ -461,7 +461,9 @@ export const jobToolRenderer = {
 								.map(l => truncateToWidth(replaceTabs(l), LABEL_MAX_WIDTH, Ellipsis.Unicode));
 							if (rawLabelLines.length > maxLabelLines && visibleLabelLines.length > 0) {
 								const last = visibleLabelLines[visibleLabelLines.length - 1]!;
-								visibleLabelLines[visibleLabelLines.length - 1] = `${last} …`;
+								if (!last.endsWith("…")) {
+									visibleLabelLines[visibleLabelLines.length - 1] = `${last} …`;
+								}
 							}
 							const durationText = uiTheme.fg("dim", formatDuration(job.durationMs));
 							const headLabel = uiTheme.fg("toolOutput", visibleLabelLines[0] ?? "");
