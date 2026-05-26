@@ -27,6 +27,7 @@ import {
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd } from "../../tools/path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
+import { ToolError } from "../../tools/tool-errors";
 import {
 	ApplyPatchError,
 	type DiffHunk,
@@ -1721,6 +1722,24 @@ export async function executePatchSingle(
 
 	await assertEditableFile(resolvedPath, path);
 
+	// Capture pre-edit content so we can verify the write actually hit disk.
+	// `LspFileSystem.writeFile` delegates to a writethrough callback that, in
+	// some host integrations, has been observed to report success without
+	// persisting bytes — leaving the tool to claim "Updated <path>" while the
+	// file on disk is byte-identical to before. After the write we re-read
+	// the file and assert the bytes match the expected newContent; relying
+	// on stat (mtime/size) is unreliable because filesystems with coarse
+	// timestamp resolution can record an unchanged mtime even when the
+	// content was rewritten, and same-length rewrites leave size unchanged.
+	let preEditContent: Uint8Array | undefined;
+	if (op === "update") {
+		try {
+			preEditContent = await fs.promises.readFile(resolvedPath);
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+		}
+	}
+
 	const input: PatchInput = { path: resolvedPath, op, rename: resolvedRename, diff };
 	const patchFileSystem = new LspFileSystem(writethrough, signal, batchRequest, beginDeferredDiagnosticsForPath);
 	const result = await applyPatch(input, {
@@ -1729,6 +1748,33 @@ export async function executePatchSingle(
 		fuzzyThreshold,
 		allowFuzzy,
 	});
+
+	// Post-write verification: only meaningful for in-place updates where the
+	// patch actually changes content and the file is not being renamed away.
+	if (
+		result.change.type === "update" &&
+		!result.change.newPath &&
+		preEditContent !== undefined &&
+		result.change.oldContent !== undefined &&
+		result.change.newContent !== undefined &&
+		result.change.oldContent !== result.change.newContent
+	) {
+		let postEditContent: Uint8Array | undefined;
+		try {
+			postEditContent = await fs.promises.readFile(resolvedPath);
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+		}
+		const unchanged =
+			postEditContent !== undefined &&
+			postEditContent.length === preEditContent.length &&
+			postEditContent.every((b, i) => b === preEditContent[i]);
+		if (unchanged) {
+			throw new ToolError(`edit appeared successful but file content did not change on disk: ${resolvedPath}`, {
+				path: resolvedPath,
+			});
+		}
+	}
 
 	if (resolvedRename) {
 		invalidateFsScanAfterRename(resolvedPath, resolvedRename);
