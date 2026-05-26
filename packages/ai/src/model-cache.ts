@@ -6,14 +6,19 @@ import { Database } from "bun:sqlite";
 import { getModelDbPath } from "@oh-my-pi/pi-utils";
 import type { Api, Model } from "./types";
 
-const CACHE_SCHEMA_VERSION = 2;
+const CACHE_SCHEMA_VERSION = 3;
 
 interface CacheRow {
 	provider_id: string;
 	version: number;
 	updated_at: number;
 	authoritative: number;
+	static_fingerprint: string;
 	models: string;
+}
+
+interface TableInfoRow {
+	name: string;
 }
 
 interface CacheEntry<TApi extends Api = Api> {
@@ -21,6 +26,13 @@ interface CacheEntry<TApi extends Api = Api> {
 	fresh: boolean;
 	authoritative: boolean;
 	updatedAt: number;
+	/**
+	 * Hash of the static catalog slice that was merged into `models` when this
+	 * row was written. `resolveProviderModels` compares against the current
+	 * static fingerprint and bypasses the static+cache re-merge when they
+	 * match — the cache already incorporates the same static state.
+	 */
+	staticFingerprint: string;
 }
 
 let sharedDb: Database | null = null;
@@ -43,12 +55,23 @@ function getDb(dbPath?: string): Database {
 			version INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL,
 			authoritative INTEGER NOT NULL DEFAULT 0,
+			static_fingerprint TEXT NOT NULL DEFAULT '',
 			models TEXT NOT NULL
 		)
 	`);
+	migrateCacheSchema(db);
+
 	sharedDb = db;
 	sharedDbPath = resolvedPath;
 	return db;
+}
+
+function migrateCacheSchema(db: Database): void {
+	const columns = db.prepare("PRAGMA table_info(model_cache)").all() as TableInfoRow[];
+	if (!columns.some(column => column.name === "static_fingerprint")) {
+		db.run("ALTER TABLE model_cache ADD COLUMN static_fingerprint TEXT NOT NULL DEFAULT ''");
+	}
+	db.run("UPDATE model_cache SET version = ? WHERE version = 2", [CACHE_SCHEMA_VERSION]);
 }
 
 export function readModelCache<TApi extends Api>(
@@ -71,6 +94,7 @@ export function readModelCache<TApi extends Api>(
 			fresh,
 			authoritative: row.authoritative === 1,
 			updatedAt: row.updated_at,
+			staticFingerprint: row.static_fingerprint ?? "",
 		};
 	} catch {
 		return null;
@@ -82,14 +106,22 @@ export function writeModelCache<TApi extends Api>(
 	updatedAt: number,
 	models: Model<TApi>[],
 	authoritative: boolean,
+	staticFingerprint: string,
 	dbPath?: string,
 ): void {
 	try {
 		const db = getDb(dbPath);
 		db.run(
-			`INSERT OR REPLACE INTO model_cache (provider_id, version, updated_at, authoritative, models)
-			 VALUES (?, ?, ?, ?, ?)`,
-			[providerId, CACHE_SCHEMA_VERSION, updatedAt, authoritative ? 1 : 0, JSON.stringify(models)],
+			`INSERT OR REPLACE INTO model_cache (provider_id, version, updated_at, authoritative, static_fingerprint, models)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			[
+				providerId,
+				CACHE_SCHEMA_VERSION,
+				updatedAt,
+				authoritative ? 1 : 0,
+				staticFingerprint,
+				JSON.stringify(models),
+			],
 		);
 	} catch {
 		// Cache writes are best-effort; failures should not break model resolution.
