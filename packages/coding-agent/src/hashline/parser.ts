@@ -3,7 +3,12 @@ import { describeAnchorExamples, HL_EDIT_SEP, HL_HASH_CAPTURE_RE_RAW } from "./h
 import type { Anchor, HashlineCursor, HashlineEdit } from "./types";
 import { stripTrailingCarriageReturn } from "./utils";
 
-const LID_CAPTURE_RE = new RegExp(`^${HL_HASH_CAPTURE_RE_RAW}$`);
+// Leniently accept anchors copied from read/search output:
+//   - optional leading line-marker decoration (`*`, `>`, `+`, `-`)
+//   - the required `LINE+HASH`
+//   - an optional trailing `|TEXT` body (or anything after the hash) so users
+//     can paste a full `LINE+HASH|TEXT` line verbatim.
+const LID_CAPTURE_RE = new RegExp(`^\\s*[>+\\-*]*\\s*${HL_HASH_CAPTURE_RE_RAW}(?:\\|.*)?\\s*$`);
 
 function parseLid(raw: string, lineNum: number): Anchor {
 	const match = LID_CAPTURE_RE.exec(raw);
