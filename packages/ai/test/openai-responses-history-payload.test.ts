@@ -307,7 +307,7 @@ describe("OpenAI responses history payload", () => {
 		expect(payload.prompt_cache_key).toBe("session-abc");
 	});
 
-	it("falls back to system instructions for OpenAI-compatible endpoints without developer-role support", async () => {
+	it("uses canonical instructions field for endpoints without developer-role support", async () => {
 		const model = {
 			...(getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">),
 			baseUrl: "https://proxy.example.com/v1",
@@ -315,10 +315,10 @@ describe("OpenAI responses history payload", () => {
 		const payload = (await captureResponsesPayload(model, {
 			systemPrompt: ["stable instructions", "second instructions"],
 			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
-		})) as { input?: unknown[] };
+		})) as { input?: unknown[]; instructions?: string };
 
+		expect(payload.instructions).toBe("stable instructions");
 		expect(payload.input).toEqual([
-			{ role: "system", content: "stable instructions" },
 			{ role: "system", content: "second instructions" },
 			{ role: "user", content: [{ type: "input_text", text: "hi" }] },
 		]);
