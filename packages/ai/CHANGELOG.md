@@ -85,6 +85,10 @@
 - Fixed streaming authentication retry to trigger when a provider emits a 401 `error` event after a `start` event but before any replay-unsafe content is emitted
 - Added `credential_process` support to the Bedrock provider's AWS credential resolver so profiles delegating to external brokers (`aws-vault`, `granted`, in-house tools) resolve instead of falling through to `Unable to resolve AWS credentials`. Parses the AWS SDK `Version: 1` JSON envelope, honors `Expiration` in the per-profile cache, propagates `AbortSignal` to the spawned helper, routes Windows `.cmd`/`.bat` helpers through `cmd.exe /c`, and ships a POSIX-shell-style tokenizer that preserves backslashes inside double quotes so Windows paths survive ([#1142](https://github.com/can1357/oh-my-pi/issues/1142))
 
+### Fixed
+
+- Added `credential_process` support to the Bedrock provider's AWS credential resolver so profiles delegating to external brokers (`aws-vault`, `granted`, in-house tools) resolve instead of falling through to `Unable to resolve AWS credentials`. Parses the AWS SDK `Version: 1` JSON envelope, honors `Expiration` in the per-profile cache, propagates `AbortSignal` to the spawned helper, routes Windows `.cmd`/`.bat` helpers through `cmd.exe /c`, and ships a POSIX-shell-style tokenizer that preserves backslashes inside double quotes so Windows paths survive ([#1142](https://github.com/can1357/oh-my-pi/issues/1142))
+
 ## [15.1.3] - 2026-05-17
 ### Breaking Changes
 
