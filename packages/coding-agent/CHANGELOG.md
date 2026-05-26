@@ -4,9 +4,16 @@
 ### Fixed
 
 - Fixed bash tool calls with `pty: true` hanging indefinitely on Windows by falling back to the non-PTY executor instead of entering the ConPTY-backed interactive path. ([#1103](https://github.com/can1357/oh-my-pi/issues/1103))
+### Added
+
+- Added new `Approve and compact context` choice to the ExitPlanMode approval selector. Sits between `Approve and execute` (purge session) and `Approve and keep context` (full transcript) — runs `/compact` on the plan-mode transcript with a planning-specific summarization hint, then dispatches the plan-approved execution turn so it lands on a fresh cache anchor with the summarized rationale carried over. Cancelling the compaction (Esc or any other abort source) defers the execution dispatch and surfaces a warning so the operator can resubmit manually; non-abort failures proceed best-effort.
+- Added new `Approve and compact context` choice to the ExitPlanMode approval selector (entry above). Companion API additions — `CompactionCancelledError` and `CompactionOutcome` (`"ok" | "cancelled" | "failed"`) — will land alongside the underlying compaction-runtime port; this changelog stub anchors the sync slot so the production surfaces follow without a separate `## [Unreleased]` reshuffle.
+
+## [14.9.9] - 2026-05-12
 
 ### Added
 
+- Fixed an ESM circular-import TDZ that crashed test suites when modules from the `task/` and `tools/` graphs were evaluated together (e.g. `executor-warnings.test.ts` + `task-simple-mode.test.ts`) by deferring `BUILTIN_TOOLS.task`'s `TaskTool.create` dereference to factory-call time and sourcing `truncateTail` from `session/streaming-output` instead of the `tools/` barrel
 - Fixed subagents launched in the same parallel batch not seeing each other in their initial `# IRC Peers` system-prompt block by pre-registering the agent in the global `AgentRegistry` before `rebuildSystemPrompt` runs and attaching the live session afterwards
 
 ## [14.9.3] - 2026-05-10
