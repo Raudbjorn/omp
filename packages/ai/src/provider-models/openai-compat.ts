@@ -1394,10 +1394,7 @@ export function xiaomiModelManagerOptions(
 		: "https://api.xiaomimimo.com/anthropic";
 	// Token-plan keys always use the TP baseUrl; config?.baseUrl (from catalog)
 	// would incorrectly pin to the standard endpoint (api.xiaomimimo.com).
-	const baseUrl = normalizeAnthropicBaseUrl(
-		apiKey?.startsWith("tp-") ? undefined : config?.baseUrl,
-		defaultBaseUrl,
-	);
+	const baseUrl = normalizeAnthropicBaseUrl(apiKey?.startsWith("tp-") ? undefined : config?.baseUrl, defaultBaseUrl);
 	// Xiaomi hosts chat completions under /anthropic/* but exposes model
 	// discovery at the OpenAI-style /v1/models endpoint on the root host.
 	const discoveryRoot = baseUrl.endsWith("/anthropic") ? baseUrl.slice(0, -"/anthropic".length) : baseUrl;
