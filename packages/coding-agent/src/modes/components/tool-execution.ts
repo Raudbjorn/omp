@@ -155,7 +155,7 @@ export class ToolExecutionComponent extends Container {
 		this.#cwd = cwd;
 		this.#args = cloneToolArgs(args);
 
-		const noBox = !!tool?.noBox;
+		const noBox = Boolean((tool as { noBox?: boolean })?.noBox);
 		if (!noBox) {
 			this.addChild(new Spacer(1));
 		}
