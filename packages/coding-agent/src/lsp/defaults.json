@@ -5,7 +5,13 @@
 		"fileTypes": [".rs"],
 		"rootMarkers": ["Cargo.toml", "rust-analyzer.toml"],
 		"initOptions": {},
-		"settings": {},
+		"settings": {
+			"rust-analyzer": {
+				"check": {
+					"onSave": false
+				}
+			}
+		},
 		"capabilities": {
 			"flycheck": true,
 			"ssr": true,
