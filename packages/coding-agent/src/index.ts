@@ -26,7 +26,7 @@ export * from "./extensibility/extensions";
 export * from "./extensibility/skills";
 // Slash commands
 export { type FileSlashCommand, loadSlashCommands as discoverSlashCommands } from "./extensibility/slash-commands";
-export * from "./hashline";
+// Hashline — migrated to @oh-my-pi/hashline package
 // Internal URL router (shared singleton for custom tools)
 export { InternalUrlRouter } from "./internal-urls";
 export type * from "./lsp";

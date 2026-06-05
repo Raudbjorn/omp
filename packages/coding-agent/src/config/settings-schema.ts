@@ -3707,6 +3707,17 @@ export const SETTINGS_SCHEMA = {
 		default: {} as Record<string, string>,
 	},
 
+	"task.excludeProviders": {
+		type: "array",
+		default: ["openrouter"] as string[],
+		ui: {
+			tab: "tasks",
+			label: "Exclude Providers",
+			description:
+				"Providers to exclude from model resolution. Models from these providers will never be selected automatically.",
+		},
+	},
+
 	"tasks.todoClearDelay": {
 		type: "number",
 		default: 60,

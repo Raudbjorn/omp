@@ -60,6 +60,7 @@ import { xiaomiProvider } from "./xiaomi";
 import { xiaomiTokenPlanAmsProvider } from "./xiaomi-token-plan-ams";
 import { xiaomiTokenPlanCnProvider } from "./xiaomi-token-plan-cn";
 import { xiaomiTokenPlanSgpProvider } from "./xiaomi-token-plan-sgp";
+import { zenmuxProvider } from "./zenmux";
 import { skvaiderProvider } from "./skvaider";
 import { zaiProvider } from "./zai";
 import { zenmuxProvider } from "./zenmux";

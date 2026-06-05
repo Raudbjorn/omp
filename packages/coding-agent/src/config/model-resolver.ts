@@ -267,6 +267,8 @@ export interface ModelMatchPreferences {
 	providerOrder?: readonly string[];
 	/** Providers to deprioritize when no recent usage or provider priority is available. */
 	deprioritizeProviders?: string[];
+	/** Providers to exclude entirely from model resolution. */
+	excludeProviders?: string[];
 }
 
 export type CanonicalModelRegistry = Partial<
@@ -276,12 +278,12 @@ export type ModelLookupRegistry = Pick<ModelRegistry, "getAvailable"> & Partial<
 type CliModelRegistry = Pick<ModelRegistry, "getAll"> & Partial<CanonicalModelRegistry>;
 type InitialModelRegistry = Pick<ModelRegistry, "getAvailable" | "find">;
 type RestorableModelRegistry = Pick<ModelRegistry, "getAvailable" | "find" | "getApiKey">;
-
 interface ModelPreferenceContext {
 	modelUsageRank: Map<string, number>;
 	providerUsageRank: Map<string, number>;
 	providerPriorityRank: Map<string, number>;
 	deprioritizedProviders: Set<string>;
+	excludedProviders: Set<string>;
 	modelOrder: Map<string, number>;
 }
 
@@ -303,13 +305,14 @@ function buildPreferenceContext(
 		}
 	}
 	const providerPriorityRank = buildModelProviderPriorityRank(preferences?.providerOrder);
-	const deprioritizedProviders = new Set(preferences?.deprioritizeProviders ?? []);
+	const deprioritizedProviders = new Set(preferences?.deprioritizeProviders ?? ["openrouter"]);
+	const excludedProviders = new Set(preferences?.excludeProviders ?? []);
 	const modelOrder = new Map<string, number>();
 	for (let i = 0; i < availableModels.length; i += 1) {
 		modelOrder.set(formatModelString(availableModels[i]), i);
 	}
 
-	return { modelUsageRank, providerUsageRank, providerPriorityRank, deprioritizedProviders, modelOrder };
+	return { modelUsageRank, providerUsageRank, providerPriorityRank, deprioritizedProviders, excludedProviders, modelOrder };
 }
 
 export function getModelMatchPreferences(
@@ -318,6 +321,7 @@ export function getModelMatchPreferences(
 	return {
 		usageOrder: settings?.getStorage?.()?.getModelUsageOrder(),
 		providerOrder: settings?.get?.("modelProviderOrder"),
+		excludeProviders: settings?.get?.("task.excludeProviders"),
 	};
 }
 
@@ -330,6 +334,7 @@ function mergeModelMatchPreferences(
 		usageOrder: preferences?.usageOrder ?? settingsPreferences.usageOrder,
 		providerOrder: preferences?.providerOrder ?? settingsPreferences.providerOrder,
 		deprioritizeProviders: preferences?.deprioritizeProviders,
+		excludeProviders: preferences?.excludeProviders ?? settingsPreferences.excludeProviders,
 	};
 }
 
@@ -437,14 +442,20 @@ function matchModel(
 	context: ModelPreferenceContext,
 	options?: { modelRegistry?: CanonicalModelRegistry },
 ): Model<Api> | undefined {
+	// Filter out excluded providers before any matching.
+	const models =
+		context.excludedProviders.size > 0
+			? availableModels.filter(m => !context.excludedProviders.has(m.provider))
+			: availableModels;
+
 	// Explicit provider/model selectors always bypass canonical coalescing.
-	const exactRefMatch = findExactModelReferenceMatch(modelPattern, availableModels);
+	const exactRefMatch = findExactModelReferenceMatch(modelPattern, models);
 	if (exactRefMatch) {
 		return exactRefMatch;
 	}
 
 	// Exact canonical ids coalesce provider variants before bare-id matching.
-	const exactCanonicalMatch = findExactCanonicalModelMatch(modelPattern, availableModels, options?.modelRegistry);
+	const exactCanonicalMatch = findExactCanonicalModelMatch(modelPattern, models, options?.modelRegistry);
 	if (exactCanonicalMatch) {
 		return exactCanonicalMatch;
 	}
@@ -453,7 +464,7 @@ function matchModel(
 	// fuzzy matching so raw IDs that contain slashes (for example OpenRouter model
 	// IDs like "openai/gpt-4o:extended") still resolve as IDs instead of being
 	// misread as a provider-qualified selector.
-	const exactMatches = availableModels.filter(m => m.id.toLowerCase() === modelPattern.toLowerCase());
+	const exactMatches = models.filter(m => m.id.toLowerCase() === modelPattern.toLowerCase());
 	if (exactMatches.length > 0) {
 		return pickPreferredModel(exactMatches, context);
 	}
@@ -476,7 +487,7 @@ function matchModel(
 	if (slashIndex !== -1) {
 		const provider = modelPattern.substring(0, slashIndex);
 		const modelId = modelPattern.substring(slashIndex + 1);
-		const providerModels = availableModels.filter(m => m.provider.toLowerCase() === provider.toLowerCase());
+		const providerModels = models.filter(m => m.provider.toLowerCase() === provider.toLowerCase());
 		if (providerModels.length === 0) {
 			// The prefix is not a known provider in this candidate set, so treat the
 			// slash as part of the raw model ID and continue with generic matching.
@@ -509,7 +520,7 @@ function matchModel(
 	}
 
 	// No exact match - fall back to partial matching
-	const matches = availableModels.filter(
+	const matches = models.filter(
 		m =>
 			m.id.toLowerCase().includes(modelPattern.toLowerCase()) ||
 			m.name?.toLowerCase().includes(modelPattern.toLowerCase()),
