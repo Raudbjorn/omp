@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $env, getAgentDir, isRecord } from "@oh-my-pi/pi-utils";
-import { upbModelManagerOptions } from "../provider-models/openai-compat";
+import { upbModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
 import type { ModelManagerConfig, ProviderDefinition } from "./types";
 
