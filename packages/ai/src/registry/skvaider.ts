@@ -7,7 +7,7 @@
 
 import { skvaiderModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const AUTH_URL = "https://ai.dev.fcio.net/openai/v1";
 const DEFAULT_BASE_URL = "https://ai.dev.fcio.net/openai/v1";
@@ -41,9 +41,6 @@ export async function loginSkvaider(options: OAuthController): Promise<string> {
 export const skvaiderProvider = {
 	id: "skvaider",
 	name: "Skvaider",
-	defaultModel: "qwen3-coder-plus",
-	createModelManagerOptions: (config: ModelManagerConfig) => skvaiderModelManagerOptions(config),
-	catalogDiscovery: { label: "Skvaider", envVars: ["SKVAIDER_API_KEY"] },
 	envKeys: "SKVAIDER_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginSkvaider(cb),
 } as const satisfies ProviderDefinition;

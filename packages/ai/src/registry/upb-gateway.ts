@@ -11,7 +11,7 @@
 
 import { upbGatewayModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const PORTAL_URL = "https://ai-chat.uni-paderborn.de";
 
@@ -52,9 +52,6 @@ export async function loginUPBGateway(options: OAuthController): Promise<string>
 export const upbGatewayProvider = {
 	id: "upb-gateway",
 	name: "UPB AI Gateway",
-	defaultModel: "openai.gpt-4o",
-	createModelManagerOptions: (config: ModelManagerConfig) => upbGatewayModelManagerOptions(config),
-	catalogDiscovery: { label: "UPB AI Gateway (LiteLLM)", envVars: ["UPB_GATEWAY_API_KEY"] },
 	envKeys: "UPB_GATEWAY_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginUPBGateway(cb),
 } as const satisfies ProviderDefinition;

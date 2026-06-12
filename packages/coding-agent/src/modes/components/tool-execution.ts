@@ -280,18 +280,18 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.addChild(new Spacer(1));
 		}
 
-	// Always create both - contentBox for custom tools/bash/tools with renderers, contentText for other built-ins.
-	// paddingY is 1 so background-tinted blocks (custom/extension tools and the
-	// generic fallback) get top/bottom breathing room. TranscriptContainer
-	// strips PLAIN-blank edges, so framed/minimal blocks (no bg set) drop these
-	// lines and keep their tight spacing — only tinted lines survive.
-	if (noBox) {
-		// Render directly — no box padding, no background
-		this.#contentBox = new Box(0, 0);
-	} else {
-		this.#contentBox = new Box(0, 1);
-	}
-	this.#contentText = new Text("", 1, 1);
+		// Always create both - contentBox for custom tools/bash/tools with renderers, contentText for other built-ins.
+		// paddingY is 1 so background-tinted blocks (custom/extension tools and the
+		// generic fallback) get top/bottom breathing room. TranscriptContainer
+		// strips PLAIN-blank edges, so framed/minimal blocks (no bg set) drop these
+		// lines and keep their tight spacing — only tinted lines survive.
+		if (noBox) {
+			// Render directly — no box padding, no background
+			this.#contentBox = new Box(0, 0);
+		} else {
+			this.#contentBox = new Box(0, 1);
+		}
+		this.#contentText = new Text("", 1, 1);
 
 		// Use Box for custom tools or built-in tools that have renderers
 		const hasRenderer = toolName in toolRenderers;
@@ -760,7 +760,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			const tool = this.#tool;
 			const mergeCallAndResult = Boolean((tool as { mergeCallAndResult?: boolean }).mergeCallAndResult);
 			// Custom tools use Box for flexible component rendering
-const inline = Boolean((tool as { inline?: boolean }).inline);
+			const inline = Boolean((tool as { inline?: boolean }).inline);
 			const noBox = Boolean((tool as { noBox?: boolean }).noBox);
 			this.#contentBox.setBgFn(inline || noBox ? undefined : stateBgFn);
 			this.#contentBox.clear();

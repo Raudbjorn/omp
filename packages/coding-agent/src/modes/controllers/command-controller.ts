@@ -3,14 +3,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { CompactionCancelledError, type CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import {
-	type AssistantMessage,
 	getEnvApiKey,
 	getProviderDetails,
 	type ProviderDetails,
-
+	type ToolResultMessage,
 	type UsageLimit,
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
+
 import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatDuration, Snowflake } from "@oh-my-pi/pi-utils";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
@@ -248,7 +248,6 @@ export class CommandController {
 			}
 		}
 	}
-
 
 	async handleSessionCommand(): Promise<void> {
 		const stats = this.ctx.session.getSessionStats();

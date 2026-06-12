@@ -312,7 +312,14 @@ function buildPreferenceContext(
 		modelOrder.set(formatModelString(availableModels[i]), i);
 	}
 
-	return { modelUsageRank, providerUsageRank, providerPriorityRank, deprioritizedProviders, excludedProviders, modelOrder };
+	return {
+		modelUsageRank,
+		providerUsageRank,
+		providerPriorityRank,
+		deprioritizedProviders,
+		excludedProviders,
+		modelOrder,
+	};
 }
 
 export function getModelMatchPreferences(

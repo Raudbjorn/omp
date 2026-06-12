@@ -17,7 +17,7 @@ import * as path from "node:path";
 import { $env, getAgentDir, isRecord } from "@oh-my-pi/pi-utils";
 import { upbModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const DEFAULT_PORTAL_URL = "https://ai-chat.uni-paderborn.de";
 const DEFAULT_API_BASE_URL = `${DEFAULT_PORTAL_URL}/api/v1`;
@@ -118,9 +118,6 @@ export async function loginUPB(options: OAuthController): Promise<string> {
 export const upbProvider = {
 	id: "upb",
 	name: "UPB AI-Chat",
-	defaultModel: "openai.gpt-4o",
-	createModelManagerOptions: (config: ModelManagerConfig) => upbModelManagerOptions(config),
-	catalogDiscovery: { label: "UPB AI-Chat", envVars: ["UPB_API_KEY"] },
 	envKeys: "UPB_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginUPB(cb),
 } as const satisfies ProviderDefinition;
