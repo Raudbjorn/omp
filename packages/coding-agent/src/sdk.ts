@@ -173,7 +173,7 @@ export interface CreateAgentSessionOptions {
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 
 	/** System prompt blocks. Array replaces default, function receives default blocks and returns final blocks. */
-	systemPrompt?: string[] | ((defaultPrompt: string[]) => string[]);
+	systemPrompt?: string | string[] | ((defaultPrompt: string[]) => string | string[]);
 	/** Optional provider-facing session identifier for prompt caches and sticky auth selection.
 	 * Keeps persisted session files isolated while reusing provider-side caches. */
 	providerSessionId?: string;
@@ -1594,11 +1594,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					});
 				}
 			}
-			if (Array.isArray(options.systemPrompt)) {
-				return { systemPrompt: options.systemPrompt };
-			}
+			const customPrompt =
+				typeof options.systemPrompt === "function"
+					? options.systemPrompt(defaultPrompt.systemPrompt)
+					: options.systemPrompt;
 			return {
-				systemPrompt: options.systemPrompt(defaultPrompt.systemPrompt),
+				systemPrompt: typeof customPrompt === "string" ? [customPrompt] : customPrompt,
 			};
 		};
 
