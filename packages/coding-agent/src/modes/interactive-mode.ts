@@ -380,6 +380,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	statusLine: StatusLineComponent;
 
 	isInitialized = false;
+	/** True while this interactive session is rendering off-screen (e.g. a
+	 *  backgrounded/observed session). Multi-block live-chat sync skips repaints
+	 *  in this state to avoid clobbering the foreground transcript. */
+	isBackgrounded = false;
 	isBashMode = false;
 	toolOutputExpanded = false;
 	todoExpanded = false;

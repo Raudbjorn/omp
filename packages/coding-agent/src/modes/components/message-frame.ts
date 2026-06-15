@@ -12,11 +12,13 @@ import type { TextContent } from "@oh-my-pi/pi-ai";
 import type { Box, Component } from "@oh-my-pi/pi-tui";
 import { Markdown, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getMarkdownTheme, type Theme, theme } from "../../modes/theme/theme";
+import { type CustomMessageLike, getCustomMessageLabel } from "./message-labels";
 
 /** Message shape consumed by the shared frame. */
 export interface FramedMessage {
 	customType: string;
 	content: string | (TextContent | { type: string })[];
+	details?: unknown;
 }
 
 /**
@@ -57,7 +59,8 @@ export function renderFramedMessage<M extends FramedMessage>(opts: RebuildFrameO
 
 	opts.box.clear();
 
-	const label = theme.fg("customMessageLabel", theme.bold(`[${opts.message.customType}]`));
+	const labelText = getCustomMessageLabel(opts.message as CustomMessageLike) ?? opts.message.customType;
+	const label = theme.fg("customMessageLabel", theme.bold(`[${labelText}]`));
 	opts.box.addChild(new Text(label, 0, 0));
 	opts.box.addChild(new Spacer(1));
 

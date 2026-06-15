@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ImageContent, Message } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, Message, TextContent } from "@oh-my-pi/pi-ai";
 import { type Component, Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
 import type { AdvisorMessageDetails } from "../../advisor";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
@@ -40,6 +40,8 @@ import {
 	type CustomMessage,
 	isSilentAbort,
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
+	MULTI_BLOCK_COMMAND_MESSAGE_TYPE,
+	MULTI_BLOCK_TEXT_MESSAGE_TYPE,
 	resolveAbortLabel,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
@@ -205,6 +207,27 @@ export class UiHelpers {
 						const component = new SkillMessageComponent(message as CustomMessage<SkillPromptDetails>);
 						component.setExpanded(this.ctx.toolOutputExpanded);
 						this.ctx.chatContainer.addChild(component);
+						break;
+					}
+					if (message.customType === MULTI_BLOCK_TEXT_MESSAGE_TYPE) {
+						// Intermediate authored text in a stacked submission renders as a
+						// normal user bubble to preserve transcript ordering.
+						const textContent =
+							typeof message.content === "string"
+								? message.content
+								: message.content
+										.filter((part): part is TextContent => part.type === "text")
+										.map(part => part.text)
+										.join("\n");
+						const userComponent = new UserMessageComponent(textContent, true);
+						this.ctx.chatContainer.addChild(userComponent);
+						break;
+					}
+					if (message.customType === MULTI_BLOCK_COMMAND_MESSAGE_TYPE) {
+						const renderer = this.ctx.session.extensionRunner?.getMessageRenderer(message.customType);
+						const commandComponent = new CustomMessageComponent(message as CustomMessage<unknown>, renderer);
+						commandComponent.setExpanded(this.ctx.toolOutputExpanded);
+						this.ctx.chatContainer.addChild(commandComponent);
 						break;
 					}
 					if (

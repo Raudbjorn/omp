@@ -3736,6 +3736,17 @@ export class AgentSession {
 		await this.#waitForPostPromptRecovery();
 	}
 
+	/**
+	 * Start a turn from the existing session context without appending a new
+	 * message. Used by multi-block submissions when all user-visible blocks have
+	 * already been persisted (e.g. a trailing builtin/file command produced the
+	 * prompt content) so emitting a duplicate trailing user message is avoided.
+	 */
+	async continueFromContext(): Promise<void> {
+		await this.agent.continue();
+		await this.#waitForPostPromptRecovery();
+	}
+
 	async drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {
 		const manager = this.#asyncJobManager;
 		if (!manager) return false;
@@ -4809,6 +4820,13 @@ export class AgentSession {
 	/** Replace file-based slash commands used for prompt expansion. */
 	setSlashCommands(slashCommands: FileSlashCommand[]): void {
 		this.#slashCommands = [...slashCommands];
+	}
+
+	/** File-based slash commands currently registered for prompt expansion.
+	 *  Consumed by the multi-block submission runner to classify and expand
+	 *  command blocks. */
+	get fileCommands(): readonly FileSlashCommand[] {
+		return this.#slashCommands;
 	}
 
 	/** Custom commands (TypeScript slash commands and MCP prompts) */

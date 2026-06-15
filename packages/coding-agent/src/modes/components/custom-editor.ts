@@ -1,4 +1,12 @@
-import { addKeyAliases, canonicalKeyId, Editor, type KeyId, parseKey, parseKittySequence } from "@oh-my-pi/pi-tui";
+import {
+	addKeyAliases,
+	canonicalKeyId,
+	Editor,
+	type KeyId,
+	parseKey,
+	parseKittySequence,
+	type SubmissionLineIntent,
+} from "@oh-my-pi/pi-tui";
 import type { AppKeybinding } from "../../config/keybindings";
 import { isSettingsInitialized, settings } from "../../config/settings";
 import { imageReferenceHyperlink, PLACEHOLDER_REGEX, renderPlaceholders } from "../image-references";
@@ -327,6 +335,18 @@ export class CustomEditor extends Editor {
 	clearCustomKeyHandlers(): void {
 		this.#customKeyHandlers.clear();
 		this.#rebuildCustomMatchKeys();
+	}
+
+	/**
+	 * Insert clipboard text carrying an explicit submission intent. Execute-intent
+	 * paste (Ctrl+Shift+Alt+V) routes here with `intent: "exec"` so the pasted
+	 * shortcut runs on submit; default terminal paste stays non-executable. This
+	 * base does not track per-line intents at the editor layer, so the text is
+	 * inserted verbatim and the intent is honored by callers that thread
+	 * `EditorSubmitMetadata.lineIntents` into the submit handler directly.
+	 */
+	insertPastedText(text: string, _intent?: SubmissionLineIntent): void {
+		this.insertText(text);
 	}
 
 	#spaceHoldGestureEnabled(): boolean {

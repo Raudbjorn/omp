@@ -355,6 +355,24 @@ export interface EditorTopBorder {
 	width: number;
 }
 
+/** Intent classification for a submitted line. `safe` lines are treated as
+ *  literal user text; `exec` lines are eligible to run as bash/python
+ *  shortcuts (used by execute-intent paste). */
+export type SubmissionLineIntent = "safe" | "exec";
+
+/** Per-line intent annotation, keyed by 0-based line index within the submission. */
+export interface SubmissionLineIntentEntry {
+	line: number;
+	intent: SubmissionLineIntent;
+}
+
+/** Optional metadata threaded through {@link Editor.onSubmit}. Carries the
+ *  per-line execute/safe intents established by paste handlers so downstream
+ *  multi-block splitting can honor authored intent. */
+export interface EditorSubmitMetadata {
+	lineIntents: SubmissionLineIntentEntry[];
+}
+
 interface HistoryEntry {
 	prompt: string;
 }
@@ -450,7 +468,7 @@ export class Editor implements Component, Focusable {
 	// Debounce timer for autocomplete updates
 	#autocompleteTimeout?: NodeJS.Timeout;
 
-	onSubmit?: (text: string) => void | Promise<void>;
+	onSubmit?: (text: string, metadata?: EditorSubmitMetadata) => void | Promise<void>;
 	onAltEnter?: (text: string) => void;
 	onChange?: (text: string) => void;
 	/** Called for a "marker-sized" paste — the point where the editor would otherwise collapse it

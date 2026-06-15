@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { type AutocompleteProvider, matchesKey, type SlashCommand } from "@oh-my-pi/pi-tui";
+import { type AutocompleteProvider, type EditorSubmitMetadata, matchesKey, type SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { isSettingsInitialized, settings } from "../../config/settings";
 import { resolveLocalRoot } from "../../internal-urls";
@@ -13,7 +13,12 @@ import { materializeImageReferenceLinks, shiftImageMarkers } from "../../modes/i
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import type { InteractiveModeContext } from "../../modes/types";
 import manualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
-import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails, USER_INTERRUPT_LABEL } from "../../session/messages";
+import {
+	MULTI_BLOCK_TEXT_MESSAGE_TYPE,
+	SKILL_PROMPT_MESSAGE_TYPE,
+	type SkillPromptDetails,
+	USER_INTERRUPT_LABEL,
+} from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { isTinyTitleLocalModelKey } from "../../tiny/models";
 import { isLowSignalTitleInput } from "../../tiny/text";
@@ -26,6 +31,18 @@ import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { ensureSupportedImageInput, ImageInputTooLargeError, loadImageInput } from "../../utils/image-loading";
 import { resizeImage } from "../../utils/image-resize";
 import { generateSessionTitle, setSessionTerminalTitle } from "../../utils/title-generator";
+import { syncMultiBlockLiveChat } from "./multi-block/live-chat-sync";
+import { runMultiBlockSubmission } from "./multi-block-runner";
+import { executeBashShortcut, executePythonShortcut } from "./shortcut-command-executor";
+
+const EXECUTE_INTENT_PASTE_UNAVAILABLE_STATUS =
+	"Clipboard text unavailable for execute-intent paste (use terminal paste for safe text)";
+
+/** True when the first submitted line was pasted with explicit "safe" intent,
+ *  meaning slash/bash/python shortcuts must be treated as literal user text. */
+function startsWithSafePasteIntent(metadata?: EditorSubmitMetadata): boolean {
+	return metadata?.lineIntents.some(entry => entry.line === 0 && entry.intent === "safe") ?? false;
+}
 
 interface Expandable {
 	setExpanded(expanded: boolean): void;
@@ -311,6 +328,9 @@ export class InputController {
 		for (const key of planModeKeys) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handlePlanModeCommand());
 		}
+		for (const key of this.ctx.keybindings.getKeys("app.clipboard.pasteExec")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleExecuteIntentPaste());
+		}
 
 		for (const key of this.ctx.keybindings.getKeys("app.session.new")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleClearCommand());
@@ -443,8 +463,9 @@ export class InputController {
 	}
 
 	setupEditorSubmitHandler(): void {
-		this.ctx.editor.onSubmit = async (text: string) => {
+		this.ctx.editor.onSubmit = async (text: string, metadata?: EditorSubmitMetadata) => {
 			text = text.trim();
+			const safePasteIntent = startsWithSafePasteIntent(metadata);
 			if ((!isSettingsInitialized() || settings.get("emojiAutocomplete")) && text) text = expandEmoticons(text);
 
 			// Focused subagent session: the editor is a plain chat box for it.
@@ -515,16 +536,82 @@ export class InputController {
 
 			if (!text) return;
 
-			// Handle built-in slash commands
-			const slashResult = await executeBuiltinSlashCommand(text, {
-				ctx: this.ctx,
-			});
-			if (slashResult === true) {
-				return;
+			let historyText = text;
+
+			// Multi-block submission: expand a stacked submission (slash commands,
+			// !/$ shortcuts, and text in one Enter) into per-block transcript
+			// entries while still triggering exactly one agent turn. Collab guests
+			// never run local execution, so the expansion is main/host-only.
+			if (!this.ctx.collabGuest) {
+				const multiBlockResult = await runMultiBlockSubmission({
+					ctx: this.ctx,
+					images: inputImages,
+					text,
+					lineIntents: metadata?.lineIntents,
+					handleSkillCommand: (commandText, options) => this.#handleMultiBlockSkillCommand(commandText, options),
+					handleBackgroundCommand: () => {},
+					handleBashShortcut: (command, excludeFromContext) =>
+						executeBashShortcut(this.ctx, command, excludeFromContext),
+					handlePythonShortcut: (code, excludeFromContext) =>
+						executePythonShortcut(this.ctx, code, excludeFromContext),
+					handleTextBlock: (blockText, blockOptions) => this.#dispatchMultiBlockText(blockText, blockOptions),
+				});
+				if (multiBlockResult.processed) {
+					if (!multiBlockResult.success) {
+						return;
+					}
+					const hasInputImages = Boolean(inputImages && inputImages.length > 0);
+					if (multiBlockResult.startedTurnDirectly) {
+						this.ctx.editor.setText("");
+						this.ctx.pendingImages = [];
+						this.ctx.pendingImageLinks = [];
+						this.ctx.editor.imageLinks = undefined;
+						return;
+					}
+					if (multiBlockResult.continueFromContext && !hasInputImages) {
+						this.ctx.flushPendingBashComponents();
+						this.ctx.editor.setText("");
+						this.ctx.pendingImages = [];
+						this.ctx.pendingImageLinks = [];
+						this.ctx.editor.imageLinks = undefined;
+						if (this.ctx.onInputCallback) {
+							this.ctx.onInputCallback({
+								text: "",
+								continueFromContext: true,
+								cancelled: false,
+								started: true,
+							});
+						}
+						return;
+					}
+					if (multiBlockResult.continueFromContext && hasInputImages && multiBlockResult.fallbackPromptText) {
+						historyText = multiBlockResult.fallbackPromptText;
+						text = multiBlockResult.fallbackPromptText;
+					} else if (!multiBlockResult.remainingText) {
+						this.ctx.editor.setText("");
+						this.ctx.pendingImages = [];
+						this.ctx.pendingImageLinks = [];
+						this.ctx.editor.imageLinks = undefined;
+						return;
+					} else {
+						historyText = multiBlockResult.remainingText;
+						text = multiBlockResult.remainingText;
+					}
+				}
 			}
-			if (typeof slashResult === "string") {
-				// Command handled but returned remaining text to use as prompt
-				text = slashResult;
+
+			// Handle built-in slash commands
+			if (!safePasteIntent) {
+				const slashResult = await executeBuiltinSlashCommand(text, {
+					ctx: this.ctx,
+				});
+				if (slashResult === true) {
+					return;
+				}
+				if (typeof slashResult === "string") {
+					// Command handled but returned remaining text to use as prompt
+					text = slashResult;
+				}
 			}
 
 			// Collab guest: prompts execute on the host; local slash/skill/bash/
@@ -561,13 +648,13 @@ export class InputController {
 			// Handle skill commands (/skill:name [args]). Enter ⇒ steer (matches the
 			// free-text Enter semantics applied a few lines below at the streaming
 			// branch). Ctrl+Enter routes through `handleFollowUp` and dispatches the
-			// same helper with `"followUp"`.
-			if (await this.#invokeSkillCommand(text, "steer")) {
+			// same helper with `"followUp"`. Safe-pasted text is never executed.
+			if (!safePasteIntent && (await this.#invokeSkillCommand(text, "steer"))) {
 				return;
 			}
 
 			// Handle bash command (! for normal, !! for excluded from context)
-			if (text.startsWith("!")) {
+			if (!safePasteIntent && text.startsWith("!")) {
 				const isExcluded = text.startsWith("!!");
 				const command = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (command) {
@@ -585,7 +672,7 @@ export class InputController {
 			}
 
 			// Handle python command ($ for normal, $$ for excluded from context)
-			if (text.startsWith("$")) {
+			if (!safePasteIntent && text.startsWith("$")) {
 				const isExcluded = text.startsWith("$$");
 				const code = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (code) {
@@ -618,7 +705,7 @@ export class InputController {
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
 			if (this.ctx.session.isStreaming) {
-				this.ctx.editor.addToHistory(text);
+				this.ctx.editor.addToHistory(historyText);
 				this.ctx.editor.setText("");
 				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
@@ -734,8 +821,48 @@ export class InputController {
 				this.ctx.updatePendingMessagesDisplay();
 				this.ctx.ui.requestRender();
 			}
-			this.ctx.editor.addToHistory(text);
+			this.ctx.editor.addToHistory(historyText);
 		};
+	}
+
+	/**
+	 * Emit a custom transcript message for an intermediate text block during a
+	 * multi-block submission so the transcript mirrors author intent without
+	 * triggering a new agent turn.
+	 */
+	async #dispatchMultiBlockText(text: string, options: { suppressTurn: boolean }): Promise<void> {
+		const trimmed = text.trim();
+		if (!trimmed) {
+			return;
+		}
+		this.ctx.editor.addToHistory(trimmed);
+		const wasStreaming = this.ctx.session.isStreaming;
+		await this.ctx.session.sendCustomMessage(
+			{
+				customType: MULTI_BLOCK_TEXT_MESSAGE_TYPE,
+				content: trimmed,
+				display: true,
+				details: { suppressTurn: options.suppressTurn },
+			},
+			{ triggerTurn: false },
+		);
+		syncMultiBlockLiveChat(this.ctx, { wasStreaming, display: true });
+	}
+
+	/**
+	 * Multi-block adapter over {@link #invokeSkillCommand}. The runner expects a
+	 * tri-state outcome; on this base a recognised `/skill:` invocation is always
+	 * dispatched via `promptCustomMessage`, so map the boolean result onto
+	 * `"handled"`/`"not-handled"`. `suppressTurn` is accepted for signature
+	 * parity — the underlying skill dispatch persists the prompt content and the
+	 * runner's `continueFromContext` path drives the single turn.
+	 */
+	async #handleMultiBlockSkillCommand(
+		text: string,
+		_options?: { addToHistory?: boolean; suppressTurn?: boolean },
+	): Promise<"not-handled" | "handled" | "error"> {
+		const handled = await this.#invokeSkillCommand(text, "steer");
+		return handled ? "handled" : "not-handled";
 	}
 
 	/** Submit editor text to the focused subagent session (chat-only focus policy). */
@@ -1204,6 +1331,25 @@ export class InputController {
 			this.ctx.editor.pasteText(path);
 			this.ctx.ui.requestRender();
 			this.ctx.showStatus("Failed to read pasted image path");
+		}
+	}
+
+	/**
+	 * Execute-intent paste (Ctrl+Shift+Alt+V): insert clipboard text marked with
+	 * "exec" intent so a pasted bash/python shortcut runs on submit, while default
+	 * terminal paste stays non-executable.
+	 */
+	async handleExecuteIntentPaste(): Promise<void> {
+		try {
+			const clipboardText = await readTextFromClipboard();
+			if (!clipboardText) {
+				this.ctx.showStatus(EXECUTE_INTENT_PASTE_UNAVAILABLE_STATUS);
+				return;
+			}
+			this.ctx.editor.insertPastedText(clipboardText, "exec");
+			this.ctx.ui.requestRender();
+		} catch {
+			this.ctx.showStatus(EXECUTE_INTENT_PASTE_UNAVAILABLE_STATUS);
 		}
 	}
 

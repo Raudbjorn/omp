@@ -59,6 +59,10 @@ export type SubmittedUserInput = {
 	 *  it). Normal user Enter carries "steer" to match the streaming-branch Enter;
 	 *  background/continuation submits omit it and default to "followUp". */
 	streamingBehavior?: "steer" | "followUp";
+	/** Multi-block submissions whose final renderable block already persisted its
+	 *  prompt content set this to continue the agent turn from the existing
+	 *  context instead of emitting a duplicate trailing user message. */
+	continueFromContext?: boolean;
 	cancelled: boolean;
 	started: boolean;
 };
@@ -131,6 +135,9 @@ export interface InteractiveModeContext {
 
 	// State
 	isInitialized: boolean;
+	/** True while this session renders off-screen; multi-block live-chat sync
+	 *  suppresses repaints to avoid clobbering the foreground transcript. */
+	isBackgrounded: boolean;
 	isBashMode: boolean;
 	toolOutputExpanded: boolean;
 	todoExpanded: boolean;

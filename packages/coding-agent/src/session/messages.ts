@@ -36,6 +36,12 @@ export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt";
 export const LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE = "lsp-late-diagnostic";
 export const BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE = "background-tan-dispatch";
 
+/** Custom message type for textual blocks emitted during multi-block submissions. */
+export const MULTI_BLOCK_TEXT_MESSAGE_TYPE = "multi-block-text";
+
+/** Custom message type for builtin slash commands emitted within multi-block submissions. */
+export const MULTI_BLOCK_COMMAND_MESSAGE_TYPE = "multi-block-command";
+
 /** Details persisted on a `/tan` background-dispatch breadcrumb. */
 export interface BackgroundTanDispatchDetails {
 	jobId: string;
@@ -528,6 +534,13 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 					};
 				}
 				case "custom":
+					// Multi-block command breadcrumbs are transcript-only; the
+					// builtin command's expanded prompt content is persisted
+					// separately, so omit the command chip from LLM context.
+					if (m.customType === MULTI_BLOCK_COMMAND_MESSAGE_TYPE) {
+						return undefined;
+					}
+					return convertMessageToLlm(m);
 				case "hookMessage":
 				case "branchSummary":
 				case "compactionSummary":

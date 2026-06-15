@@ -225,14 +225,14 @@ export async function readImageFromClipboard(): Promise<ClipboardImage | null> {
 /**
  * Read plain text from the system clipboard.
  */
-export async function readTextFromClipboard(): Promise<string> {
+export async function readTextFromClipboard(): Promise<string | null> {
 	try {
 		const p = process.platform;
 		if (p === "darwin") {
 			return execSync("pbpaste", { encoding: "utf8", timeout: 2000 }).toString();
 		}
 		if (p === "win32") {
-			return (await readTextViaPowerShell()) ?? "";
+			return await readTextViaPowerShell();
 		}
 		if (process.env.TERMUX_VERSION) {
 			return execSync("termux-clipboard-get", { encoding: "utf8", timeout: 2000 }).toString();
@@ -258,5 +258,5 @@ export async function readTextFromClipboard(): Promise<string> {
 	} catch (error) {
 		logger.warn("clipboard: failed to read clipboard text", { error: String(error) });
 	}
-	return "";
+	return null;
 }

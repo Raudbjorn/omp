@@ -15,11 +15,12 @@ import {
 import type { TreeFilterMode } from "../../config/settings-schema";
 import { theme } from "../../modes/theme/theme";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
-import type { SessionTreeNode } from "../../session/session-entries";
+import type { CustomMessageEntry, SessionTreeNode } from "../../session/session-entries";
 import { shortenPath } from "../../tools/render-utils";
 import { toPathList } from "../../tools/search";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { DynamicBorder } from "./dynamic-border";
+import { formatCustomMessageSummary, getCustomMessageLabel } from "./message-labels";
 
 /** Gutter info: position (displayIndent where connector was) and whether to show │ */
 interface GutterInfo {
@@ -374,12 +375,9 @@ class TreeList implements Component {
 				break;
 			}
 			case "custom_message": {
-				parts.push(entry.customType);
-				if (typeof entry.content === "string") {
-					parts.push(entry.content);
-				} else {
-					parts.push(this.#extractContent(entry.content));
-				}
+				const customEntry = entry as CustomMessageEntry;
+				parts.push(getCustomMessageLabel(customEntry) ?? customEntry.customType);
+				parts.push(formatCustomMessageSummary(customEntry));
 				break;
 			}
 			case "compaction":
@@ -649,14 +647,7 @@ class TreeList implements Component {
 				break;
 			}
 			case "custom_message": {
-				const content =
-					typeof entry.content === "string"
-						? entry.content
-						: entry.content
-								.filter((c): c is { type: "text"; text: string } => c.type === "text")
-								.map(c => c.text)
-								.join("");
-				result = theme.fg("customMessageLabel", `[${entry.customType}]: `) + normalize(content);
+				result = theme.fg("customMessageLabel", formatCustomMessageSummary(entry as CustomMessageEntry));
 				break;
 			}
 			case "compaction": {

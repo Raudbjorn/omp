@@ -34,6 +34,7 @@ interface AppKeybindings {
 	"app.message.dequeue": true;
 	"app.clipboard.pasteImage": true;
 	"app.clipboard.pasteTextRaw": true;
+	"app.clipboard.pasteExec": true;
 	"app.clipboard.copyLine": true;
 	"app.clipboard.copyPrompt": true;
 	"app.agents.hub": true;
@@ -143,6 +144,10 @@ export const KEYBINDINGS = {
 		defaultKeys: ["ctrl+shift+v", "alt+shift+v"],
 		description: "Paste text from clipboard as raw text (no collapse)",
 	},
+	"app.clipboard.pasteExec": {
+		defaultKeys: "ctrl+shift+alt+v",
+		description: "Execute-intent paste",
+	},
 	"app.clipboard.copyLine": {
 		defaultKeys: "alt+shift+l",
 		description: "Copy current line",
@@ -241,6 +246,7 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	dequeue: "app.message.dequeue",
 	pasteImage: "app.clipboard.pasteImage",
 	pasteTextRaw: "app.clipboard.pasteTextRaw",
+	pasteExec: "app.clipboard.pasteExec",
 	copyLine: "app.clipboard.copyLine",
 	copyPrompt: "app.clipboard.copyPrompt",
 	newSession: "app.session.new",

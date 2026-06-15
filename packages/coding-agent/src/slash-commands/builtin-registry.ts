@@ -2312,4 +2312,13 @@ export function lookupBuiltinSlashCommand(name: string): SlashCommandSpec | unde
 	return BUILTIN_SLASH_COMMAND_LOOKUP.get(name);
 }
 
+/**
+ * True when `name` resolves to a builtin slash command (by name or alias).
+ * Used by the multi-block submission classifier to distinguish builtin
+ * commands from file/skill commands.
+ */
+export function isBuiltinSlashCommandName(name: string): boolean {
+	return BUILTIN_SLASH_COMMAND_LOOKUP.has(name);
+}
+
 export type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime, SlashCommandSpec, TuiSlashCommandRuntime };

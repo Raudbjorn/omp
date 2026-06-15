@@ -269,7 +269,7 @@ export async function submitInteractiveInput(
 		InteractiveMode,
 		"markPendingSubmissionStarted" | "finishPendingSubmission" | "showError" | "checkShutdownRequested"
 	>,
-	session: Pick<AgentSession, "prompt" | "promptCustomMessage" | "isStreaming">,
+	session: Pick<AgentSession, "prompt" | "promptCustomMessage" | "isStreaming" | "continueFromContext">,
 	input: SubmittedUserInput,
 ): Promise<void> {
 	if (input.cancelled) {
@@ -296,7 +296,12 @@ export async function submitInteractiveInput(
 		if (!input.started && !mode.markPendingSubmissionStarted(input)) {
 			return;
 		}
-		if (input.customType) {
+		if (input.continueFromContext) {
+			// Multi-block submission already persisted its user-visible blocks;
+			// continue the turn from the existing context rather than appending a
+			// duplicate trailing user message.
+			await session.continueFromContext();
+		} else if (input.customType) {
 			const message = {
 				customType: input.customType,
 				content: input.text,
