@@ -641,6 +641,8 @@ export async function discoverExtensionModulePaths(_ctx: LoadContext, dir: strin
 	return [...discovered];
 }
 
+const PACKAGE_ENTRY_CONTAINER_DIRS = new Set(["src", "dist", "build", "lib"]);
+
 /**
  * Derive a stable extension name from a path.
  */
@@ -650,6 +652,10 @@ export function getExtensionNameFromPath(extensionPath: string): string {
 	if (base === "index.ts" || base === "index.js") {
 		const parts = extensionPath.replace(/\\/g, "/").split("/");
 		const parent = parts[parts.length - 2];
+		const grandparent = parts[parts.length - 3];
+		if (parent && grandparent && PACKAGE_ENTRY_CONTAINER_DIRS.has(parent)) {
+			return grandparent;
+		}
 		return parent ?? base;
 	}
 

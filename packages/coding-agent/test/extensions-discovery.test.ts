@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { getExtensionNameFromPath } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { discoverAndLoadExtensions, loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { filterUserScoped } from "./utils/filter-user-extensions";
@@ -653,5 +654,32 @@ describe("extensions discovery", () => {
 
 		expect(result.errors).toHaveLength(0);
 		expect(result.extensions).toHaveLength(0);
+	});
+});
+
+describe("getExtensionNameFromPath", () => {
+	it("derives name from filename for direct files", () => {
+		expect(getExtensionNameFromPath("/x/foo.ts")).toBe("foo");
+		expect(getExtensionNameFromPath("/x/bar.js")).toBe("bar");
+	});
+
+	it("derives name from parent dir for index files", () => {
+		expect(getExtensionNameFromPath("/x/my-ext/index.ts")).toBe("my-ext");
+		expect(getExtensionNameFromPath("/x/my-ext/index.js")).toBe("my-ext");
+	});
+
+	it("derives name from grandparent dir when index is nested in a container dir", () => {
+		expect(getExtensionNameFromPath("/x/my-pkg/src/index.ts")).toBe("my-pkg");
+		expect(getExtensionNameFromPath("/x/my-pkg/dist/index.js")).toBe("my-pkg");
+		expect(getExtensionNameFromPath("/x/my-pkg/build/index.ts")).toBe("my-pkg");
+		expect(getExtensionNameFromPath("/x/my-pkg/lib/index.js")).toBe("my-pkg");
+	});
+
+	it("falls back to parent dir for non-container nested index files", () => {
+		expect(getExtensionNameFromPath("/x/my-pkg/sub/index.ts")).toBe("sub");
+	});
+
+	it("handles windows-style separators", () => {
+		expect(getExtensionNameFromPath("C:\\x\\my-pkg\\src\\index.ts")).toBe("my-pkg");
 	});
 });
