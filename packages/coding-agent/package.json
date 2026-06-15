@@ -65,6 +65,7 @@
 		"@opentelemetry/sdk-trace-base": "catalog:",
 		"@opentelemetry/sdk-trace-node": "catalog:",
 		"@puppeteer/browsers": "catalog:",
+		"@sinclair/typebox": "catalog:",
 		"@types/turndown": "catalog:",
 		"@xterm/headless": "catalog:",
 		"ajv": "catalog:",

@@ -90,6 +90,7 @@
         "@opentelemetry/sdk-trace-base": "catalog:",
         "@opentelemetry/sdk-trace-node": "catalog:",
         "@puppeteer/browsers": "catalog:",
+        "@sinclair/typebox": "catalog:",
         "@types/turndown": "catalog:",
         "@xterm/headless": "catalog:",
         "ajv": "catalog:",
@@ -340,6 +341,7 @@
     "@opentelemetry/sdk-trace-base": "^2.7.1",
     "@opentelemetry/sdk-trace-node": "^2.7.1",
     "@puppeteer/browsers": "^3.0.4",
+    "@sinclair/typebox": "^0.34.49",
     "@tailwindcss/node": "^4.3.0",
     "@tailwindcss/vite": "^4.3.0",
     "@types/babel__generator": "^7.27.0",
@@ -818,6 +820,8 @@
     "@rolldown/binding-win32-x64-msvc": ["@rolldown/binding-win32-x64-msvc@1.0.3", "", { "os": "win32", "cpu": "x64" }, "sha512-eXB7CHuaQdqmJcc3koCNtNPmT/bj2gc999kUFgBxG8Ac0NdgXc4rkCHhqrgrhN3zddvvvrgzj1e90SuSfmyIXA=="],
 
     "@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.1", "", {}, "sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw=="],
+
+    "@sinclair/typebox": ["@sinclair/typebox@0.34.49", "", {}, "sha512-brySQQs7Jtn0joV8Xh9ZV/hZb9Ozb0pmazDIASBkYKCjXrXU3mpcFahmK/z4YDhGkQvP9mWJbVyahdtU5wQA+A=="],
 
     "@so-ric/colorspace": ["@so-ric/colorspace@1.1.6", "", { "dependencies": { "color": "^5.0.2", "text-hex": "1.0.x" } }, "sha512-/KiKkpHNOBgkFJwu9sh48LkHSMYGyuTcSFK/qMBdnOAlrRJzRSXAOFB5qwzaVQuDl8wAvHVMkaASQDReTahxuw=="],
 

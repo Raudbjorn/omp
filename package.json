@@ -43,6 +43,7 @@
       "@opentelemetry/sdk-trace-base": "^2.7.1",
       "@opentelemetry/sdk-trace-node": "^2.7.1",
       "@puppeteer/browsers": "^3.0.4",
+      "@sinclair/typebox": "^0.34.49",
       "@tailwindcss/node": "^4.3.0",
       "@tailwindcss/vite": "^4.3.0",
       "@types/babel__generator": "^7.27.0",
