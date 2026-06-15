@@ -2336,6 +2336,35 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	/**
+	 * Finalize an approved plan into the CURRENT session without starting a fresh
+	 * execution session. Exits plan mode silently (preserving context), restores
+	 * the pre-plan tools, pins the plan reference, and queues a literal `Approved`
+	 * turn so the operator's existing context drives execution.
+	 */
+	async #approvePlanInCurrentSession(options: { planFilePath: string; title: string }): Promise<void> {
+		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
+		await this.#exitPlanMode({ silent: true, paused: false });
+		if (previousTools.length > 0) {
+			await this.session.setActiveToolsByName(previousTools);
+		}
+		this.session.setPlanReferencePath(options.planFilePath);
+		this.session.markPlanReferenceSent();
+		this.#submitPlanReviewInput("Approved");
+	}
+
+	/**
+	 * Queue text into the current session as a user submission, or fall back to
+	 * seeding the editor when no input callback is wired yet.
+	 */
+	#submitPlanReviewInput(text: string): void {
+		if (this.onInputCallback) {
+			this.onInputCallback(this.startPendingSubmission({ text }));
+			return;
+		}
+		this.editor.setText(text);
+	}
+
 	async #approvePlan(
 		planContent: string,
 		options: {
@@ -2903,7 +2932,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		const choice = await this.showPlanReview(
 			planContent,
 			"Plan mode - next step",
-			["Approve and execute", "Approve and compact context", keepContextLabel, "Refine plan"],
+			[
+				"Approve and execute",
+				"Approve and compact context",
+				keepContextLabel,
+				"Approve and execute (current session)",
+				"Refine plan",
+			],
 			{
 				helpText,
 				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
@@ -2918,6 +2953,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			},
 			{ slider },
 		);
+
+		if (choice === "Approve and execute (current session)") {
+			try {
+				await this.#approvePlanInCurrentSession({ planFilePath, title: details.title });
+			} catch (error) {
+				this.showError(
+					`Failed to finalize approved plan: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+			return;
+		}
 
 		if (choice === "Approve and execute" || choice === "Approve and compact context" || choice === keepContextLabel) {
 			try {

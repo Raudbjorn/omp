@@ -387,7 +387,7 @@ describe("listClaudePluginRoots", () => {
 		const found = commands.find(command => command.name === "understand");
 
 		expect(found?.description).toBe("Build an understanding graph");
-		expect(expandSlashCommand("/understand --language zh", commands)).toContain("Analyze the project.");
+		expect(await expandSlashCommand("/understand --language zh", commands)).toContain("Analyze the project.");
 	});
 	test("uses skill directory basename when frontmatter name contains spaces", async () => {
 		const pluginsDir = path.join(tempDir, ".omp", "plugins");
@@ -422,7 +422,7 @@ describe("listClaudePluginRoots", () => {
 		const found = commands.find(command => command.name === "understand");
 		expect(found?.description).toBe("Build an understanding graph");
 		expect(commands.find(command => command.name === "Understand Anything")).toBeUndefined();
-		expect(expandSlashCommand("/understand", commands)).toContain("Analyze the project.");
+		expect(await expandSlashCommand("/understand", commands)).toContain("Analyze the project.");
 	});
 
 	test("reads slash commands directory from plugin manifest slash-commands field", async () => {

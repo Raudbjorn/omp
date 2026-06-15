@@ -6,6 +6,7 @@ import type { PromptChainExecutor, PromptChainStreamingBehavior } from "../dange
 import { loadCapability } from "../discovery";
 import { EMBEDDED_COMMAND_TEMPLATES } from "../task/commands";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
+import { interpolateShellExpressions } from "./shell-interpolation";
 
 export type SlashCommandSource = "extension" | "prompt" | "skill";
 
@@ -175,7 +176,11 @@ export function renderSlashCommandWarnings(warnings: readonly string[]): string 
  * Returns the expanded content or the original text if not a slash command.
  * Prompt-chain commands are NOT expanded here — see executeFileSlashCommand.
  */
-export function expandSlashCommand(text: string, fileCommands: readonly FileSlashCommand[]): string {
+export async function expandSlashCommand(
+	text: string,
+	fileCommands: readonly FileSlashCommand[],
+	options: { cwd?: string } = {},
+): Promise<string> {
 	if (!text.startsWith("/")) return text;
 
 	const spaceIndex = text.indexOf(" ");
@@ -189,7 +194,18 @@ export function expandSlashCommand(text: string, fileCommands: readonly FileSlas
 		const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(fileCommand.content);
 		const substituted = substituteArgs(fileCommand.content, args);
 		const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
-		return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
+		// Native-shipped commands opt into post-render shell interpolation: expand
+		// single-line `!\`cmd\`` expressions against the session cwd. User/project
+		// commands stay literal so untrusted bodies never spawn shells.
+		const expanded =
+			fileCommand._source?.level === "native" && options.cwd !== undefined
+				? await interpolateShellExpressions({
+						body: rendered,
+						cwd: options.cwd,
+						sourceLabel: `/${fileCommand.name}`,
+					})
+				: rendered;
+		return appendInlineArgsFallback(expanded, argsText, usesInlineArgPlaceholders);
 	}
 
 	return text;
@@ -222,7 +238,7 @@ export async function executeFileSlashCommand(
 		return { kind: "text", text };
 	}
 	if (isTemplateFileSlashCommand(fileCommand)) {
-		return { kind: "text", text: expandSlashCommand(text, fileCommands) };
+		return { kind: "text", text: await expandSlashCommand(text, fileCommands, { cwd: options.cwd }) };
 	}
 
 	await options.promptChainExecutor.execute(fileCommand.name, fileCommand.stepTemplates, argsString, {

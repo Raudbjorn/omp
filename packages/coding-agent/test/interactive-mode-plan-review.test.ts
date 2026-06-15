@@ -558,10 +558,44 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(selector).toHaveBeenCalledWith(
 			expect.any(String),
 			"Plan mode - next step",
-			["Approve and execute", "Approve and compact context", "Approve and keep context", "Refine plan"],
+			[
+				"Approve and execute",
+				"Approve and compact context",
+				"Approve and keep context",
+				"Approve and execute (current session)",
+				"Refine plan",
+			],
 			expect.any(Object),
 			expect.any(Object),
 		);
+	});
+
+	it("queues Approved in the current session without clearing when that option is selected", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nKeep context, queue approval.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		const submissions: string[] = [];
+		mode.onInputCallback = () => {};
+		vi.spyOn(mode, "startPendingSubmission").mockImplementation((input: { text?: string }) => {
+			submissions.push(input.text ?? "");
+			return undefined as never;
+		});
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and execute (current session)");
+		const clear = vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
+		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+
+		expect(clear).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(submissions).toContain("Approved");
 	});
 
 	it("approves a plan without clearing the session when keeping context", async () => {
