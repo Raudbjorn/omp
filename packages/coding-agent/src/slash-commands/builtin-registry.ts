@@ -9,6 +9,7 @@ import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest"
 import { CollabHost } from "../collab/host";
 import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
+import { dangerPiBundledBuiltinSlashCommands } from "../danger-pi/slash-commands";
 import {
 	clearPluginRootsAndCaches,
 	resolveActiveProjectRegistryPath,
@@ -55,6 +56,48 @@ export type { BuiltinSlashCommand, SubcommandDef } from "./types";
 
 /** TUI-specific runtime accepted by `executeBuiltinSlashCommand`. */
 export type BuiltinSlashCommandRuntime = TuiSlashCommandRuntime;
+
+/**
+ * Fork addition: parsed-command shape passed to danger-pi bundled command
+ * handlers. Structurally identical to {@link ParsedSlashCommand}.
+ */
+export type ParsedBuiltinSlashCommand = ParsedSlashCommand;
+
+/**
+ * Fork addition: spec shape for danger-pi bundled native slash commands
+ * (`../danger-pi/slash-commands`). These are adapted into the base
+ * {@link SlashCommandSpec} registry via `handleTui` so they participate in TUI
+ * dispatch and autocomplete alongside the core commands.
+ */
+export interface BuiltinSlashCommandSpec extends BuiltinSlashCommand {
+	allowArgs?: boolean;
+	allowBatch?: boolean;
+	/**
+	 * Handle the command. Return a string to pass remaining text through as
+	 * prompt input; return void/undefined to consume the input entirely.
+	 */
+	handle: (
+		command: ParsedBuiltinSlashCommand,
+		runtime: BuiltinSlashCommandRuntime,
+		// biome-ignore lint/suspicious/noConfusingVoidType: void needed so async handlers returning nothing are assignable
+	) => Promise<string | void> | string | void;
+}
+
+/** Adapt a danger-pi bundled command spec into the base `SlashCommandSpec`. */
+function adaptBundledBuiltinSlashCommand(spec: BuiltinSlashCommandSpec): SlashCommandSpec {
+	return {
+		name: spec.name,
+		aliases: spec.aliases,
+		description: spec.description,
+		subcommands: spec.subcommands,
+		inlineHint: spec.inlineHint,
+		allowArgs: spec.allowArgs,
+		handleTui: async (command, runtime) => {
+			const result = await spec.handle(command, runtime);
+			return typeof result === "string" ? { prompt: result } : undefined;
+		},
+	};
+}
 
 function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
@@ -2124,6 +2167,9 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		description: "Quit the application",
 		handleTui: shutdownHandlerTui,
 	},
+	// Fork addition: danger-pi bundled native slash commands (e.g. /gentitle),
+	// adapted into the base spec so they share TUI dispatch and autocomplete.
+	...dangerPiBundledBuiltinSlashCommands.map(adaptBundledBuiltinSlashCommand),
 ];
 
 const BUILTIN_SLASH_COMMAND_LOOKUP = new Map<string, SlashCommandSpec>();

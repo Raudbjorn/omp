@@ -3,6 +3,7 @@
  */
 import * as path from "node:path";
 
+import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Api, type AssistantMessage, completeSimple, type Model, type Tool } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
@@ -69,7 +70,11 @@ function modelSupportsForcedToolChoice(model: Model<Api>): boolean {
 	return true;
 }
 
-function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel?: Model<Api>): Model<Api> | undefined {
+function resolveTitleModel(
+	registry: ModelRegistry,
+	settings: Settings,
+	currentModel?: Model<Api>,
+): Model<Api> | undefined {
 	const availableModels = registry.getAvailable();
 	if (availableModels.length === 0) return undefined;
 
@@ -77,6 +82,26 @@ function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel
 	if (titleModel) return titleModel;
 
 	if (currentModel) return currentModel;
+
+	return undefined;
+}
+
+/**
+ * Fork addition: resolve the title model along with its per-role thinking level.
+ * Used by the danger-pi `gentitle` bundled slash command.
+ */
+export function getTitleModel(
+	registry: ModelRegistry,
+	settings: Settings,
+	currentModel?: Model<Api>,
+): { model: Model<Api>; thinkingLevel?: ThinkingLevel } | undefined {
+	const availableModels = registry.getAvailable();
+	if (availableModels.length === 0) return undefined;
+
+	const titleModel = resolveRoleSelection(["title", "commit", "smol"], settings, availableModels, registry);
+	if (titleModel) return titleModel;
+
+	if (currentModel) return { model: currentModel };
 
 	return undefined;
 }
@@ -242,7 +267,7 @@ export async function generateTitleOnline(
 	signal?: AbortSignal,
 	customSystemPrompt?: string,
 ): Promise<string | null> {
-	const model = getTitleModel(registry, settings, currentModel);
+	const model = resolveTitleModel(registry, settings, currentModel);
 	if (!model) {
 		logger.warn("title-generator: no title model found", { sessionId, reason: "no-title-model" });
 		return null;
