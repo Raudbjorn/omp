@@ -63,6 +63,7 @@ import type {
 	ExtensionWidgetOptions,
 } from "../extensibility/extensions";
 import type { CompactOptions } from "../extensibility/extensions/types";
+import { loadSkills } from "../extensibility/skills";
 import { loadSlashCommands } from "../extensibility/slash-commands";
 import { type GuidedGoalMessage, runGuidedGoalTurn } from "../goals/guided-setup";
 import type { Goal, GoalModeState } from "../goals/state";
@@ -140,6 +141,7 @@ import {
 	parseLoopLimitArgs,
 } from "./loop-limit";
 import { OAuthManualInputManager } from "./oauth-manual-input";
+import { OmpLiveReloadController, type OmpLiveReloadMode } from "./omp-live-reload";
 import type { ObservableSession } from "./session-observer-registry";
 import { SessionObserverRegistry } from "./session-observer-registry";
 import { runProviderSetupWizard } from "./setup-wizard/lazy";
@@ -216,6 +218,9 @@ const EDITOR_RESERVED_ROWS = 12;
 const EDITOR_FALLBACK_ROWS = 24;
 const EDITOR_MIN_CHROME_ROWS = 4; // rows reserved for transcript + status on small terms
 const EDITOR_MIN_RENDERED_ROWS = 3; // bordered editor floor: top+bottom border + 1 content row
+
+// OMP live-reload: hook-status key used to surface watcher error state in the UI.
+const OMP_LIVE_RELOAD_STATUS_KEY = "omp-live-reload";
 
 /**
  * Editor max-height cap for a terminal of `terminalRows` rows.
@@ -441,6 +446,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	collabGuest?: CollabGuestLink;
 
 	#pendingSlashCommands: SlashCommand[] = [];
+	#ompLiveReload: OmpLiveReloadController;
 	#cleanupUnsubscribe?: () => void;
 	readonly #version: string;
 	readonly #changelogMarkdown: string | undefined;
@@ -635,6 +641,26 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Store pending commands for init() where file commands are loaded async
 		this.#pendingSlashCommands = [...BUILTIN_SLASH_COMMANDS, ...hookCommands, ...customCommands, ...skillCommandList];
 
+		// OMP live reload: watch native .omp roots and refresh commands/skills without restart.
+		this.#ompLiveReload = new OmpLiveReloadController(
+			{
+				onRefreshRequested: async () => {
+					await this.refreshRuntimeCommandState(this.sessionManager.getCwd());
+				},
+				onErrorStateChanged: (message: string | undefined) => {
+					this.setHookStatus(OMP_LIVE_RELOAD_STATUS_KEY, message ? theme.fg("warning", message) : undefined);
+					if (message) {
+						this.showWarning(message);
+					}
+				},
+			},
+			{
+				mode: this.settings.get("commands.liveReloadMode") as OmpLiveReloadMode,
+				projectDir: this.sessionManager.getCwd(),
+				userAgentDir: this.settings.getAgentDir(),
+			},
+		);
+
 		this.#uiHelpers = new UiHelpers(this);
 		this.#btwController = new BtwController(this);
 		this.#tanCommandController = new TanCommandController(this);
@@ -677,6 +703,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.refreshSlashCommandState.bind(this),
 			getProjectDir(),
 		);
+
+		// OMP live reload: bind filesystem watchers for the current cwd/mode.
+		await this.#syncOmpLiveReload({ cwd: getProjectDir(), triggerRefresh: false });
 
 		// Get current model info for welcome screen
 		const modelName = this.session.model?.name ?? "Unknown";
@@ -891,6 +920,66 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 		this.editor.setAutocompleteProvider(autocompleteProvider);
 		this.session.setSlashCommands(fileCommands);
+	}
+
+	/**
+	 * OMP live reload: refresh skill + slash-command runtime state from the
+	 * current discovery sources. Reloads skills, rebuilds the skill portion of
+	 * the pending command list, then refreshes file slash commands.
+	 */
+	async refreshRuntimeCommandState(cwd?: string): Promise<void> {
+		const basePath = cwd ?? this.sessionManager.getCwd();
+		resetCapabilities();
+		await this.#refreshSkillCommandState(basePath);
+		await this.refreshSlashCommandState(basePath);
+	}
+
+	/** Reload skills for `cwd` and rebuild the skill commands in the pending list. */
+	async #refreshSkillCommandState(cwd: string): Promise<void> {
+		const { skills, warnings } = await loadSkills({
+			...(this.session.skillsSettings ?? {}),
+			cwd,
+		});
+		this.session.setSkills(skills, warnings);
+
+		// Drop stale skill: entries, then re-derive them from the reloaded skills.
+		const nonSkillCommands = this.#pendingSlashCommands.filter(cmd => !cmd.name.startsWith("skill:"));
+		const skillCommandList: SlashCommand[] = [];
+		this.skillCommands.clear();
+		if (settings.get("skills.enableSkillCommands")) {
+			for (const skill of skills) {
+				const commandName = `skill:${skill.name}`;
+				this.skillCommands.set(commandName, skill.filePath);
+				skillCommandList.push({ name: commandName, description: skill.description });
+			}
+		}
+		this.#pendingSlashCommands = [...nonSkillCommands, ...skillCommandList];
+	}
+
+	async #syncOmpLiveReload(options: { cwd: string; triggerRefresh: boolean }): Promise<void> {
+		const mode = this.settings.get("commands.liveReloadMode") as OmpLiveReloadMode;
+		await this.#ompLiveReload.configure({
+			mode,
+			projectDir: options.cwd,
+			userAgentDir: this.settings.getAgentDir(),
+		});
+		if (mode === "omp" && options.triggerRefresh) {
+			await this.refreshRuntimeCommandState(options.cwd);
+		}
+	}
+
+	async syncOmpLiveReloadState(cwd?: string, options?: { triggerRefresh?: boolean }): Promise<void> {
+		await this.#syncOmpLiveReload({
+			cwd: cwd ?? this.sessionManager.getCwd(),
+			triggerRefresh: options?.triggerRefresh ?? false,
+		});
+	}
+
+	async handleReloadCommand(): Promise<void> {
+		const cwd = this.sessionManager.getCwd();
+		await this.syncOmpLiveReloadState(cwd, { triggerRefresh: false });
+		await this.refreshRuntimeCommandState(cwd);
+		await this.handleMCPCommand("/mcp reload");
 	}
 
 	/**

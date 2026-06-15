@@ -5832,6 +5832,12 @@ export class AgentSession {
 		return this.#skillWarnings;
 	}
 
+	/** Replace the loaded skills/warnings (used by OMP live reload). */
+	setSkills(skills: Skill[], warnings: SkillWarning[]): void {
+		this.#skills = [...skills];
+		this.#skillWarnings = [...warnings];
+	}
+
 	getTodoPhases(): TodoPhase[] {
 		return this.#cloneTodoPhases(this.#todoPhases);
 	}

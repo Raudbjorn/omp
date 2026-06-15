@@ -430,6 +430,18 @@ export class SelectorController {
 				this.ctx.mcpManager?.setNotificationsEnabled(value as boolean);
 				break;
 
+			// Fork integration for hot reloading: these settings require immediate runtime refresh/rebind.
+			case "skills.enableSkillCommands":
+				void this.ctx.refreshRuntimeCommandState(this.ctx.sessionManager.getCwd());
+				break;
+
+			case "commands.liveReloadMode":
+				void this.ctx.syncOmpLiveReloadState(this.ctx.sessionManager.getCwd());
+				if (value === "omp") {
+					void this.ctx.refreshRuntimeCommandState(this.ctx.sessionManager.getCwd());
+				}
+				break;
+
 			// All other settings are handled by the definitions (get/set on SettingsManager)
 			// No additional side effects needed
 		}

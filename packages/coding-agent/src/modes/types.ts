@@ -301,6 +301,9 @@ export interface InteractiveModeContext {
 	): Promise<CompactionOutcome>;
 	openInBrowser(urlOrPath: string): void;
 	refreshSlashCommandState(cwd?: string): Promise<void>;
+	refreshRuntimeCommandState(cwd?: string): Promise<void>;
+	syncOmpLiveReloadState(cwd?: string, options?: { triggerRefresh?: boolean }): Promise<void>;
+	handleReloadCommand(): Promise<void>;
 	applyCwdChange(newCwd: string): Promise<void>;
 
 	// Selector handling

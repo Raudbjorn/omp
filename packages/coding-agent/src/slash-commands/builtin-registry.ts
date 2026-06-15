@@ -1490,6 +1490,15 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		// Fork integration for hot reloading: explicit recovery command for watcher/runtime refresh.
+		name: "reload",
+		description: "Retry OMP live reload and refresh runtime command state",
+		handleTui: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.handleReloadCommand();
+		},
+	},
+	{
 		name: "move",
 		description: "Move session to a different working directory",
 		acpDescription: "Move the current session file",

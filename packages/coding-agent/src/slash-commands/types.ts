@@ -79,6 +79,8 @@ export interface SlashCommandRuntime {
  */
 export interface TuiSlashCommandRuntime {
 	ctx: InteractiveModeContext;
+	/** Optional hook to detach the UI and continue in the background (fork: /background). */
+	handleBackgroundCommand?: () => void;
 }
 
 /** Unified slash-command spec consumed by both TUI and ACP dispatchers. */
