@@ -77,6 +77,7 @@ function createSubmitContext() {
 			getKeys: () => [],
 		} as unknown as InteractiveModeContext["keybindings"],
 		pendingImages: [],
+		pendingImageLinks: [],
 		isBashMode: false,
 		isPythonMode: false,
 		onInputCallback,
@@ -175,7 +176,12 @@ describe("InputController safe paste submit behavior", () => {
 		await editor.onSubmit?.("!ls -al", { lineIntents: [{ line: 0, intent: "safe" }] });
 
 		expect(spies.handleBashCommand).not.toHaveBeenCalled();
-		expect(spies.startPendingSubmission).toHaveBeenCalledWith({ text: "!ls -al", images: undefined });
+		// The base submission shape also carries imageLinks/streamingBehavior; the
+		// safe-paste contract only requires the shortcut text pass through verbatim
+		// as a normal submission (not the bash path), so match on those fields.
+		expect(spies.startPendingSubmission).toHaveBeenCalledWith(
+			expect.objectContaining({ text: "!ls -al", images: undefined }),
+		);
 		expect(spies.onInputCallback).toHaveBeenCalledWith(createSubmission({ text: "!ls -al" }));
 	});
 

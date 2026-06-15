@@ -662,10 +662,10 @@ export class EventController {
 			}
 			this.#lastAssistantComponent = this.ctx.streamingComponent;
 			this.#lastAssistantComponent.markTranscriptBlockFinalized();
-			this.#lastAssistantComponent.setElapsedTime(
-				getElapsedSincePreviousAssistant(this.ctx.session.messages, event.message.timestamp),
+			this.#lastAssistantComponent.setElapsedTime?.(
+				getElapsedSincePreviousAssistant(this.ctx.session.messages ?? [], event.message.timestamp),
 			);
-			this.#lastAssistantComponent.setUsageInfo(event.message.usage);
+			this.#lastAssistantComponent.setUsageInfo?.(event.message.usage);
 			this.ctx.streamingComponent = undefined;
 			this.ctx.streamingMessage = undefined;
 			// Pin a turn-ending provider error (e.g. Anthropic content-filter block)
@@ -726,8 +726,8 @@ export class EventController {
 			this.ctx.chatContainer.addChild(component);
 			this.ctx.pendingTools.set(event.toolCallId, component);
 			this.ctx.ui.requestRender();
+			component.notifyExecutionStarted();
 		}
-		this.ctx.pendingTools.get(event.toolCallId)?.notifyExecutionStarted();
 	}
 
 	async #handleToolExecutionUpdate(

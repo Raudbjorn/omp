@@ -513,7 +513,7 @@ export class AssistantMessageComponent extends Container {
 		}
 
 		// Token usage metadata
-		if (settings.get("display.showTokenUsage") && this.#usageInfo) {
+		if (this.#usageInfo && settings.get("display.showTokenUsage")) {
 			this.#contentContainer.addChild(new Spacer(1));
 			this.#contentContainer.addChild(
 				new Text(formatAssistantUsageMetadata(this.#usageInfo, this.#elapsedTimeMs), 1, 0),

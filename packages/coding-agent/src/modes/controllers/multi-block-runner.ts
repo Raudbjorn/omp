@@ -361,6 +361,7 @@ async function executeCommandBlock(
 	if (policy.kind === "builtin-btw") {
 		const slashResult = await executeBuiltinSlashCommand(commandText, {
 			ctx: options.ctx,
+			handleBackgroundCommand: options.handleBackgroundCommand,
 		});
 		if (slashResult === false) {
 			options.ctx.showError(`Failed to execute "/${policy.commandName}" command.`);

@@ -108,6 +108,7 @@ function createTestContext() {
 			state: { messages: [{ role: "user" }] },
 		} as InteractiveModeContext["agent"],
 		pendingImages: [] as InteractiveModeContext["pendingImages"],
+		pendingImageLinks: [] as InteractiveModeContext["pendingImageLinks"],
 		compactionQueuedMessages: [] as InteractiveModeContext["compactionQueuedMessages"],
 		pendingTools: new Map(),
 		pendingBashComponents: [],

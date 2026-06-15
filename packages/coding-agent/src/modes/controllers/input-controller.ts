@@ -645,16 +645,23 @@ export class InputController {
 				return;
 			}
 
+			// Single-line guard for shortcut branches: a multiline submission whose
+			// first line merely starts with `!`/`$`/`/skill:` (e.g. "!\n$$\nhello")
+			// is plain text, not a shortcut. Multiline executable submissions are
+			// already consumed by the multi-block runner above, so anything still
+			// multiline here is free text that must not route through execution.
+			const isSingleLineSubmission = !text.includes("\n");
+
 			// Handle skill commands (/skill:name [args]). Enter ⇒ steer (matches the
 			// free-text Enter semantics applied a few lines below at the streaming
 			// branch). Ctrl+Enter routes through `handleFollowUp` and dispatches the
 			// same helper with `"followUp"`. Safe-pasted text is never executed.
-			if (!safePasteIntent && (await this.#invokeSkillCommand(text, "steer"))) {
+			if (isSingleLineSubmission && !safePasteIntent && (await this.#invokeSkillCommand(text, "steer"))) {
 				return;
 			}
 
 			// Handle bash command (! for normal, !! for excluded from context)
-			if (!safePasteIntent && text.startsWith("!")) {
+			if (isSingleLineSubmission && !safePasteIntent && text.startsWith("!")) {
 				const isExcluded = text.startsWith("!!");
 				const command = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (command) {
@@ -672,7 +679,7 @@ export class InputController {
 			}
 
 			// Handle python command ($ for normal, $$ for excluded from context)
-			if (!safePasteIntent && text.startsWith("$")) {
+			if (isSingleLineSubmission && !safePasteIntent && text.startsWith("$")) {
 				const isExcluded = text.startsWith("$$");
 				const code = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (code) {
@@ -851,17 +858,18 @@ export class InputController {
 
 	/**
 	 * Multi-block adapter over {@link #invokeSkillCommand}. The runner expects a
-	 * tri-state outcome; on this base a recognised `/skill:` invocation is always
-	 * dispatched via `promptCustomMessage`, so map the boolean result onto
-	 * `"handled"`/`"not-handled"`. `suppressTurn` is accepted for signature
-	 * parity — the underlying skill dispatch persists the prompt content and the
-	 * runner's `continueFromContext` path drives the single turn.
+	 * tri-state outcome; a recognised `/skill:` invocation persists the prompt via
+	 * `sendCustomMessage` (no turn) so the runner's `continueFromContext` path
+	 * drives the single turn, then maps the boolean result onto
+	 * `"handled"`/`"not-handled"`.
 	 */
 	async #handleMultiBlockSkillCommand(
 		text: string,
-		_options?: { addToHistory?: boolean; suppressTurn?: boolean },
+		options?: { addToHistory?: boolean; suppressTurn?: boolean },
 	): Promise<"not-handled" | "handled" | "error"> {
-		const handled = await this.#invokeSkillCommand(text, "steer");
+		const handled = await this.#invokeSkillCommand(text, "steer", {
+			suppressTurn: options?.suppressTurn ?? true,
+		});
 		return handled ? "handled" : "not-handled";
 	}
 
@@ -1003,13 +1011,22 @@ export class InputController {
 	 * while the agent is streaming; the idle path of `promptCustomMessage`
 	 * ignores it.
 	 */
-	async #invokeSkillCommand(text: string, streamingBehavior: "steer" | "followUp"): Promise<boolean> {
+	async #invokeSkillCommand(
+		text: string,
+		streamingBehavior: "steer" | "followUp",
+		options?: { suppressTurn?: boolean },
+	): Promise<boolean> {
 		if (!text.startsWith("/skill:")) return false;
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
-		const skillPath = this.ctx.skillCommands?.get(commandName);
-		if (!skillPath) return false;
+		const skillEntry = this.ctx.skillCommands?.get(commandName);
+		if (!skillEntry) return false;
+		// Skill registry values are path strings on this base, but multi-block
+		// callers may pass the richer `{ filePath, isNative }` descriptor; accept
+		// both shapes so either registration style resolves to a readable path.
+		const skillPath =
+			typeof skillEntry === "string" ? skillEntry : (skillEntry as { filePath: string }).filePath;
 		this.ctx.editor.addToHistory(text);
 		this.ctx.editor.setText("");
 		try {
@@ -1027,19 +1044,38 @@ export class InputController {
 				args: args || undefined,
 				lineCount: body ? body.split("\n").length : 0,
 			};
-			await this.ctx.session.promptCustomMessage(
-				{
-					customType: SKILL_PROMPT_MESSAGE_TYPE,
-					content: message,
-					display: true,
-					details,
-					attribution: "user",
-				},
-				{ streamingBehavior, queueChipText: text },
-			);
-			if (this.ctx.session.isStreaming) {
-				this.ctx.updatePendingMessagesDisplay();
-				this.ctx.ui.requestRender();
+			// Multi-block submissions persist the skill prompt without triggering a
+			// turn (the runner's `continueFromContext` path drives the single turn),
+			// so the entry is recorded via `sendCustomMessage` and rendered in author
+			// order. Standalone invocations prompt immediately.
+			if (options?.suppressTurn) {
+				const wasStreaming = this.ctx.session.isStreaming;
+				await this.ctx.session.sendCustomMessage(
+					{
+						customType: SKILL_PROMPT_MESSAGE_TYPE,
+						content: message,
+						display: true,
+						details,
+						attribution: "user",
+					},
+					{ triggerTurn: false },
+				);
+				syncMultiBlockLiveChat(this.ctx, { wasStreaming, display: true });
+			} else {
+				await this.ctx.session.promptCustomMessage(
+					{
+						customType: SKILL_PROMPT_MESSAGE_TYPE,
+						content: message,
+						display: true,
+						details,
+						attribution: "user",
+					},
+					{ streamingBehavior, queueChipText: text },
+				);
+				if (this.ctx.session.isStreaming) {
+					this.ctx.updatePendingMessagesDisplay();
+					this.ctx.ui.requestRender();
+				}
 			}
 		} catch (err) {
 			this.ctx.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
