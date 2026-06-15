@@ -345,3 +345,14 @@ files:
   - /home/svnbjrn/omp/packages/natives/native/index.d.ts
 symbols: IsoBackendKind, IsolationBackend, IsoChangeKind, IsoProbeResult, IsoResolveResult, isoStart, isoStop, isoDiff, isoProbe, isoResolve, encode_sixel, BackendKind, ChangeKind, Diff, FileChange
 
+
+---
+# PRESENCE AUDIT (2026-06-15) — actual remaining work
+
+DONE (committed): title, omp-live-reload, scrubProcessEnv(platform-misc), extension-discovery, assistant-token-line. changelog-union-merge already on base.
+
+FULLY ON BASE — skip (verify only): auth-broker-gateway(3/3), native-platform(3/3), stats-worker-pool(2/2), omp-workflow-commands(2/2).
+
+SMALL DELTA — port the missing piece: plan-review-approval(finalizeApprovedPlan), shell-interpolation, codex-multi-account(rankOAuthSelections), image-gen(nanoBanana/image_config), clipboard-native(pasteExec — comes with execute-intent-paste), session-token-tracking(re-scope: goals/ is likely upstream not fork).
+
+GENUINELY MISSING — real ports: multi-block + execute-intent-paste (circular, ~12 files, keystone — plan-review/shell-interp/cmd-yaml depend on it), cmd-yaml-commands (command-chain-files subtree + integration), tool-schema-normalization (ai pkg, hard).
