@@ -1776,10 +1776,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// re-bind under their own `CustomToolAPI` while skipping the FS scan.
 		toolSession.customToolPaths = customToolPaths;
 
-		const inlineExtensions: ExtensionFactory[] = [
-			...dangerPiBundledExtensions,
-			...(options.extensions ?? []),
-		];
+		const inlineExtensions: ExtensionFactory[] = [...dangerPiBundledExtensions, ...(options.extensions ?? [])];
 		inlineExtensions.push((await import("./autoresearch")).createAutoresearchExtension);
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));

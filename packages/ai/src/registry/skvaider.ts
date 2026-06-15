@@ -5,7 +5,6 @@
  * static bearer token that can be provisioned from the gateway admin.
  */
 
-import { skvaiderModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
 import type { ProviderDefinition } from "./types";
 

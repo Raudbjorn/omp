@@ -414,7 +414,7 @@ async function generateModels() {
 			).map(descriptor => fetchProviderModelsFromCatalog(descriptor as CatalogProviderDescriptor)),
 		)
 	).flat();
-// getGitLabDuoModels returns built models; project back to spec stage for the bundle.
+	// getGitLabDuoModels returns built models; project back to spec stage for the bundle.
 	const gitLabDuoModels = getGitLabDuoModels().map(model => toModelSpec(model));
 	// Combine models (models.dev generally has priority; UPB is an exception because
 	// ai-chat exposes its catalog dynamically and models.dev does not know UPB's dot-prefixed IDs).

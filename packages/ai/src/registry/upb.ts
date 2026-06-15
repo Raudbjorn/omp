@@ -15,7 +15,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $env, getAgentDir, isRecord } from "@oh-my-pi/pi-utils";
-import { upbModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
 import type { ProviderDefinition } from "./types";
 
@@ -41,8 +40,7 @@ function readConfiguredProvider(): { baseUrl?: string; proxyToken?: string } {
 					? headers["X-OMP-Proxy-Token"]
 					: undefined;
 			return { baseUrl, proxyToken };
-		} catch {
-		}
+		} catch {}
 	}
 	return {};
 }

@@ -9,7 +9,6 @@
  * Keys are issued via the UPB AI-Chat portal at https://ai-chat.uni-paderborn.de
  */
 
-import { upbGatewayModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
 import type { ProviderDefinition } from "./types";
 
