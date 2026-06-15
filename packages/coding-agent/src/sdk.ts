@@ -55,6 +55,7 @@ import {
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./config/prompt-templates";
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
+import { dangerPiBundledExtensions } from "./danger-pi/extensions";
 import "./discovery";
 import { resolveConfigValue } from "./config/resolve-config-value";
 import { initializeWithSettings } from "./discovery";
@@ -1775,7 +1776,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// re-bind under their own `CustomToolAPI` while skipping the FS scan.
 		toolSession.customToolPaths = customToolPaths;
 
-		const inlineExtensions: ExtensionFactory[] = options.extensions ? [...options.extensions] : [];
+		const inlineExtensions: ExtensionFactory[] = [
+			...dangerPiBundledExtensions,
+			...(options.extensions ?? []),
+		];
 		inlineExtensions.push((await import("./autoresearch")).createAutoresearchExtension);
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));
