@@ -40,6 +40,10 @@ export function templateUsesInlineArgPlaceholders(templateSource: string): boole
 	return INLINE_ARG_SHELL_PATTERN.test(templateSource) || INLINE_ARG_TEMPLATE_PATTERN.test(templateSource);
 }
 
+export function renderPromptTemplate(template: string, context: Record<string, unknown> = {}): string {
+	return prompt.render(template, context);
+}
+
 export function appendInlineArgsFallback(
 	rendered: string,
 	argsText: string,

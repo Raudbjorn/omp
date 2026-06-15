@@ -146,6 +146,7 @@ async function loadSkillSlashCommands(ctx: LoadContext, root: ClaudePluginRoot):
 			// whitespace, so a display name like "Understand Anything" would never match
 			// `/understand`. The documented layout is `skills/<name>/SKILL.md` → `/<name>`.
 			const command: SlashCommand = {
+				kind: "template",
 				name: path.basename(path.dirname(skill.path)),
 				path: skill.path,
 				content,
@@ -157,7 +158,7 @@ async function loadSkillSlashCommands(ctx: LoadContext, root: ClaudePluginRoot):
 	);
 
 	return {
-		items: commands.filter((command): command is SlashCommand => command !== null),
+		items: commands.filter((command): command is NonNullable<typeof command> => command !== null),
 		warnings,
 	};
 }

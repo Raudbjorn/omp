@@ -3,7 +3,9 @@ import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-com
 
 describe("buildAvailableSlashCommands", () => {
 	test("returns RPC-safe command metadata with stable sources", async () => {
-		const fileCommands = [{ name: "notes", description: "Open notes", content: "body", source: "test" }];
+		const fileCommands = [
+			{ kind: "template" as const, name: "notes", description: "Open notes", content: "body", source: "test" },
+		];
 		const mcpPrompt = {
 			path: "mcp:server/prompt",
 			resolvedPath: "mcp:server/prompt",
@@ -55,7 +57,9 @@ describe("buildAvailableSlashCommands", () => {
 	});
 
 	test("loads file commands into the session before advertising them", async () => {
-		const fileCommands = [{ name: "notes", description: "Open notes", content: "body", source: "test" }];
+		const fileCommands = [
+			{ kind: "template" as const, name: "notes", description: "Open notes", content: "body", source: "test" },
+		];
 		let loadedCommands: typeof fileCommands | undefined;
 
 		const commands = await buildAvailableSlashCommands(

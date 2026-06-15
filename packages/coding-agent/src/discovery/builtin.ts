@@ -23,6 +23,7 @@ import { type SlashCommand, slashCommandCapability } from "../capability/slash-c
 import { type SystemPrompt, systemPromptCapability } from "../capability/system-prompt";
 import { type CustomTool, toolCapability } from "../capability/tool";
 import type { LoadContext, LoadResult } from "../capability/types";
+import { loadCommandChainFilesFromDir } from "../danger-pi/command-chain-files/load";
 import { expandTilde } from "../tools/path-utils";
 import {
 	buildRuleFromMarkdown,
@@ -333,18 +334,14 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 
 	for (const { dir, level } of await getConfigDirs(ctx)) {
 		const commandsDir = path.join(dir, "commands");
-		const result = await loadFilesFromDir<SlashCommand>(ctx, commandsDir, PROVIDER_ID, level, {
-			extensions: ["md"],
-			transform: (name, content, path, source) => ({
-				name: name.replace(/\.md$/, ""),
-				path,
-				content,
-				level,
-				_source: source,
-			}),
-		});
+		const result = await loadCommandChainFilesFromDir(commandsDir, PROVIDER_ID, level);
 		items.push(...result.items);
-		if (result.warnings) warnings.push(...result.warnings);
+		if (result.warnings) {
+			warnings.push(...result.warnings);
+			for (const warning of result.warnings) {
+				logger.warn("Command file errors", { commandsDir, warning });
+			}
+		}
 	}
 
 	return { items, warnings };

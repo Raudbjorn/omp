@@ -3,7 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
-import { type SlashCommand, slashCommandCapability } from "@oh-my-pi/pi-coding-agent/capability/slash-command";
+import {
+	isTemplateSlashCommand,
+	type SlashCommand,
+	slashCommandCapability,
+} from "@oh-my-pi/pi-coding-agent/capability/slash-command";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { loadCapability } from "@oh-my-pi/pi-coding-agent/discovery";
 
@@ -75,8 +79,10 @@ describe("Claude Code slash command discovery", () => {
 
 		expect(result.warnings).toEqual([]);
 		expect(apply?.path).toBe(rootApply);
-		expect(apply?.content).toBe("Root apply prompt\n");
+		expect(apply && isTemplateSlashCommand(apply) ? apply.content : undefined).toBe("Root apply prompt\n");
 		expect(agentApply?.path).toBe(nestedApply);
-		expect(agentApply?.content).toBe("Nested apply prompt\n");
+		expect(agentApply && isTemplateSlashCommand(agentApply) ? agentApply.content : undefined).toBe(
+			"Nested apply prompt\n",
+		);
 	});
 });

@@ -1,18 +1,10 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { expandSlashCommand, type FileSlashCommand } from "../../extensibility/slash-commands";
+import {
+	executeFileSlashCommand,
+	type FileSlashCommand,
+	isPromptChainFileSlashCommand,
+} from "../../extensibility/slash-commands";
 import { executeBuiltinSlashCommand, isBuiltinSlashCommandName } from "../../slash-commands/builtin-registry";
-
-/**
- * Fork-local shim: prompt-chain file slash commands are a separate upstream
- * feature not present on this base. With no prompt-chain commands to detect,
- * every file slash command is a plain template expansion, so this guard always
- * returns false. Kept as a named helper so the multi-block runner's control
- * flow mirrors the feature it was ported from.
- */
-function isPromptChainFileSlashCommand(_command: FileSlashCommand): boolean {
-	return false;
-}
-
 import type { InteractiveModeContext } from "../types";
 import { classifyMultiBlockCommand, parseSlashCommandName } from "./multi-block/command-policy";
 import { getLastHandledBlockKind, hasFutureHandledBlock } from "./multi-block/turn-contributors";
@@ -386,13 +378,22 @@ async function executeCommandBlock(
 			startsTurn: hasPromptContent,
 		};
 	}
-	// File slash commands on this base are plain template expansions: expand
-	// to prompt text inline (prompt-chain execution is a separate feature).
-	const expandedText = expandSlashCommand(commandText, options.fileCommands);
+	const fileResult = await executeFileSlashCommand(commandText, options.fileCommands, {
+		cwd: options.ctx.sessionManager.getCwd(),
+		images: options.images,
+		promptChainExecutor: options.ctx.session.promptChainExecutor,
+	});
+	if (fileResult.kind === "handled") {
+		return {
+			success: true,
+			contributesPromptContent: false,
+			startsTurn: true,
+		};
+	}
 	return {
 		success: true,
-		appendedText: expandedText,
-		contributesPromptContent: expandedText.trim().length > 0,
-		startsTurn: expandedText.trim().length > 0,
+		appendedText: fileResult.text,
+		contributesPromptContent: fileResult.text.trim().length > 0,
+		startsTurn: fileResult.text.trim().length > 0,
 	};
 }

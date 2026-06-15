@@ -5,7 +5,7 @@
  */
 import * as path from "node:path";
 import { parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
-import { type SlashCommand, slashCommandCapability } from "../capability/slash-command";
+import { isPromptChainSlashCommand, type SlashCommand, slashCommandCapability } from "../capability/slash-command";
 import { loadCapability } from "../discovery";
 // Embed command markdown files at build time
 import initMd from "../prompts/agents/init.md" with { type: "text" };
@@ -79,6 +79,7 @@ export async function discoverCommands(cwd: string): Promise<WorkflowCommand[]> 
 	// Convert SlashCommand to WorkflowCommand format
 	for (const cmd of result.items) {
 		if (seen.has(cmd.name)) continue;
+		if (isPromptChainSlashCommand(cmd)) continue;
 
 		const { frontmatter, body } = parseFrontmatter(cmd.content, {
 			source: cmd.path ?? `workflow-command:${cmd.name}`,

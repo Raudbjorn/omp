@@ -148,6 +148,7 @@ import { MODEL_ROLE_IDS } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { onAppendOnlyModeChanged } from "../config/settings";
+import { createPromptChainExecutor, type PromptChainExecutor } from "../danger-pi/command-chain-files/runtime";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
@@ -187,7 +188,7 @@ import type { CompactOptions, ContextUsage } from "../extensibility/extensions/t
 import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
-import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
+import { executeFileSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
 import { GoalRuntime } from "../goals/runtime";
 import type { Goal, GoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
@@ -975,6 +976,7 @@ export class AgentSession {
 	#autoResolvedLevel: Effort | undefined;
 	#promptTemplates: PromptTemplate[];
 	#slashCommands: FileSlashCommand[];
+	#promptChainExecutor: PromptChainExecutor;
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
@@ -1281,6 +1283,32 @@ export class AgentSession {
 		this.#applyThinkingLevelToAgent(this.#thinkingLevel);
 		this.#promptTemplates = config.promptTemplates ?? [];
 		this.#slashCommands = config.slashCommands ?? [];
+		this.#promptChainExecutor = createPromptChainExecutor({
+			onTurnComplete: handler => {
+				this.subscribe(event => {
+					if (event.type === "turn_end") {
+						const message = event.message as AssistantMessage;
+						void handler({
+							stopReason: message.stopReason,
+							success: message.stopReason !== "error" && message.stopReason !== "aborted",
+						});
+					}
+				});
+			},
+			prompt: async (text, options) => {
+				await this.prompt(text, {
+					images: options?.images ? [...options.images] : undefined,
+					streamingBehavior: options?.streamingBehavior,
+				});
+				if (options?.streamingBehavior === "followUp") {
+					setTimeout(() => {
+						if (!this.agent.state.isStreaming && this.agent.hasQueuedMessages()) {
+							void this.agent.continue();
+						}
+					}, 0);
+				}
+			},
+		});
 		this.#extensionRunner = config.extensionRunner;
 		this.#skills = config.skills ?? [];
 		this.#skillWarnings = config.skillWarnings ?? [];
@@ -4829,6 +4857,11 @@ export class AgentSession {
 		return this.#slashCommands;
 	}
 
+	/** Executor that drives multi-step prompt-chain (`.cmd.yaml`) slash commands. */
+	get promptChainExecutor(): PromptChainExecutor {
+		return this.#promptChainExecutor;
+	}
+
 	/** Custom commands (TypeScript slash commands and MCP prompts) */
 	get customCommands(): ReadonlyArray<LoadedCustomCommand> {
 		if (this.#mcpPromptCommands.length === 0) return this.#customCommands;
@@ -5037,10 +5070,19 @@ export class AgentSession {
 				text = customResult;
 			}
 
-			// Try file-based slash commands (markdown files from commands/ directories)
+			// Try file-based slash commands (markdown files / .cmd.yaml prompt chains)
 			// Only if text still starts with "/" (wasn't transformed by custom command)
 			if (text.startsWith("/")) {
-				text = expandSlashCommand(text, this.#slashCommands);
+				const fileCommandResult = await executeFileSlashCommand(text, this.#slashCommands, {
+					cwd: this.sessionManager.getCwd(),
+					images: options?.images,
+					promptChainExecutor: this.#promptChainExecutor,
+					streamingBehavior: options?.streamingBehavior,
+				});
+				if (fileCommandResult.kind === "handled") {
+					return false;
+				}
+				text = fileCommandResult.text;
 			}
 		}
 
