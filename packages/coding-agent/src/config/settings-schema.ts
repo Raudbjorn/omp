@@ -3712,6 +3712,7 @@ export const SETTINGS_SCHEMA = {
 		default: ["openrouter"] as string[],
 		ui: {
 			tab: "tasks",
+			group: "Subagents",
 			label: "Exclude Providers",
 			description:
 				"Providers to exclude from model resolution. Models from these providers will never be selected automatically.",
