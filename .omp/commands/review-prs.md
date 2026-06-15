@@ -10,6 +10,10 @@ Triage incoming pull requests in parallel: decide what's worth merging, prep cle
 
 If no PRs and no flags are passed, default to **all open PRs opened in the last 3 days**.
 
+## Assumptions
+
+These instructions target this monorepo: Bun for TypeScript, Cargo for Rust/native code, `target` and `node_modules` at the repo root, and native addon binaries in `packages/natives/native/*.node`. If a repository differs, inspect its build layout first and adapt the symlink/test commands rather than blindly applying these paths.
+
 ## Steps
 
 ### 1. Resolve the PR set
@@ -36,7 +40,7 @@ Each subagent **MUST** follow this exact workflow:
 #### a. Read & decide
 
 1. Read `pr://<N>` (with comments by default; append `?comments=0` to skip) and `pr://<N>/diff` for the changed-files listing — use `pr://<N>/diff/all` when you need the full unified diff, or `pr://<N>/diff/<i>` for a single file slice.
-2. Check `git log origin/main` and `gh search prs` for whether the same change already landed.
+2. Check `git log origin/main` and call the `github` tool with `op: search_prs` for whether the same change already landed.
 3. Classify into one of:
    - **slop** — AI-generated noise, broken, off-spec, or net-negative. Drop, write a 1–2 line justification, do not check out.
    - **superseded** — already fixed/merged in main or by a newer PR. Drop with a pointer.
@@ -47,8 +51,9 @@ Anything ambiguous defaults to `worthy` — let the human decide on a real branc
 #### b. Check out into a worktree
 
 ```bash
-gh_PR=<NUMBER>
-# pr_checkout creates ~/.omp/wt/<encoded-repo>/pr-<N>/ and configures push remote
+MAIN="$(git rev-parse --show-toplevel)"
+# Call: github { op: "pr_checkout", pr: "<NUMBER>" }
+# Then cd into details.worktreePath from the tool result.
 ```
 
 Use the `github pr_checkout` tool, **not** raw `gh pr checkout`. That gives a dedicated worktree wired up for `pr_push` later.
@@ -58,7 +63,6 @@ Use the `github pr_checkout` tool, **not** raw `gh pr checkout`. That gives a de
 From inside the new worktree, link the heavy build outputs from the main checkout so `bun check` / `cargo build` / native loaders do not recompile:
 
 ```bash
-MAIN="<absolute path to main worktree, e.g. ~/Projects/pi>"
 WT="$(pwd)"
 
 # Rust target dir + JS deps (root-level in this monorepo)

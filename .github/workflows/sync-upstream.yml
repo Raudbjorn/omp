@@ -1,0 +1,185 @@
+# Syncs upstream can1357/oh-my-pi main → fork main weekly.
+# Set DISCORD_WEBHOOK_URL in repo Settings → Secrets → Actions for notifications
+# (optional — the workflow runs fine without it).
+
+name: Sync Upstream
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: "Upstream repo (owner/name)"
+        type: string
+        default: "can1357/oh-my-pi"
+      upstream_branch:
+        description: "Upstream branch to track"
+        type: string
+        default: "main"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-22.04
+    env:
+      # `github.event.inputs.*` is `null` on scheduled runs; `||` falls back to
+      # defaults so the expression is always valid regardless of event type.
+      UPSTREAM_REPO: ${{ github.event.inputs.upstream_repo || 'can1357/oh-my-pi' }}
+      UPSTREAM_BRANCH: ${{ github.event.inputs.upstream_branch || 'main' }}
+      BASE_BRANCH: main
+      SYNC_BRANCH: chore/sync-upstream
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+      - name: Check for new upstream commits
+        id: delta
+        run: |
+          ahead=$(git rev-list --count "HEAD..upstream/${UPSTREAM_BRANCH}")
+          echo "ahead=$ahead" >> "$GITHUB_OUTPUT"
+          if [ "$ahead" = "0" ]; then
+            echo "Upstream has no new commits."
+          else
+            echo "Upstream is ahead by $ahead commit(s)."
+          fi
+
+      - name: Prepare sync branch
+        if: steps.delta.outputs.ahead != '0'
+        id: merge
+        run: |
+          git checkout -B "${SYNC_BRANCH}"
+          set +e
+          git merge --no-ff --no-edit "upstream/${UPSTREAM_BRANCH}"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            # Capture conflicted files before staging, since `git add -A`
+            # clears the unmerged status that `--diff-filter=U` relies on.
+            conflicted=$(git diff --name-only --diff-filter=U || true)
+            {
+              echo "conflicts=true"
+              echo "conflicted_files<<EOF"
+              printf '%s\n' "$conflicted"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            # Stage conflict markers so the PR surfaces them for manual review.
+            git add -A
+            git commit -m "chore(sync): upstream merge with conflicts (manual resolution required)" || true
+          else
+            echo "conflicts=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Re-apply fork identity on the sync branch so upstream can't wipe our
+      # REPO pin. Runs before Summarize/PR creation so the resulting PR
+      # contains a clean, identity-preserving merge.
+      - name: Re-apply fork identity
+        if: steps.delta.outputs.ahead != '0'
+        run: |
+          sed -i 's|^REPO="can1357/oh-my-pi"|REPO="Raudbjorn/omp"|' scripts/install.sh
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore(sync): re-apply fork identity after upstream merge'
+          fi
+
+      - name: Summarize delta
+        if: steps.delta.outputs.ahead != '0'
+        id: summary
+        env:
+          AHEAD: ${{ steps.delta.outputs.ahead }}
+          CONFLICTS: ${{ steps.merge.outputs.conflicts }}
+          CONFLICTED_FILES: ${{ steps.merge.outputs.conflicted_files }}
+        run: |
+          {
+            echo "body<<EOF"
+            echo "Automated weekly sync from \`${UPSTREAM_REPO}@${UPSTREAM_BRANCH}\`."
+            echo
+            echo "Commits pulled: **${AHEAD}**"
+            echo
+            if [ "${CONFLICTS}" = "true" ]; then
+              echo "**Conflicts detected** — resolve locally before merging:"
+              echo
+              echo '```'
+              printf '%s\n' "${CONFLICTED_FILES}"
+              echo '```'
+            else
+              echo "Merge completed cleanly."
+            fi
+            echo
+            echo "### Incoming commits"
+            echo '```'
+            git log --oneline "${BASE_BRANCH}..upstream/${UPSTREAM_BRANCH}" | head -n 50
+            echo '```'
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create or update PR
+        if: steps.delta.outputs.ahead != '0'
+        id: pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: ${{ env.SYNC_BRANCH }}
+          base: ${{ env.BASE_BRANCH }}
+          title: "chore: sync with ${{ env.UPSTREAM_REPO }} (+${{ steps.delta.outputs.ahead }})"
+          body: ${{ steps.summary.outputs.body }}
+          labels: |
+            upstream-sync
+            ${{ steps.merge.outputs.conflicts == 'true' && 'needs-conflict-resolution' || 'automerge-candidate' }}
+          delete-branch: false
+
+      # Discord notifications — all three states are no-ops if the webhook
+      # secret is unset, so the workflow stays useful without it.
+      - name: Discord notification — PR opened (clean merge)
+        if: steps.delta.outputs.ahead != '0' && steps.merge.outputs.conflicts != 'true' && secrets.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          AHEAD: ${{ steps.delta.outputs.ahead }}
+          PR_URL: ${{ steps.pr.outputs.pull-request-url }}
+        run: |
+          curl -fsS -X POST "$DISCORD_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg ahead "$AHEAD" --arg url "$PR_URL" \
+              '{embeds:[{title:"Upstream sync PR ready",color:5763719,description:"Clean merge.",fields:[{name:"Commits pulled",value:$ahead,inline:true},{name:"PR",value:$url,inline:false}],timestamp:(now|todateiso8601)}]}')"
+
+      - name: Discord notification — PR opened (with conflicts)
+        if: steps.delta.outputs.ahead != '0' && steps.merge.outputs.conflicts == 'true' && secrets.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          AHEAD: ${{ steps.delta.outputs.ahead }}
+          PR_URL: ${{ steps.pr.outputs.pull-request-url }}
+          CONFLICTED_FILES: ${{ steps.merge.outputs.conflicted_files }}
+        run: |
+          curl -fsS -X POST "$DISCORD_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg ahead "$AHEAD" --arg url "$PR_URL" --arg files "$CONFLICTED_FILES" \
+              '{embeds:[{title:"Upstream sync PR — conflicts need resolution",color:15548997,description:"Manual merge required.",fields:[{name:"Commits pulled",value:$ahead,inline:true},{name:"PR",value:$url,inline:false},{name:"Conflicted files",value:("```\n"+$files+"\n```"),inline:false}],timestamp:(now|todateiso8601)}]}')"
+
+      - name: Discord notification — already up to date
+        if: steps.delta.outputs.ahead == '0' && secrets.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          curl -fsS -X POST "$DISCORD_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n '{embeds:[{title:"Upstream sync — already up to date",color:9807270,description:"No new commits from upstream.",timestamp:(now|todateiso8601)}]}')"

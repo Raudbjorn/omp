@@ -1,0 +1,219 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_npm:
+        description: "Skip npm publish"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - name: Cache bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun install --frozen-lockfile
+      - name: Type check workspace
+        run: bun run ci:check:full
+
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+            variants: baseline modern
+            rust_checks: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: dtolnay/rust-toolchain@nightly # TODO: unpin once nightly codegen regression is fixed
+        with:
+          toolchain: nightly-2026-03-27
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - run: bun install --frozen-lockfile
+      - name: Rust checks
+        run: bun run check:rs
+      - name: Build native addon(s)
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          TARGET_VARIANTS: ${{ matrix.variants }}
+        shell: bash
+        run: |
+          bun run ci:build:native
+      - name: Upload native addon(s)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}
+          path: packages/natives/native/pi_natives.${{ matrix.platform }}-${{ matrix.arch }}*.node
+          if-no-files-found: error
+
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - uses: dtolnay/rust-toolchain@nightly # TODO: unpin once nightly codegen regression is fixed
+        with:
+          toolchain: nightly-2026-03-27
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Cache bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep imagemagick
+          sudo ln -s $(which fdfind) /usr/local/bin/fd
+          sudo ln -sf /usr/bin/convert /usr/local/bin/magick
+      - run: bun install --frozen-lockfile
+      - run: bun run build:native
+      - name: Test workspace
+        run: bun run ci:test:full
+      - name: CLI smoke test
+        run: bun run ci:test:smoke
+
+  install_methods:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - uses: dtolnay/rust-toolchain@nightly # TODO: unpin once nightly codegen regression is fixed
+        with:
+          toolchain: nightly-2026-03-27
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: true
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Cache bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep imagemagick
+          sudo ln -s $(which fdfind) /usr/local/bin/fd
+          sudo ln -sf /usr/bin/convert /usr/local/bin/magick
+      - run: bun install --frozen-lockfile
+      - name: Install method smoke tests
+        run: bun run ci:test:install-methods
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check, native, test, install_methods]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Cache bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun install --frozen-lockfile
+      - name: Download native addons
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pi-natives-*
+          path: packages/natives/native
+          merge-multiple: true
+      - name: Verify native addons
+        env:
+          PI_NATIVE_EXPECTED_ADDONS: linux-x64-baseline linux-x64-modern
+        run: bun run ci:release:verify-natives
+      - name: Build binaries
+        run: |
+          mkdir -p packages/coding-agent/binaries
+          ENTRYPOINT="./packages/coding-agent/src/cli.ts"
+          WORKER_ENTRYPOINTS="./packages/stats/src/sync-worker.ts ./packages/coding-agent/src/tools/browser/tab-worker-entry.ts ./packages/coding-agent/src/eval/js/worker-entry.ts"
+          DEFINES="--define PI_COMPILED=true --root ."
+          TARGET_PLATFORM=linux TARGET_ARCH=x64 bun --cwd=packages/natives run embed:native
+          bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --no-compile-autoload-tsconfig --no-compile-autoload-package-json --keep-names $DEFINES --target="bun-linux-x64-modern" "$ENTRYPOINT" $WORKER_ENTRYPOINTS --outfile "packages/coding-agent/binaries/omp-linux-x64"
+          bun --cwd=packages/natives run embed:native --reset
+      - name: Smoke release binary
+        run: |
+          runtime_dir="$RUNNER_TEMP/omp-runtime-linux-x64"
+          rm -rf "$runtime_dir"
+          mkdir -p "$runtime_dir/home" "$runtime_dir/xdg"
+          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" packages/coding-agent/binaries/omp-linux-x64 --smoke-test
+      - name: Stage native addons for release
+        run: cp packages/natives/native/*.node packages/coding-agent/binaries/
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/coding-agent/binaries/*
+          generate_release_notes: true
+      - name: Publish to npm
+        if: ${{ !inputs.skip_npm }}
+        env:
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: bun run ci:release:publish
