@@ -67,6 +67,7 @@
 		"@puppeteer/browsers": "catalog:",
 		"@types/turndown": "catalog:",
 		"@xterm/headless": "catalog:",
+		"ajv": "catalog:",
 		"chalk": "catalog:",
 		"diff": "catalog:",
 		"fflate": "catalog:",
