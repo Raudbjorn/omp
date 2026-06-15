@@ -405,6 +405,7 @@ describe("InteractiveMode plan review rendering", () => {
 				"Approve and execute",
 				"Approve and compact context",
 				"Approve and keep context (~7.3k / 10k)",
+				"Approve and execute (current session)",
 				"Refine plan",
 			],
 			expect.any(Object),
@@ -479,6 +480,7 @@ describe("InteractiveMode plan review rendering", () => {
 			"Approve and execute",
 			"Approve and compact context",
 			`Approve and keep context (~${compactNumber(tokens)} / ${compactNumber(executionModel.contextWindow)})`,
+			"Approve and execute (current session)",
 			"Refine plan",
 		]);
 	});

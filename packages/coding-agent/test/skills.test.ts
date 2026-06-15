@@ -2,6 +2,7 @@ import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import { type Skill as CapabilitySkill, skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
 import { getCapability } from "@oh-my-pi/pi-coding-agent/discovery";
 import { loadSkills, loadSkillsFromDir, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
@@ -36,6 +37,34 @@ const DISABLE_ALL_BUILTIN_SKILLS = {
 	enableAgentsUser: false,
 	enableAgentsProject: false,
 } as const;
+
+/**
+ * Run `fn` with `os.homedir()`, the agent config directory, and the working
+ * directory all pointed at fresh temp dirs, restored/cleaned up afterwards. The
+ * provider toggles in `DISABLE_ALL_BUILTIN_SKILLS` cannot silence the
+ * managed-skills (auto-learn) provider — it discovers
+ * `<agentDir>/managed-skills` unconditionally — so any test asserting an
+ * exact/empty skill set must also isolate the agent dir (via `setAgentDir`),
+ * `$HOME`, and `cwd` (for project-local sources) from the developer's real
+ * machine. `fn` receives the isolated cwd to thread into `loadSkills({ cwd })`.
+ */
+async function withIsolatedRoots(fn: (cwd: string) => Promise<void>): Promise<void> {
+	const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "pi-skills-home-"));
+	const tempAgent = await fs.mkdtemp(path.join(os.tmpdir(), "pi-skills-agent-"));
+	const tempCwd = await fs.mkdtemp(path.join(os.tmpdir(), "pi-skills-cwd-"));
+	const homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
+	const originalAgentDir = getAgentDir();
+	setAgentDir(tempAgent);
+	try {
+		await fn(tempCwd);
+	} finally {
+		setAgentDir(originalAgentDir);
+		homedirSpy.mockRestore();
+		await fs.rm(tempHome, { recursive: true, force: true });
+		await fs.rm(tempAgent, { recursive: true, force: true });
+		await fs.rm(tempCwd, { recursive: true, force: true });
+	}
+}
 
 describe("skills", () => {
 	describe("loadSkillsFromDir", () => {
@@ -151,16 +180,20 @@ describe("skills", () => {
 
 	describe("loadSkills with options", () => {
 		it("should load from customDirectories only when built-ins disabled", async () => {
-			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir] });
-			expect(skills.length).toBeGreaterThan(0);
-			// Custom directory skills have source "custom:user"
-			expect(skills.every(s => s.source.startsWith("custom"))).toBe(true);
+			await withIsolatedRoots(async cwd => {
+				const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir], cwd });
+				expect(skills.length).toBeGreaterThan(0);
+				// Custom directory skills have source "custom:user"
+				expect(skills.every(s => s.source.startsWith("custom"))).toBe(true);
+			});
 		});
 
 		it("should return customDirectory skills sorted by name (case-insensitive)", async () => {
-			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir] });
+			await withIsolatedRoots(async cwd => {
+				const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir], cwd });
 
-			expect(skills.map(s => s.name)).toEqual(expectedFixtureSkillOrder);
+				expect(skills.map(s => s.name)).toEqual(expectedFixtureSkillOrder);
+			});
 		});
 
 		it("should keep user Claude skills when project .claude/skills is missing", async () => {
@@ -393,8 +426,10 @@ description: Skill loaded from a tilde-expanded custom directory.
 	});
 
 	it("should return empty when all sources disabled and no custom dirs", async () => {
-		const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS });
-		expect(skills).toHaveLength(0);
+		await withIsolatedRoots(async cwd => {
+			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, cwd });
+			expect(skills).toHaveLength(0);
+		});
 	});
 
 	it("should filter skills with includeSkills glob patterns", async () => {
