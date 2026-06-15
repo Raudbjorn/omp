@@ -1,10 +1,12 @@
-import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { Container, Image, type ImageBudget, ImageProtocol, Markdown, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import { settings } from "../../config/settings";
 import type { AssistantThinkingRenderer } from "../../extensibility/extensions/types";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { resolveAbortLabel, shouldRenderAbortReason } from "../../session/messages";
 import { getPreviewLines, resolveImageOptions, TRUNCATE_LENGTHS } from "../../tools/render-utils";
 import { canonicalizeMessage } from "../../utils/thinking-display";
+import { formatAssistantUsageMetadata } from "./assistant-usage-format";
 
 /**
  * Max lines of a turn-ending provider error rendered inline in the transcript.
@@ -33,6 +35,8 @@ export class AssistantMessageComponent extends Container {
 	#toolImagesByCallId = new Map<string, ImageContent[]>();
 	#convertedKittyImages = new Map<string, ImageContent>();
 	#kittyConversionsInFlight = new Set<string>();
+	#usageInfo?: Usage;
+	#elapsedTimeMs?: number;
 	#transcriptBlockFinalized: boolean;
 	/**
 	 * When true, the turn-ending `Error: …` line for `stopReason === "error"` is
@@ -162,6 +166,20 @@ export class AssistantMessageComponent extends Container {
 	setErrorPinned(pinned: boolean): void {
 		if (this.#errorPinned === pinned) return;
 		this.#errorPinned = pinned;
+		if (this.#lastMessage) {
+			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
+		}
+	}
+
+	setUsageInfo(usage: Usage): void {
+		this.#usageInfo = usage;
+		if (this.#lastMessage) {
+			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
+		}
+	}
+
+	setElapsedTime(elapsedTimeMs: number | undefined): void {
+		this.#elapsedTimeMs = elapsedTimeMs;
 		if (this.#lastMessage) {
 			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
 		}
@@ -492,6 +510,14 @@ export class AssistantMessageComponent extends Container {
 			message.stopReason !== "error"
 		) {
 			this.#appendErrorBlock(message.errorMessage);
+		}
+
+		// Token usage metadata
+		if (settings.get("display.showTokenUsage") && this.#usageInfo) {
+			this.#contentContainer.addChild(new Spacer(1));
+			this.#contentContainer.addChild(
+				new Text(formatAssistantUsageMetadata(this.#usageInfo, this.#elapsedTimeMs), 1, 0),
+			);
 		}
 		// Store fast-path state for next call
 		if (shouldCapture) {

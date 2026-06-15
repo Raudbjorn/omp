@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ImageContent, Message, Usage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, Message } from "@oh-my-pi/pi-ai";
 import { type Component, Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
 import type { AdvisorMessageDetails } from "../../advisor";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
@@ -7,6 +7,7 @@ import { settings } from "../../config/settings";
 import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { createAdvisorMessageCard } from "../../modes/components/advisor-message";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
+import { getElapsedSincePreviousAssistant } from "../../modes/components/assistant-usage-format";
 import { createBackgroundTanDispatchBlock } from "../../modes/components/background-tan-message";
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BranchSummaryMessageComponent } from "../../modes/components/branch-summary-message";
@@ -30,7 +31,6 @@ import {
 import { SkillMessageComponent } from "../../modes/components/skill-message";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TranscriptBlock } from "../../modes/components/transcript-container";
-import { createUsageRowBlock } from "../../modes/components/usage-row";
 import { UserMessageComponent } from "../../modes/components/user-message";
 import { materializeImageReferenceLinksSync } from "../../modes/image-references";
 import { theme } from "../../modes/theme/theme";
@@ -375,13 +375,12 @@ export class UiHelpers {
 		// before the next non-toolResult message and at end of rebuild — sealing the
 		// read run so the row sits under it. Mirrors the live path, where the read
 		// group is created during streaming and the row is appended below it.
-		let pendingUsage: Usage | undefined;
+		let pendingUsageSeal = false;
 		const flushPendingUsage = () => {
-			if (!pendingUsage) return;
+			if (!pendingUsageSeal) return;
 			readGroup?.seal();
 			readGroup = null;
-			this.ctx.chatContainer.addChild(createUsageRowBlock(pendingUsage));
-			pendingUsage = undefined;
+			pendingUsageSeal = false;
 		};
 		// Rebuild-time mirror of the event controller's displaceable-poll
 		// bookkeeping: a `job` poll that found every watched job still running is
@@ -406,6 +405,12 @@ export class UiHelpers {
 				this.ctx.addMessageToChat(message);
 				const lastChild = this.ctx.chatContainer.children[this.ctx.chatContainer.children.length - 1];
 				const assistantComponent = lastChild instanceof AssistantMessageComponent ? lastChild : undefined;
+				if (assistantComponent) {
+					assistantComponent.setElapsedTime(
+						getElapsedSincePreviousAssistant(sessionContext.messages, message.timestamp),
+					);
+					assistantComponent.setUsageInfo(message.usage);
+				}
 				const hasVisibleAssistantContent = message.content.some(
 					content =>
 						(content.type === "text" && canonicalizeMessage(content.text)) ||
@@ -502,7 +507,7 @@ export class UiHelpers {
 						this.ctx.pendingTools.set(content.id, component);
 					}
 				}
-				pendingUsage = this.ctx.settings.get("display.showTokenUsage") ? message.usage : undefined;
+				pendingUsageSeal = this.ctx.settings.get("display.showTokenUsage");
 			} else if (message.role === "toolResult") {
 				const pendingReadComponent = this.ctx.pendingTools.get(message.toolCallId);
 				const isReadGroupResult =
