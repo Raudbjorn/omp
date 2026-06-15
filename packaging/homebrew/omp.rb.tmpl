@@ -1,0 +1,48 @@
+# Template Homebrew formula for omp.
+#
+# Rendered at release time by .github/workflows/release-brew.yml.
+# Placeholders:
+#   {{VERSION}}              — release tag without leading "v"
+#   {{SHA_DARWIN_ARM64}}     — sha256 of omp-darwin-arm64 asset
+#   {{SHA_DARWIN_X64}}       — sha256 of omp-darwin-x64 asset
+#   {{SHA_LINUX_ARM64}}      — sha256 of omp-linux-arm64 asset
+#   {{SHA_LINUX_X64}}        — sha256 of omp-linux-x64 asset
+#   {{RELEASE_URL_BASE}}     — e.g. https://github.com/Raudbjorn/omp/releases/download/v14.1.2
+class Omp < Formula
+  desc "Coding agent CLI with read, bash, edit, write tools and session management"
+  homepage "https://github.com/Raudbjorn/omp"
+  version "{{VERSION}}"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      url "{{RELEASE_URL_BASE}}/omp-darwin-arm64"
+      sha256 "{{SHA_DARWIN_ARM64}}"
+    end
+    on_intel do
+      url "{{RELEASE_URL_BASE}}/omp-darwin-x64"
+      sha256 "{{SHA_DARWIN_X64}}"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "{{RELEASE_URL_BASE}}/omp-linux-arm64"
+      sha256 "{{SHA_LINUX_ARM64}}"
+    end
+    on_intel do
+      url "{{RELEASE_URL_BASE}}/omp-linux-x64"
+      sha256 "{{SHA_LINUX_X64}}"
+    end
+  end
+
+  def install
+    binary = Dir["omp-*"].first
+    odie "No omp-* binary found in release artifact" if binary.nil?
+    bin.install binary => "omp"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/omp --version")
+  end
+end

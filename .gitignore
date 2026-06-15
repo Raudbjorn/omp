@@ -74,3 +74,11 @@ python/robomp/.env
 
 # Local, machine-specific boot perf baseline (see packages/coding-agent/scripts/bench-guard.ts)
 packages/coding-agent/bench/boot-baseline.json
+
+# Arch packaging build artifacts (extracted source copy + built binaries)
+/packaging/archlinux/src/
+/packaging/archlinux/*.pkg.tar.zst
+/packaging/archlinux/*.pkg.tar.zst.old*
+/packaging/archlinux/*.tar.gz
+/target-baseline/
+/target-modern/
