@@ -49,6 +49,7 @@ export function buildHotkeysMarkdown(bindings: HotkeysMarkdownBindings): string 
 		`| \`${appKey(bindings, "app.thinking.toggle")}\` | Toggle thinking block visibility |`,
 		`| \`${appKey(bindings, "app.editor.external")}\` | Edit message in external editor |`,
 		`| \`${appKey(bindings, "app.clipboard.pasteImage")}\` | Paste image or text from clipboard |`,
+		`| \`${appKey(bindings, "app.clipboard.pasteExec")}\` | Paste clipboard as execute-intent (runs \`!\`/\`$\` shortcuts on submit) |`,
 		"| Hold `Space` | Speech-to-text (push-to-talk): hold to record, release to transcribe |",
 		`| \`${appKey(bindings, "app.agents.hub")}\` / \`${appKey(bindings, "app.session.observe")}\` / double-tap \`←\` (empty editor) | Open the agent hub |`,
 		"| `#` | Open prompt actions |",
@@ -57,5 +58,9 @@ export function buildHotkeysMarkdown(bindings: HotkeysMarkdownBindings): string 
 		"| `!!` | Run bash command (excluded from context) |",
 		"| `$` | Run Python in shared kernel |",
 		"| `$$` | Run Python (excluded from context) |",
+		"",
+		"**Multi-block submissions**",
+		"Stack slash commands, `!`/`$` shortcuts, and plain text in one message — each block runs in the order you wrote it.",
+		"For a multi-line shortcut body, open a fenced block: a line with `!` immediately followed by a triple-backtick (bash) or `$` + triple-backtick (Python), then the body, then a closing triple-backtick line. Use `!!` / `$$` instead to exclude that block from context. Escape a literal fence line inside a body as backslash + triple-backtick.",
 	].join("\n");
 }
