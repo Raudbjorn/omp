@@ -529,7 +529,7 @@ async function fetchCodexDiscoveryModels(): Promise<ModelSpec<"openai-codex-resp
 async function generateModels() {
 	// Fetch models from dynamic sources.
 	const modelsDevModels = await loadModelsDevData();
-const catalogProviderDescriptors = PROVIDER_DESCRIPTORS.filter(
+	const catalogProviderDescriptors = PROVIDER_DESCRIPTORS.filter(
 		(descriptor): descriptor is CatalogProviderDescriptor =>
 			isCatalogDescriptor(descriptor) &&
 			!DISCOVERY_ONLY_PROVIDERS.has(descriptor.providerId) &&

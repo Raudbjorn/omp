@@ -53,6 +53,8 @@ import {
 	syntheticModelManagerOptions,
 	togetherModelManagerOptions,
 	umansModelManagerOptions,
+	upbGatewayModelManagerOptions,
+	upbModelManagerOptions,
 	veniceModelManagerOptions,
 	vercelAiGatewayModelManagerOptions,
 	vllmModelManagerOptions,
@@ -586,6 +588,20 @@ export const CATALOG_PROVIDERS = [
 		createModelManagerOptions: (config: ModelManagerConfig) => zhipuCodingPlanModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
 		catalogDiscovery: { label: "Zhipu Coding Plan" },
+	},
+	{
+		id: "upb",
+		defaultModel: "openai.gpt-4o",
+		envVars: ["UPB_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => upbModelManagerOptions(config),
+		catalogDiscovery: { label: "UPB AI-Chat" },
+	},
+	{
+		id: "upb-gateway",
+		defaultModel: "openai.gpt-4o",
+		envVars: ["UPB_GATEWAY_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => upbGatewayModelManagerOptions(config),
+		catalogDiscovery: { label: "UPB AI Gateway (LiteLLM)" },
 	},
 ] as const satisfies readonly ProviderCatalogEntry[];
 
