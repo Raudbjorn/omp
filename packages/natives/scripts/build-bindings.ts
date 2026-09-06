@@ -21,6 +21,41 @@ import { generateEnumExports } from "./gen-enums";
 // static build so the local addon never retains host Homebrew paths.
 process.env.PCRE2_SYS_STATIC ??= "1";
 
+// audiopus_sys builds its bundled opus via CMake; that opus tree declares a
+// cmake_minimum_required below 3.5, which CMake 4.x refuses without this
+// policy override (mirrored from bazel's audiopus_sys annotation).
+process.env.CMAKE_POLICY_VERSION_MINIMUM ??= "3.5";
+
+// Forces the vendored static Opus rather than a host pkg-config result.
+// The shipped (bazel) addons link the vendored opus statically so they load on
+// machines without a libopus (e.g. NixOS exposes a dynamic-only libopus whose
+// .pc causes a link-time RUNPATH that doesn't resolve at runtime). Mirror the
+// bazel `audiopus_sys` annotation (OPUS_NO_PKG=1) here so the local cargo path
+// produces the same static, self-contained addon.
+process.env.OPUS_NO_PKG ??= "1";
+
+// CMake 4.x defaults CMAKE_INSTALL_LIBDIR to "lib64" on 64-bit glibc Linux,
+// but audiopus_sys hardcodes {install_dir}/lib for linking. Use a project-local
+// toolchain file so cmake-rs picks it up without env-variable gymnastics.
+if (!Bun.env.CMAKE_TOOLCHAIN_FILE) {
+	const toolchainPath = path.join(import.meta.dir, "../cmake/toolchain-force-lib.cmake");
+	if (await Bun.file(toolchainPath).exists()) {
+		process.env.CMAKE_TOOLCHAIN_FILE = toolchainPath;
+	}
+}
+
+// On NixOS clang doesn't search Nix store include paths by default.
+// Point bindgen at the active glibc-dev headers so it finds pthread.h etc.
+if (!process.env.BINDGEN_EXTRA_CLANG_ARGS) {
+	for (const profile of (process.env.NIX_PROFILES ?? "").split(/\s+/)) {
+		const glibcDir = path.join(profile, "include");
+		if (await Bun.file(path.join(glibcDir, "pthread.h")).exists()) {
+			process.env.BINDGEN_EXTRA_CLANG_ARGS = `-I${glibcDir}`;
+			break;
+		}
+	}
+}
+
 // Windows: cc-rs and rustc auto-locate cl.exe/link.exe through the VS
 // registry, but the cmake crate (audiopus_sys' bundled opus) needs cmake —
 // and its Ninja generator needs ninja — on PATH. VS Build Tools ships both

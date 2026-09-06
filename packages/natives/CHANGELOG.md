@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed native addon bindings build on NixOS: static vendored Opus (matching the shipped bazel addons), a CMake policy override and project-local toolchain file for CMake 4.x, and bindgen header paths from the active Nix profile.
+
 ## [18.1.9] - 2026-09-04
 
 ### Added
